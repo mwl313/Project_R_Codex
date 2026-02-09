@@ -1,19 +1,46 @@
 import {
+  BOARD_H,
+  BOARD_W,
   CHAT_ALLOWED_PHASES,
   CHAT_MAX_LENGTH,
   CHAT_RATE_BURST,
   CHAT_RATE_MAX_MSG,
   CHAT_RATE_WINDOW_SEC,
   DEFAULT_PHASE,
-  NICKNAME_MAX_LENGTH
+  MIN_PLACE_DISTANCE,
+  NICKNAME_MAX_LENGTH,
+  NO_PLACE_BUFFER,
+  PHASE_CARD_SELECT,
+  PHASE_PLACEMENT_PRIVATE,
+  PHASE_PLACEMENT_REVEAL,
+  PHASE_RESULT,
+  PHASE_TURN_ORDER,
+  PHASE_WAITING,
+  PLACEMENT_REVEAL_SEC,
+  STONE_COUNT_PER_PLAYER,
+  STONE_RADIUS
 } from "./rules";
 import { errorPayload, serializeEnvelope, type WsEnvelope } from "./protocol";
 
-const STORAGE_KEY = "room_state_v1";
+const STORAGE_KEY = "room_state_v2";
 
 type LeaveReason = "leave" | "disconnect" | "kick" | "unknown";
 type ChatDeniedReason = "rate_limited" | "too_long" | "not_allowed_phase";
 type Role = "host" | "guest";
+type Phase =
+  | typeof PHASE_WAITING
+  | typeof PHASE_TURN_ORDER
+  | typeof PHASE_PLACEMENT_PRIVATE
+  | typeof PHASE_PLACEMENT_REVEAL
+  | typeof PHASE_CARD_SELECT
+  | "PLAYING"
+  | typeof PHASE_RESULT;
+
+interface StonePlacement {
+  id: string;
+  x: number;
+  y: number;
+}
 
 interface PlayerSlot {
   token: string | null;
@@ -21,9 +48,22 @@ interface PlayerSlot {
   connected: boolean;
 }
 
+interface MatchPlacementState {
+  hostStones: StonePlacement[];
+  guestStones: StonePlacement[];
+  hostSubmitted: boolean;
+  guestSubmitted: boolean;
+  revealEndsAtMs: number | null;
+}
+
+interface MatchState {
+  firstPlayerIndex: 1 | 2 | null;
+  placement: MatchPlacementState;
+}
+
 interface RoomState {
   roomCode: string | null;
-  phase: string;
+  phase: Phase;
   host: PlayerSlot;
   guest: PlayerSlot;
   timers: {
@@ -33,6 +73,12 @@ interface RoomState {
   chatLimiter: Record<string, number[]>;
   isClosed: boolean;
   createdAtMs: number;
+  match: MatchState;
+  result: {
+    reason: string;
+    winnerPlayerIndex: 1 | 2 | null;
+    leftPlayerIndex?: 1 | 2;
+  } | null;
 }
 
 interface Session {
@@ -53,13 +99,24 @@ function createEmptySlot(): PlayerSlot {
 function createDefaultRoomState(): RoomState {
   return {
     roomCode: null,
-    phase: DEFAULT_PHASE,
+    phase: DEFAULT_PHASE as Phase,
     host: createEmptySlot(),
     guest: createEmptySlot(),
     timers: {},
     chatLimiter: {},
     isClosed: false,
-    createdAtMs: 0
+    createdAtMs: 0,
+    match: {
+      firstPlayerIndex: null,
+      placement: {
+        hostStones: [],
+        guestStones: [],
+        hostSubmitted: false,
+        guestSubmitted: false,
+        revealEndsAtMs: null
+      }
+    },
+    result: null
   };
 }
 
@@ -101,6 +158,61 @@ async function parseBodyJson(request: Request): Promise<unknown> {
   return JSON.parse(text);
 }
 
+function cloneStones(stoneList: StonePlacement[]): StonePlacement[] {
+  return stoneList.map((stone) => ({
+    id: stone.id,
+    x: stone.x,
+    y: stone.y
+  }));
+}
+
+function isRevealVisiblePhase(phase: Phase): boolean {
+  return phase === PHASE_PLACEMENT_REVEAL || phase === PHASE_CARD_SELECT || phase === "PLAYING" || phase === PHASE_RESULT;
+}
+
+function isGameplayPhase(phase: Phase): boolean {
+  return phase !== PHASE_WAITING;
+}
+
+function parsePlacementStones(payload: unknown): StonePlacement[] | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const value = payload as { stones?: unknown };
+  if (!Array.isArray(value.stones)) {
+    return null;
+  }
+
+  const parsed: StonePlacement[] = [];
+  for (const rawStone of value.stones) {
+    if (!rawStone || typeof rawStone !== "object") {
+      return null;
+    }
+
+    const stone = rawStone as { id?: unknown; x?: unknown; y?: unknown };
+    if (typeof stone.id !== "string" || stone.id.trim().length === 0) {
+      return null;
+    }
+
+    if (typeof stone.x !== "number" || typeof stone.y !== "number") {
+      return null;
+    }
+
+    if (!Number.isFinite(stone.x) || !Number.isFinite(stone.y)) {
+      return null;
+    }
+
+    parsed.push({
+      id: stone.id,
+      x: stone.x,
+      y: stone.y
+    });
+  }
+
+  return parsed;
+}
+
 export class RoomDO {
   private readonly state: DurableObjectState;
   private readonly sessions = new Map<string, Session>();
@@ -113,6 +225,7 @@ export class RoomDO {
 
   async fetch(request: Request): Promise<Response> {
     await this.ensureStateLoaded();
+    await this.processPhaseTimers(Date.now());
 
     const url = new URL(request.url);
     const { pathname } = url;
@@ -128,6 +241,11 @@ export class RoomDO {
     }
 
     return jsonResponse({ ok: false, error: "not_found" }, 404);
+  }
+
+  async alarm(): Promise<void> {
+    await this.ensureStateLoaded();
+    await this.processPhaseTimers(Date.now());
   }
 
   private async ensureStateLoaded(): Promise<void> {
@@ -148,7 +266,39 @@ export class RoomDO {
     await this.state.storage.put(STORAGE_KEY, this.room);
   }
 
-  private buildRoomStatePayload(): Record<string, unknown> {
+  private getSlotByRole(role: Role): PlayerSlot {
+    return role === "host" ? this.room.host : this.room.guest;
+  }
+
+  private getStonesByRole(role: Role): StonePlacement[] {
+    return role === "host" ? this.room.match.placement.hostStones : this.room.match.placement.guestStones;
+  }
+
+  private setStonesByRole(role: Role, stoneList: StonePlacement[]): void {
+    if (role === "host") {
+      this.room.match.placement.hostStones = stoneList;
+      this.room.match.placement.hostSubmitted = true;
+      return;
+    }
+    this.room.match.placement.guestStones = stoneList;
+    this.room.match.placement.guestSubmitted = true;
+  }
+
+  private getSubmittedByRole(role: Role): boolean {
+    return role === "host" ? this.room.match.placement.hostSubmitted : this.room.match.placement.guestSubmitted;
+  }
+
+  private buildRoomStatePayload(role: Role): Record<string, unknown> {
+    const myStones = cloneStones(this.getStonesByRole(role));
+    const mySubmitted = this.getSubmittedByRole(role);
+    const opponentSubmitted = this.getSubmittedByRole(role === "host" ? "guest" : "host");
+    const revealStones = isRevealVisiblePhase(this.room.phase)
+      ? {
+          host: cloneStones(this.room.match.placement.hostStones),
+          guest: cloneStones(this.room.match.placement.guestStones)
+        }
+      : null;
+
     return {
       roomCode: this.room.roomCode,
       phase: this.room.phase,
@@ -162,7 +312,20 @@ export class RoomDO {
             nickname: this.room.guest.nickname ?? "Guest"
           }
         : null,
-      timers: this.room.timers
+      timers: this.room.timers,
+      match: {
+        firstPlayerIndex: this.room.match.firstPlayerIndex,
+        placement: {
+          myStones,
+          mySubmitted,
+          opponentSubmitted,
+          hostSubmitted: this.room.match.placement.hostSubmitted,
+          guestSubmitted: this.room.match.placement.guestSubmitted,
+          revealStones,
+          revealEndsAtMs: this.room.match.placement.revealEndsAtMs
+        }
+      },
+      result: this.room.result
     };
   }
 
@@ -188,7 +351,9 @@ export class RoomDO {
   }
 
   private broadcastRoomState(): void {
-    this.broadcast("room.state", this.buildRoomStatePayload());
+    for (const [token, session] of this.sessions.entries()) {
+      this.sendToToken(token, "room.state", this.buildRoomStatePayload(session.role));
+    }
   }
 
   private getRoleByToken(token: string): Role | null {
@@ -227,7 +392,7 @@ export class RoomDO {
 
     this.room = {
       roomCode,
-      phase: DEFAULT_PHASE,
+      phase: DEFAULT_PHASE as Phase,
       host: {
         token: hostToken,
         nickname,
@@ -237,7 +402,18 @@ export class RoomDO {
       timers: {},
       chatLimiter: {},
       isClosed: false,
-      createdAtMs: Date.now()
+      createdAtMs: Date.now(),
+      match: {
+        firstPlayerIndex: null,
+        placement: {
+          hostStones: [],
+          guestStones: [],
+          hostSubmitted: false,
+          guestSubmitted: false,
+          revealEndsAtMs: null
+        }
+      },
+      result: null
     };
 
     await this.saveState();
@@ -260,7 +436,7 @@ export class RoomDO {
     if (!this.room.host.token || this.room.isClosed) {
       return jsonResponse({ ok: false, error: "room_not_found" }, 404);
     }
-    if (this.room.phase !== "WAITING") {
+    if (this.room.phase !== PHASE_WAITING) {
       return jsonResponse({ ok: false, error: "already_started" }, 409);
     }
     if (this.room.guest.token) {
@@ -341,11 +517,8 @@ export class RoomDO {
     };
     this.sessions.set(token, session);
 
-    if (role === "host") {
-      this.room.host.connected = true;
-    } else {
-      this.room.guest.connected = true;
-    }
+    const slot = this.getSlotByRole(role);
+    slot.connected = true;
     void this.saveState();
 
     this.sendToSocket(socket, "server.welcome", {
@@ -366,7 +539,42 @@ export class RoomDO {
     });
   }
 
+  private async startMatchFlow(): Promise<void> {
+    if (this.room.phase !== PHASE_WAITING) {
+      return;
+    }
+    if (!this.room.host.connected || !this.room.guest.connected) {
+      return;
+    }
+
+    const firstPlayerIndex: 1 | 2 = Math.random() < 0.5 ? 1 : 2;
+    this.room.match.firstPlayerIndex = firstPlayerIndex;
+
+    const fromWaiting = this.room.phase;
+    this.room.phase = PHASE_TURN_ORDER;
+    this.broadcast("match.turnOrder", {
+      firstPlayerIndex
+    });
+    this.broadcast("match.phaseChanged", {
+      from: fromWaiting,
+      to: PHASE_TURN_ORDER
+    });
+
+    const fromTurnOrder = this.room.phase;
+    this.room.phase = PHASE_PLACEMENT_PRIVATE;
+    this.room.timers = {};
+    this.broadcast("match.phaseChanged", {
+      from: fromTurnOrder,
+      to: PHASE_PLACEMENT_PRIVATE
+    });
+
+    await this.saveState();
+    this.broadcastRoomState();
+  }
+
   private async handleMessage(token: string, event: MessageEvent): Promise<void> {
+    await this.processPhaseTimers(Date.now());
+
     const session = this.sessions.get(token);
     if (!session || session.isClosing) {
       return;
@@ -397,8 +605,166 @@ export class RoomDO {
       await this.handleLeave(token, "leave");
       return;
     }
+    if (envelope.type === "client.match.start") {
+      await this.handleMatchStart(token, session);
+      return;
+    }
+    if (envelope.type === "client.match.placement.submit") {
+      await this.handlePlacementSubmit(token, session, envelope.payload);
+      return;
+    }
 
     this.sendToToken(token, "error.generic", errorPayload("unsupported_command"));
+  }
+
+  private async handleMatchStart(token: string, session: Session): Promise<void> {
+    if (this.room.phase !== PHASE_WAITING) {
+      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      return;
+    }
+    if (session.role !== "host") {
+      this.sendToToken(token, "error.generic", errorPayload("host_only"));
+      return;
+    }
+    if (!this.room.host.connected || !this.room.guest.connected) {
+      this.sendToToken(token, "error.generic", errorPayload("player_not_ready"));
+      return;
+    }
+
+    await this.startMatchFlow();
+  }
+
+  private async handlePlacementSubmit(token: string, session: Session, payload: unknown): Promise<void> {
+    if (this.room.phase !== PHASE_PLACEMENT_PRIVATE) {
+      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      return;
+    }
+
+    const slot = this.getSlotByRole(session.role);
+    if (!slot.token || slot.token !== token) {
+      this.sendToToken(token, "error.generic", errorPayload("invalid_token"));
+      return;
+    }
+    if (this.getSubmittedByRole(session.role)) {
+      this.sendToToken(token, "error.generic", errorPayload("already_submitted"));
+      return;
+    }
+
+    const stoneList = parsePlacementStones(payload);
+    if (!stoneList || !this.validatePlacementStones(stoneList, session.role)) {
+      this.sendToToken(token, "error.generic", errorPayload("invalid_placement"));
+      return;
+    }
+
+    this.setStonesByRole(session.role, cloneStones(stoneList));
+    await this.saveState();
+    this.broadcastRoomState();
+
+    if (this.room.match.placement.hostSubmitted && this.room.match.placement.guestSubmitted) {
+      await this.startPlacementReveal();
+    }
+  }
+
+  private validatePlacementStones(stoneList: StonePlacement[], role: Role): boolean {
+    if (stoneList.length !== STONE_COUNT_PER_PLAYER) {
+      return false;
+    }
+
+    const centerY = BOARD_H * 0.5;
+    const minX = STONE_RADIUS;
+    const maxX = BOARD_W - STONE_RADIUS;
+    const minY = STONE_RADIUS;
+    const maxY = BOARD_H - STONE_RADIUS;
+
+    const idSet = new Set<string>();
+    for (const stone of stoneList) {
+      if (idSet.has(stone.id)) {
+        return false;
+      }
+      idSet.add(stone.id);
+
+      if (stone.x < minX || stone.x > maxX || stone.y < minY || stone.y > maxY) {
+        return false;
+      }
+
+      if (role === "host" && stone.y < centerY + NO_PLACE_BUFFER) {
+        return false;
+      }
+      if (role === "guest" && stone.y > centerY - NO_PLACE_BUFFER) {
+        return false;
+      }
+    }
+
+    for (let i = 0; i < stoneList.length; i += 1) {
+      for (let j = i + 1; j < stoneList.length; j += 1) {
+        const dx = stoneList[i].x - stoneList[j].x;
+        const dy = stoneList[i].y - stoneList[j].y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance < MIN_PLACE_DISTANCE) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  private async startPlacementReveal(): Promise<void> {
+    if (this.room.phase !== PHASE_PLACEMENT_PRIVATE) {
+      return;
+    }
+
+    const phaseEndsAtMs = Date.now() + PLACEMENT_REVEAL_SEC * 1000;
+    const fromPhase = this.room.phase;
+
+    this.room.phase = PHASE_PLACEMENT_REVEAL;
+    this.room.timers.phaseEndsAtMs = phaseEndsAtMs;
+    this.room.match.placement.revealEndsAtMs = phaseEndsAtMs;
+
+    await this.saveState();
+
+    this.broadcast("match.phaseChanged", {
+      from: fromPhase,
+      to: PHASE_PLACEMENT_REVEAL
+    });
+    this.broadcast("match.placement.revealStart", {
+      endsAtMs: phaseEndsAtMs,
+      stones: {
+        host: cloneStones(this.room.match.placement.hostStones),
+        guest: cloneStones(this.room.match.placement.guestStones)
+      }
+    });
+    this.broadcastRoomState();
+
+    await this.state.storage.setAlarm(phaseEndsAtMs);
+  }
+
+  private async processPhaseTimers(nowMs: number): Promise<void> {
+    if (this.room.phase !== PHASE_PLACEMENT_REVEAL) {
+      return;
+    }
+
+    const phaseEndsAtMs = this.room.timers.phaseEndsAtMs;
+    if (!phaseEndsAtMs) {
+      return;
+    }
+
+    if (nowMs < phaseEndsAtMs) {
+      await this.state.storage.setAlarm(phaseEndsAtMs);
+      return;
+    }
+
+    const fromPhase = this.room.phase;
+    this.room.phase = PHASE_CARD_SELECT;
+    this.room.timers.phaseEndsAtMs = undefined;
+
+    await this.saveState();
+
+    this.broadcast("match.phaseChanged", {
+      from: fromPhase,
+      to: PHASE_CARD_SELECT
+    });
+    this.broadcastRoomState();
   }
 
   private async handleChatSend(token: string, session: Session, payload: unknown): Promise<void> {
@@ -467,14 +833,19 @@ export class RoomDO {
       return;
     }
 
-    if (role === "host") {
-      await this.handleHostDeparture(reason);
+    if (!isGameplayPhase(this.room.phase)) {
+      if (role === "host") {
+        await this.handleHostDepartureInWaiting(reason);
+        return;
+      }
+      await this.handleGuestDepartureInWaiting(reason);
       return;
     }
-    await this.handleGuestDeparture(reason);
+
+    await this.handleDepartureInGameplay(role, reason);
   }
 
-  private async handleHostDeparture(reason: LeaveReason): Promise<void> {
+  private async handleHostDepartureInWaiting(reason: LeaveReason): Promise<void> {
     if (this.room.isClosed) {
       return;
     }
@@ -490,7 +861,7 @@ export class RoomDO {
     this.room.host = createEmptySlot();
     this.room.guest = createEmptySlot();
     this.room.isClosed = true;
-    this.room.phase = DEFAULT_PHASE;
+    this.room.phase = DEFAULT_PHASE as Phase;
     this.room.timers = {};
     this.room.chatLimiter = {};
     await this.saveState();
@@ -498,7 +869,7 @@ export class RoomDO {
     this.closeAllSockets("host_left");
   }
 
-  private async handleGuestDeparture(reason: LeaveReason): Promise<void> {
+  private async handleGuestDepartureInWaiting(reason: LeaveReason): Promise<void> {
     const guestToken = this.room.guest.token;
     if (!guestToken) {
       return;
@@ -519,6 +890,57 @@ export class RoomDO {
     this.room.guest = createEmptySlot();
     await this.saveState();
 
+    this.broadcastRoomState();
+  }
+
+  private async handleDepartureInGameplay(role: Role, reason: LeaveReason): Promise<void> {
+    const playerIndex = this.getPlayerIndex(role);
+
+    this.broadcast("room.left", {
+      playerIndex,
+      reason
+    });
+
+    const token = this.getSlotByRole(role).token;
+    if (token) {
+      const departingSession = this.sessions.get(token);
+      if (departingSession) {
+        departingSession.isClosing = true;
+        departingSession.socket.close(1000, reason);
+        this.sessions.delete(token);
+      }
+    }
+
+    const slot = this.getSlotByRole(role);
+    slot.connected = false;
+
+    const fromPhase = this.room.phase;
+    if (this.room.phase !== PHASE_RESULT) {
+      const winnerPlayerIndex: 1 | 2 = role === "host" ? 2 : 1;
+      this.room.phase = PHASE_RESULT;
+      this.room.result = {
+        reason: "player_left",
+        winnerPlayerIndex,
+        leftPlayerIndex: playerIndex
+      };
+      this.room.timers = {};
+
+      await this.saveState();
+
+      this.broadcast("match.phaseChanged", {
+        from: fromPhase,
+        to: PHASE_RESULT
+      });
+      this.broadcast("match.result", {
+        reason: "player_left",
+        winnerPlayerIndex,
+        leftPlayerIndex: playerIndex
+      });
+      this.broadcastRoomState();
+      return;
+    }
+
+    await this.saveState();
     this.broadcastRoomState();
   }
 

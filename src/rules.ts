@@ -1,13 +1,37 @@
 export const DEFAULT_PHASE = "WAITING";
+export const PHASE_WAITING = "WAITING";
+export const PHASE_TURN_ORDER = "TURN_ORDER";
+export const PHASE_PLACEMENT_PRIVATE = "PLACEMENT_PRIVATE";
+export const PHASE_PLACEMENT_REVEAL = "PLACEMENT_REVEAL";
+export const PHASE_CARD_SELECT = "CARD_SELECT";
+export const PHASE_PLAYING = "PLAYING";
+export const PHASE_RESULT = "RESULT";
 
 export const ROOM_CODE_LENGTH = 16;
 export const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 export const NICKNAME_MAX_LENGTH = 20;
 
+export const BOARD_W = 600;
+export const BOARD_H = 600;
+export const STONE_COUNT_PER_PLAYER = 7;
+export const STONE_RADIUS = 14;
+export const PLACE_GAP_PX = 5;
+export const MIN_PLACE_DISTANCE = STONE_RADIUS + PLACE_GAP_PX;
+export const NO_PLACE_BUFFER = 19;
+export const PLACEMENT_REVEAL_SEC = 10;
+
 export const CHAT_MAX_LENGTH = 120;
 export const CHAT_RATE_WINDOW_SEC = 10;
 export const CHAT_RATE_MAX_MSG = 6;
 export const CHAT_RATE_BURST = 2;
 
-export const CHAT_ALLOWED_PHASES = new Set<string>(["WAITING", "PLAYING"]);
+export const CHAT_ALLOWED_PHASES = new Set<string>([
+  PHASE_WAITING,
+  PHASE_TURN_ORDER,
+  PHASE_PLACEMENT_PRIVATE,
+  PHASE_PLACEMENT_REVEAL,
+  PHASE_CARD_SELECT,
+  PHASE_PLAYING,
+  PHASE_RESULT
+]);

@@ -41,6 +41,7 @@ function Button:isHovered(mouseX, mouseY)
 end
 
 function Button:draw(mouseX, mouseY)
+  local font = FontManager.getFont("ui")
   local drawColor = self.color
   if not self.isEnabled then
     drawColor = Constants.COLOR_BUTTON_DISABLED
@@ -55,8 +56,9 @@ function Button:draw(mouseX, mouseY)
   love.graphics.rectangle("line", self.x, self.y, self.w, self.h, 8, 8)
 
   love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.setFont(FontManager.getFont("ui"))
-  love.graphics.printf(self.label, self.x, self.y + self.h * 0.32, self.w, "center")
+  love.graphics.setFont(font)
+  local textY = self.y + (self.h - font:getHeight()) * 0.5
+  love.graphics.printf(self.label, self.x, textY, self.w, "center")
 end
 
 return Button

@@ -6,9 +6,12 @@ export type ServerEventType =
   | "room.closed"
   | "chat.message"
   | "chat.denied"
+  | "match.turnOrder"
+  | "match.phaseChanged"
+  | "match.placement.revealStart"
   | "error.generic";
 
-export type ClientCommandType = "client.chat.send" | "client.room.leave";
+export type ClientCommandType = "client.chat.send" | "client.room.leave" | "client.match.start" | "client.match.placement.submit";
 
 export interface WsEnvelope<T = unknown> {
   type: string;

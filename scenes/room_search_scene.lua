@@ -47,14 +47,26 @@ function RoomSearchScene.new(app)
     _roomCodeInput = input,
     _statusText = "",
     _statusColor = Constants.COLOR_TEXT_SUB,
+    _pasteButton = nil,
     _joinButton = nil,
     _backButton = nil
   }
   setmetatable(instance, RoomSearchScene)
 
+  instance._pasteButton = Button.new({
+    x = 380,
+    y = 340,
+    w = 520,
+    h = 48,
+    label = "클립보드에서 불어넣기",
+    onClick = function()
+      instance:pasteRoomCodeFromClipboard()
+    end
+  })
+
   instance._joinButton = Button.new({
     x = 380,
-    y = 350,
+    y = 405,
     w = 250,
     h = 48,
     label = "참가",
@@ -64,7 +76,7 @@ function RoomSearchScene.new(app)
   })
   instance._backButton = Button.new({
     x = 650,
-    y = 350,
+    y = 405,
     w = 250,
     h = 48,
     label = "로비로",
@@ -102,6 +114,31 @@ function RoomSearchScene:requestJoin()
   self:setStatus("참가 요청 중...", Constants.COLOR_TEXT_SUB)
 end
 
+function RoomSearchScene:pasteRoomCodeFromClipboard()
+  if not love.system or not love.system.getClipboardText then
+    self:setStatus("클립보드 기능을 사용할 수 없습니다.", Constants.COLOR_DANGER)
+    return
+  end
+
+  local isOk, clipOrError = pcall(love.system.getClipboardText)
+  if not isOk then
+    self:setStatus("클립보드 읽기 실패: " .. tostring(clipOrError), Constants.COLOR_DANGER)
+    return
+  end
+
+  local clip = type(clipOrError) == "string" and clipOrError or ""
+  clip = clip:gsub("\r\n", ""):gsub("\r", ""):gsub("\n", "")
+  clip = sanitizeRoomCode(clip)
+  if clip == "" then
+    self:setStatus("클립보드에 유효한 룸 코드가 없습니다.", Constants.COLOR_DANGER)
+    return
+  end
+
+  self._roomCodeInput:setText(clip)
+  self._roomCodeInput:setFocus(true)
+  self:setStatus("클립보드에서 룸 코드를 불어넣었습니다.", Constants.COLOR_TEXT_SUB)
+end
+
 function RoomSearchScene:update(_dt)
 end
 
@@ -117,12 +154,13 @@ function RoomSearchScene:draw()
   love.graphics.printf("로컬 서버 기준 룸 코드를 입력하세요", 0, 220, Constants.BASE_WORLD_W, "center")
 
   self._roomCodeInput:draw()
+  self._pasteButton:draw(mouseX, mouseY)
   self._joinButton:draw(mouseX, mouseY)
   self._backButton:draw(mouseX, mouseY)
 
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(self._statusColor)
-  love.graphics.printf(self._statusText, 0, 430, Constants.BASE_WORLD_W, "center")
+  love.graphics.printf(self._statusText, 0, 500, Constants.BASE_WORLD_W, "center")
 end
 
 function RoomSearchScene:mousepressed(mouseX, mouseY, button)
@@ -131,6 +169,10 @@ function RoomSearchScene:mousepressed(mouseX, mouseY, button)
   end
 
   if self._roomCodeInput:mousepressed(mouseX, mouseY, button) then
+    return
+  end
+  if self._pasteButton:isHovered(mouseX, mouseY) then
+    self._pasteButton:onClick()
     return
   end
   if self._joinButton:isHovered(mouseX, mouseY) then

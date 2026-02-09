@@ -17,6 +17,7 @@
 local Constants = require("constants")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
+local Dropdown = require("ui.dropdown")
 local TextInput = require("ui.text_input")
 
 local LobbyScene = {}
@@ -143,24 +144,24 @@ function LobbyScene:openSettingsOverlay()
     panelW = panelW,
     panelH = panelH,
     selectedDisplayMode = selectedDisplayMode,
-    windowedButton = Button.new({
+    displayModeDropdown = Dropdown.new({
       x = panelX + 100,
       y = panelY + 205,
       w = panelW - 200,
       h = 48,
-      label = "창모드 (1280x720)",
-      onClick = function()
-        self._overlay.selectedDisplayMode = Constants.DISPLAY_MODE_WINDOWED
-      end
-    }),
-    fullscreenButton = Button.new({
-      x = panelX + 100,
-      y = panelY + 270,
-      w = panelW - 200,
-      h = 48,
-      label = "전체화면 (현재 모니터)",
-      onClick = function()
-        self._overlay.selectedDisplayMode = Constants.DISPLAY_MODE_FULLSCREEN
+      selectedValue = selectedDisplayMode,
+      optionList = {
+        {
+          value = Constants.DISPLAY_MODE_WINDOWED,
+          label = "창모드 (1280x720)"
+        },
+        {
+          value = Constants.DISPLAY_MODE_FULLSCREEN,
+          label = "전체화면 (현재 모니터)"
+        }
+      },
+      onChanged = function(value)
+        self._overlay.selectedDisplayMode = value
       end
     }),
     saveButton = Button.new({
@@ -218,7 +219,7 @@ function LobbyScene:applySettingsOverlay()
     return
   end
 
-  local selectedDisplayMode = self._overlay.selectedDisplayMode
+  local selectedDisplayMode = self._overlay.displayModeDropdown:getSelectedValue()
   local isSaved, warningText = self._app:savePersistentSettings({
     displayMode = selectedDisplayMode
   })
@@ -322,16 +323,7 @@ function LobbyScene:drawOverlay(mouseX, mouseY)
     love.graphics.setColor(Constants.COLOR_TEXT_SUB)
     love.graphics.printf("디스플레이 모드", self._overlay.panelX, self._overlay.panelY + 130, self._overlay.panelW, "center")
 
-    self._overlay.windowedButton.color = Constants.COLOR_BUTTON
-    self._overlay.fullscreenButton.color = Constants.COLOR_BUTTON
-    if self._overlay.selectedDisplayMode == Constants.DISPLAY_MODE_WINDOWED then
-      self._overlay.windowedButton.color = Constants.COLOR_BUTTON_SELECTED
-    else
-      self._overlay.fullscreenButton.color = Constants.COLOR_BUTTON_SELECTED
-    end
-
-    self._overlay.windowedButton:draw(mouseX, mouseY)
-    self._overlay.fullscreenButton:draw(mouseX, mouseY)
+    self._overlay.displayModeDropdown:draw(mouseX, mouseY)
 
     love.graphics.setFont(FontManager.getFont("small"))
     love.graphics.setColor(Constants.COLOR_TEXT_SUB)
@@ -392,12 +384,8 @@ function LobbyScene:handleOverlayMousePressed(mouseX, mouseY, button)
   end
 
   if self._overlay.kind == "settings" then
-    if self._overlay.windowedButton:isHovered(mouseX, mouseY) then
-      self._overlay.windowedButton:onClick()
-      return true
-    end
-    if self._overlay.fullscreenButton:isHovered(mouseX, mouseY) then
-      self._overlay.fullscreenButton:onClick()
+    if self._overlay.displayModeDropdown:mousepressed(mouseX, mouseY, button) then
+      self._overlay.selectedDisplayMode = self._overlay.displayModeDropdown:getSelectedValue()
       return true
     end
     if self._overlay.saveButton:isHovered(mouseX, mouseY) then

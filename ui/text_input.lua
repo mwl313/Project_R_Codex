@@ -11,6 +11,7 @@
 - TextInput:setFocus(isFocused)
 - TextInput:setText(text)
 - TextInput:getText()
+- TextInput:insertText(text)
 - TextInput:textinput(text)
 - TextInput:textedited(text, start, length)
 - TextInput:keypressed(key)
@@ -83,13 +84,22 @@ function TextInput:getText()
   return self.text
 end
 
-function TextInput:textinput(text)
+function TextInput:insertText(text)
   if not self.isEnabled or not self.isFocused then
-    return
+    return false
   end
-  if text and text ~= "" then
-    self.text = self.text .. text
+
+  local insertValue = type(text) == "string" and text or ""
+  if insertValue == "" then
+    return false
   end
+
+  self.text = self.text .. insertValue
+  return true
+end
+
+function TextInput:textinput(text)
+  self:insertText(text)
 end
 
 function TextInput:textedited(text, _start, _length)
@@ -102,6 +112,33 @@ end
 function TextInput:keypressed(key)
   if not self.isEnabled or not self.isFocused then
     return false
+  end
+
+  if key == "v" then
+    local hasKeyboard = love and love.keyboard and love.keyboard.isDown
+    local isCtrlDown = hasKeyboard and love.keyboard.isDown("lctrl", "rctrl")
+    local isCmdDown = hasKeyboard and love.keyboard.isDown("lgui", "rgui")
+    if isCtrlDown or isCmdDown then
+      if self.compositionText ~= "" then
+        self.compositionText = ""
+      end
+
+      local clip = ""
+      if love and love.system and love.system.getClipboardText then
+        local isOk, clipboardValue = pcall(love.system.getClipboardText)
+        if isOk and type(clipboardValue) == "string" then
+          clip = clipboardValue
+        end
+      end
+
+      clip = clip:gsub("\r\n", ""):gsub("\r", ""):gsub("\n", "")
+      if clip == "" then
+        return true
+      end
+
+      self:insertText(clip)
+      return true
+    end
   end
 
   if key == "backspace" then

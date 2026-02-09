@@ -23,7 +23,7 @@ WaitingRoomScene.__index = WaitingRoomScene
 
 local function createDefaultRoomState()
   return {
-    phase = "WAITING",
+    phase = Constants.PHASE_WAITING,
     host = { connected = false, nickname = "Host" },
     guest = nil
   }
@@ -48,10 +48,34 @@ function WaitingRoomScene.new(app)
     _statusText = "WS 연결 대기 중...",
     _statusColor = Constants.COLOR_TEXT_SUB,
     _chatInput = chatInput,
+    _startButton = nil,
+    _copyCodeButton = nil,
     _sendButton = nil,
     _leaveButton = nil
   }
   setmetatable(instance, WaitingRoomScene)
+
+  instance._startButton = Button.new({
+    x = 900,
+    y = 38,
+    w = 135,
+    h = 42,
+    label = "게임 시작",
+    onClick = function()
+      instance:requestMatchStart()
+    end
+  })
+
+  instance._copyCodeButton = Button.new({
+    x = 0,
+    y = 0,
+    w = 88,
+    h = 34,
+    label = "복사",
+    onClick = function()
+      instance:copyRoomCode()
+    end
+  })
 
   instance._sendButton = Button.new({
     x = 985,
@@ -119,6 +143,48 @@ function WaitingRoomScene:leaveRoom()
   })
 end
 
+function WaitingRoomScene:canRequestMatchStart()
+  local session = self._app:getSession()
+  if not session or session.role ~= "host" then
+    return false
+  end
+  if self._roomState.phase ~= Constants.PHASE_WAITING then
+    return false
+  end
+  return self._roomState.host and self._roomState.host.connected and self._roomState.guest and self._roomState.guest.connected
+end
+
+function WaitingRoomScene:requestMatchStart()
+  if not self:canRequestMatchStart() then
+    self:setStatus("게임 시작 조건이 충족되지 않았습니다.", Constants.COLOR_DANGER)
+    return
+  end
+  self._app:sendWsEnvelope("client.match.start", {})
+  self:setStatus("게임 시작 요청 전송...", Constants.COLOR_TEXT_SUB)
+end
+
+function WaitingRoomScene:copyRoomCode()
+  local session = self._app:getSession()
+  local roomCode = session and session.roomCode or nil
+  if not roomCode or roomCode == "" then
+    self:setStatus("복사할 룸 코드가 없습니다.", Constants.COLOR_DANGER)
+    return
+  end
+
+  if not love.system or not love.system.setClipboardText then
+    self:setStatus("클립보드 기능을 사용할 수 없습니다.", Constants.COLOR_DANGER)
+    return
+  end
+
+  local isOk, errorText = pcall(love.system.setClipboardText, roomCode)
+  if not isOk then
+    self:setStatus("룸 코드 복사 실패: " .. tostring(errorText), Constants.COLOR_DANGER)
+    return
+  end
+
+  self:setStatus("룸 코드 복사됨: " .. roomCode, Constants.COLOR_TEXT_SUB)
+end
+
 function WaitingRoomScene:update(_dt)
 end
 
@@ -131,12 +197,20 @@ function WaitingRoomScene:draw()
   love.graphics.printf("대기방", 80, 40, 380, "left")
 
   love.graphics.setFont(FontManager.getFont("ui"))
-  love.graphics.printf("Room: " .. (session.roomCode or "-"), 80, 78, 600, "left")
+  local roomCode = session.roomCode or "-"
+  local roomLabel = "Room: " .. roomCode
+  love.graphics.printf(roomLabel, 80, 78, 600, "left")
+  self._copyCodeButton.x = 80 + FontManager.getFont("ui"):getWidth(roomLabel) + 16
+  self._copyCodeButton.y = 84
+  self._copyCodeButton.isEnabled = session.roomCode and session.roomCode ~= ""
+  self._copyCodeButton:draw(mouseX, mouseY)
 
   local roleText = session.role and ("Role: " .. session.role) or "Role: -"
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
   love.graphics.printf(roleText, 80, 108, 400, "left")
 
+  self._startButton.isEnabled = self:canRequestMatchStart()
+  self._startButton:draw(mouseX, mouseY)
   self._leaveButton:draw(mouseX, mouseY)
 
   love.graphics.setColor(Constants.COLOR_PANEL)
@@ -183,6 +257,14 @@ function WaitingRoomScene:mousepressed(mouseX, mouseY, button)
     self._leaveButton:onClick()
     return
   end
+  if self._copyCodeButton:isHovered(mouseX, mouseY) and self._copyCodeButton.isEnabled then
+    self._copyCodeButton:onClick()
+    return
+  end
+  if self._startButton:isHovered(mouseX, mouseY) and self._startButton.isEnabled then
+    self._startButton:onClick()
+    return
+  end
   if self._sendButton:isHovered(mouseX, mouseY) then
     self._sendButton:onClick()
     return
@@ -214,6 +296,12 @@ function WaitingRoomScene:onWsEnvelope(envelope)
   if envelope.type == "room.state" then
     if type(envelope.payload) == "table" then
       self._roomState = envelope.payload
+      if self._roomState.phase and self._roomState.phase ~= Constants.PHASE_WAITING then
+        self._app:goMatch({
+          roomState = self._roomState
+        })
+        return
+      end
     end
     return
   end
@@ -243,6 +331,12 @@ function WaitingRoomScene:onWsEnvelope(envelope)
   if envelope.type == "server.welcome" then
     local payload = envelope.payload or {}
     self:setStatus("연결됨 (" .. tostring(payload.role or "?") .. ")", Constants.COLOR_TEXT_SUB)
+    return
+  end
+
+  if envelope.type == "match.turnOrder" then
+    local payload = envelope.payload or {}
+    self:setStatus("선공 결정: P" .. tostring(payload.firstPlayerIndex or "?"), Constants.COLOR_TEXT_SUB)
     return
   end
 

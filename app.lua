@@ -40,6 +40,9 @@ local function createSceneFactoryTable()
     end,
     waitingRoom = function(app)
       return require("scenes.waiting_room_scene").new(app)
+    end,
+    match = function(app)
+      return require("scenes.match_scene").new(app)
     end
   }
 end
@@ -168,6 +171,10 @@ end
 
 function App:goWaitingRoom(params)
   self._sceneManager:setScene("waitingRoom", params)
+end
+
+function App:goMatch(params)
+  self._sceneManager:setScene("match", params)
 end
 
 function App:emitUiStatus(text, color)
