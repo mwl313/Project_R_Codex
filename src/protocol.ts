@@ -11,6 +11,8 @@ export type ServerEventType =
   | "match.placement.revealStart"
   | "match.cards.dealt"
   | "match.cards.locked"
+  | "match.turn.cardCue"
+  | "match.turn.cardApplied"
   | "match.turn.start"
   | "match.turn.shotAccepted"
   | "match.turn.snapshotRequested"
@@ -24,6 +26,7 @@ export type ClientCommandType =
   | "client.match.start"
   | "client.match.placement.submit"
   | "client.match.cards.pick"
+  | "client.match.turn.cardUse"
   | "client.match.turn.shot"
   | "client.match.turn.snapshot";
 

@@ -166,9 +166,13 @@ function MatchScene.new(app)
     _playingTurnIndex = 1,
     _activePlayerIndex = 1,
     _turnEndsAtMs = nil,
+    _playingShotBudget = 1,
+    _playingShotUsed = 0,
+    _hasUsedCardThisTurn = false,
     _isPlayingShotCommitted = false,
     _isPlayingAwaitingSnapshot = false,
     _isTurnShotPending = false,
+    _isCardUsePending = false,
     _isAimDragging = false,
     _aimStoneId = nil,
     _lastAutoSnapshotTurnIndex = nil,
@@ -176,7 +180,8 @@ function MatchScene.new(app)
     _simAccumulatorSec = 0,
     _simElapsedSec = 0,
     _isShotSimulating = false,
-    _shouldSendSnapshotAfterSim = false
+    _shouldSendSnapshotAfterSim = false,
+    _playingCardButtonList = {}
   }
   setmetatable(instance, MatchScene)
 
@@ -227,9 +232,13 @@ function MatchScene:enter(params)
   self._playingTurnIndex = 1
   self._activePlayerIndex = 1
   self._turnEndsAtMs = nil
+  self._playingShotBudget = 1
+  self._playingShotUsed = 0
+  self._hasUsedCardThisTurn = false
   self._isPlayingShotCommitted = false
   self._isPlayingAwaitingSnapshot = false
   self._isTurnShotPending = false
+  self._isCardUsePending = false
   self._isAimDragging = false
   self._aimStoneId = nil
   self._lastAutoSnapshotTurnIndex = nil
@@ -238,6 +247,7 @@ function MatchScene:enter(params)
   self._simElapsedSec = 0
   self._isShotSimulating = false
   self._shouldSendSnapshotAfterSim = false
+  self._playingCardButtonList = {}
 
   if params and type(params.roomState) == "table" then
     self:applyRoomState(params.roomState)
@@ -282,7 +292,7 @@ function MatchScene:isMyTurn()
 end
 
 function MatchScene:isShotInputEnabled()
-  return self:isMyTurn() and (not self._isPlayingShotCommitted) and (not self._isPlayingAwaitingSnapshot) and (not self._isTurnShotPending)
+  return self:isMyTurn() and (not self._isPlayingShotCommitted) and (not self._isPlayingAwaitingSnapshot) and (not self._isTurnShotPending) and (not self._isCardUsePending)
 end
 
 function MatchScene:isRevealVisiblePhase()
@@ -711,6 +721,78 @@ function MatchScene:submitCardPick()
   self:setStatus("카드 선택 확정 요청 전송...", Constants.COLOR_TEXT_SUB)
 end
 
+function MatchScene:getPlayingCardPanelRect()
+  local panelW = 300
+  local panelH = 140
+  return {
+    x = self._boardX - panelW - 18,
+    y = self._boardY + 12,
+    w = panelW,
+    h = panelH
+  }
+end
+
+function MatchScene:canUseCardInTurn(cardId)
+  if not self:isPlayingPhase() then
+    return false
+  end
+  if not self:isMyTurn() then
+    return false
+  end
+  if self._isCardUsePending or self._isPlayingAwaitingSnapshot then
+    return false
+  end
+  if self._hasUsedCardThisTurn then
+    return false
+  end
+  if self._playingShotUsed > 0 then
+    return false
+  end
+  if cardId ~= "agile" then
+    return false
+  end
+  return true
+end
+
+function MatchScene:rebuildPlayingCardButtons()
+  self._playingCardButtonList = {}
+  local rect = self:getPlayingCardPanelRect()
+  for index, cardId in ipairs(self._myPickedCardList) do
+    local button = Button.new({
+      x = rect.x + 12,
+      y = rect.y + 34 + (index - 1) * 40,
+      w = rect.w - 24,
+      h = 34,
+      label = getCardLabel(cardId),
+      onClick = function()
+        self:requestTurnCardUse(cardId)
+      end
+    })
+    self._playingCardButtonList[#self._playingCardButtonList + 1] = {
+      cardId = cardId,
+      button = button
+    }
+  end
+end
+
+function MatchScene:requestTurnCardUse(cardId)
+  if not self:canUseCardInTurn(cardId) then
+    if cardId ~= "agile" then
+      self:setStatus("해당 카드는 아직 구현되지 않았습니다.", Constants.COLOR_DANGER)
+    else
+      self:setStatus("지금은 카드를 사용할 수 없습니다.", Constants.COLOR_DANGER)
+    end
+    return
+  end
+
+  self._app:sendWsEnvelope("client.match.turn.cardUse", {
+    turnIndex = self._playingTurnIndex,
+    cardId = cardId
+  })
+  self._isCardUsePending = true
+  self:setStatus("카드 사용 요청 전송...", Constants.COLOR_TEXT_SUB)
+end
+
 function MatchScene:beginAimDrag(worldX, worldY)
   if not self:isShotInputEnabled() then
     return
@@ -898,6 +980,18 @@ function MatchScene:applyRoomState(payload)
     else
       self._turnEndsAtMs = nil
     end
+    if type(playing.shotBudget) == "number" then
+      self._playingShotBudget = playing.shotBudget
+    end
+    if type(playing.shotUsed) == "number" then
+      self._playingShotUsed = playing.shotUsed
+    end
+    if type(playing.hasCardUsedThisTurn) == "boolean" then
+      self._hasUsedCardThisTurn = playing.hasCardUsedThisTurn
+      if playing.hasCardUsedThisTurn then
+        self._isCardUsePending = false
+      end
+    end
     if type(playing.shotCommitted) == "boolean" then
       self._isPlayingShotCommitted = playing.shotCommitted
       if playing.shotCommitted then
@@ -916,6 +1010,7 @@ function MatchScene:applyRoomState(payload)
       self._playingStoneList = clonePlayingStoneList(playing.stones)
       self:syncStoneVelocityMap()
     end
+    self:rebuildPlayingCardButtons()
   end
 
   if payload.phase ~= Constants.PHASE_PLAYING then
@@ -1041,12 +1136,35 @@ function MatchScene:drawPlayingInfo()
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
   love.graphics.printf(
-    string.format("턴 %d | %s | 남은 시간: %ds | 상태: %s", self._playingTurnIndex, turnOwnerText, remainSec, stateText),
+    string.format("턴 %d | %s | 남은 시간: %ds | 샷 %d/%d | 카드사용:%s | 상태: %s", self._playingTurnIndex, turnOwnerText, remainSec, self._playingShotUsed, self._playingShotBudget, self._hasUsedCardThisTurn and "Y" or "N", stateText),
     0,
     636,
     Constants.BASE_WORLD_W,
     "center"
   )
+end
+
+function MatchScene:drawPlayingCardPanel(mouseX, mouseY)
+  if not self:isPlayingPhase() then
+    return
+  end
+
+  local rect = self:getPlayingCardPanelRect()
+  love.graphics.setColor(Constants.COLOR_PANEL)
+  love.graphics.rectangle("fill", rect.x, rect.y, rect.w, rect.h, 8, 8)
+  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+  love.graphics.rectangle("line", rect.x, rect.y, rect.w, rect.h, 8, 8)
+
+  love.graphics.setFont(FontManager.getFont("small"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.printf("TURN 카드", rect.x, rect.y + 8, rect.w, "center")
+
+  for _, entry in ipairs(self._playingCardButtonList) do
+    local canUse = self:canUseCardInTurn(entry.cardId)
+    entry.button.isEnabled = canUse
+    entry.button.color = canUse and Constants.COLOR_BUTTON or Constants.COLOR_BUTTON_DISABLED
+    entry.button:draw(mouseX, mouseY)
+  end
 end
 
 function MatchScene:drawAimGuide(mouseX, mouseY)
@@ -1173,6 +1291,7 @@ function MatchScene:draw()
     self:drawCardSelectPanel(mouseX, mouseY)
   elseif self._roomState.phase == Constants.PHASE_PLAYING or self._roomState.phase == Constants.PHASE_RESULT then
     self:drawPlayingInfo()
+    self:drawPlayingCardPanel(mouseX, mouseY)
   else
     self:drawPlacementInfo()
   end
@@ -1207,6 +1326,12 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
   end
 
   if self:isPlayingPhase() then
+    for _, entry in ipairs(self._playingCardButtonList) do
+      if entry.button:isHovered(mouseX, mouseY) and entry.button.isEnabled then
+        entry.button:onClick()
+        return
+      end
+    end
     self:beginAimDrag(mouseX, mouseY)
     return
   end
@@ -1306,6 +1431,7 @@ function MatchScene:onWsEnvelope(envelope)
       if type(payload.pickedCards) == "table" then
         self._myPickedCardList = cloneStringList(payload.pickedCards)
         self._selectedCardList = cloneStringList(payload.pickedCards)
+        self:rebuildPlayingCardButtons()
       end
       self:setStatus("내 카드 선택이 확정되었습니다.", Constants.COLOR_TEXT_SUB)
     else
@@ -1328,15 +1454,32 @@ function MatchScene:onWsEnvelope(envelope)
     else
       self._turnEndsAtMs = nil
     end
+    if type(payload.shotBudget) == "number" then
+      self._playingShotBudget = payload.shotBudget
+    else
+      self._playingShotBudget = 1
+    end
+    if type(payload.shotUsed) == "number" then
+      self._playingShotUsed = payload.shotUsed
+    else
+      self._playingShotUsed = 0
+    end
+    if type(payload.hasCardUsedThisTurn) == "boolean" then
+      self._hasUsedCardThisTurn = payload.hasCardUsedThisTurn
+    else
+      self._hasUsedCardThisTurn = false
+    end
     self._isPlayingShotCommitted = false
     self._isPlayingAwaitingSnapshot = false
     self._isTurnShotPending = false
+    self._isCardUsePending = false
     self._isAimDragging = false
     self._aimStoneId = nil
     self._lastAutoSnapshotTurnIndex = nil
     self._shouldSendSnapshotAfterSim = false
     self:stopShotSimulation()
     self:resetStoneVelocities()
+    self:rebuildPlayingCardButtons()
     if self:isMyTurn() then
       self:setStatus("내 턴 시작. 드래그해서 발사하세요.", Constants.COLOR_TEXT_SUB)
     else
@@ -1345,17 +1488,56 @@ function MatchScene:onWsEnvelope(envelope)
     return
   end
 
+  if envelope.type == "match.turn.cardCue" then
+    local payload = envelope.payload or {}
+    self:setStatus("카드 사용 연출: P" .. tostring(payload.playerIndex or "?") .. " / " .. tostring(getCardLabel(payload.cardId)), Constants.COLOR_TEXT_SUB)
+    return
+  end
+
+  if envelope.type == "match.turn.cardApplied" then
+    local payload = envelope.payload or {}
+    local myPlayerIndex = self:getMyPlayerIndex()
+    if payload.playerIndex == myPlayerIndex then
+      self._isCardUsePending = false
+      self._hasUsedCardThisTurn = true
+      if type(payload.cardId) == "string" then
+        removeString(self._myPickedCardList, payload.cardId)
+      end
+      if type(payload.effect) == "table" and type(payload.effect.shotBudget) == "number" then
+        self._playingShotBudget = payload.effect.shotBudget
+      end
+      self:rebuildPlayingCardButtons()
+    else
+      if type(payload.effect) == "table" and type(payload.effect.shotBudget) == "number" then
+        self._playingShotBudget = payload.effect.shotBudget
+      end
+    end
+    self:setStatus("카드 효과 적용됨: " .. tostring(getCardLabel(payload.cardId)), Constants.COLOR_TEXT_SUB)
+    return
+  end
+
   if envelope.type == "match.turn.shotAccepted" then
     local payload = envelope.payload or {}
     if type(payload.turnIndex) == "number" then
       self._playingTurnIndex = payload.turnIndex
     end
+    if type(payload.shotUsed) == "number" then
+      self._playingShotUsed = payload.shotUsed
+    end
+    if type(payload.shotBudget) == "number" then
+      self._playingShotBudget = payload.shotBudget
+    end
     self:applyShotImpulse(payload)
-    self._isPlayingShotCommitted = true
+    self._isPlayingShotCommitted = self._playingShotUsed >= self._playingShotBudget
     self._isTurnShotPending = false
+    self._isCardUsePending = false
     self._isAimDragging = false
     self._aimStoneId = nil
-    self:setStatus("발사 수락, 스냅샷 대기 중...", Constants.COLOR_TEXT_SUB)
+    if self._playingShotUsed >= self._playingShotBudget then
+      self:setStatus("발사 수락, 스냅샷 대기 중...", Constants.COLOR_TEXT_SUB)
+    else
+      self:setStatus("발사 수락, 추가 발사 가능", Constants.COLOR_TEXT_SUB)
+    end
     return
   end
 
@@ -1367,6 +1549,7 @@ function MatchScene:onWsEnvelope(envelope)
     self._isPlayingAwaitingSnapshot = true
     self._turnEndsAtMs = nil
     self._isTurnShotPending = false
+    self._isCardUsePending = false
     self._isAimDragging = false
     self._aimStoneId = nil
     self:setStatus("서버가 턴 스냅샷을 요청했습니다.", Constants.COLOR_TEXT_SUB)
@@ -1388,6 +1571,7 @@ function MatchScene:onWsEnvelope(envelope)
     self._isPlayingAwaitingSnapshot = false
     self._isPlayingShotCommitted = false
     self._isTurnShotPending = false
+    self._isCardUsePending = false
     self:setStatus("턴 스냅샷 적용 완료", Constants.COLOR_TEXT_SUB)
     return
   end
@@ -1406,7 +1590,10 @@ function MatchScene:onWsEnvelope(envelope)
     if payload.code == "invalid_card_pick" or payload.code == "already_locked" then
       self._isCardPickPending = false
     end
-    if payload.code == "invalid_shot_power" or payload.code == "invalid_shot_dir" or payload.code == "invalid_shot_stone" or payload.code == "not_your_turn" or payload.code == "timeout" or payload.code == "turn_mismatch" or payload.code == "already_shot" then
+    if payload.code == "card_already_used" or payload.code == "card_use_window_closed" or payload.code == "card_not_owned" or payload.code == "card_not_implemented" or payload.code == "invalid_card_id" then
+      self._isCardUsePending = false
+    end
+    if payload.code == "invalid_shot_power" or payload.code == "invalid_shot_dir" or payload.code == "invalid_shot_stone" or payload.code == "not_your_turn" or payload.code == "timeout" or payload.code == "turn_mismatch" or payload.code == "already_shot" or payload.code == "shot_budget_exceeded" then
       self._isTurnShotPending = false
       self._isPlayingShotCommitted = false
       self._isAimDragging = false

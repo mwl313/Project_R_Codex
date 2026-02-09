@@ -88,6 +88,9 @@ interface MatchPlayingState {
   turnIndex: number;
   activePlayerIndex: 1 | 2;
   turnEndsAtMs: number | null;
+  shotBudget: number;
+  shotUsed: number;
+  hasCardUsedThisTurn: boolean;
   shotCommitted: boolean;
   awaitingSnapshot: boolean;
   stones: MatchPlayingStone[];
@@ -167,6 +170,9 @@ function createDefaultRoomState(): RoomState {
         turnIndex: 1,
         activePlayerIndex: 1,
         turnEndsAtMs: null,
+        shotBudget: 1,
+        shotUsed: 0,
+        hasCardUsedThisTurn: false,
         shotCommitted: false,
         awaitingSnapshot: false,
         stones: []
@@ -374,6 +380,48 @@ function parseSnapshotPayload(payload: unknown): { turnIndex: number; stones: Ma
   };
 }
 
+function parseCardUsePayload(payload: unknown): { turnIndex: number; cardId: string; target: { x: number; y: number } | null } | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const value = payload as {
+    turnIndex?: unknown;
+    cardId?: unknown;
+    target?: unknown;
+  };
+  if (typeof value.turnIndex !== "number" || typeof value.cardId !== "string") {
+    return null;
+  }
+  if (!Number.isFinite(value.turnIndex) || value.turnIndex < 1 || Math.floor(value.turnIndex) !== value.turnIndex) {
+    return null;
+  }
+  const cardId = value.cardId.trim();
+  if (cardId.length === 0) {
+    return null;
+  }
+
+  let target: { x: number; y: number } | null = null;
+  if (value.target && typeof value.target === "object") {
+    const targetValue = value.target as { x?: unknown; y?: unknown };
+    if (typeof targetValue.x !== "number" || typeof targetValue.y !== "number") {
+      return null;
+    }
+    if (!Number.isFinite(targetValue.x) || !Number.isFinite(targetValue.y)) {
+      return null;
+    }
+    target = {
+      x: targetValue.x,
+      y: targetValue.y
+    };
+  }
+
+  return {
+    turnIndex: value.turnIndex,
+    cardId,
+    target
+  };
+}
+
 function shuffleCards(cardList: string[]): string[] {
   const shuffled = [...cardList];
   for (let i = shuffled.length - 1; i > 0; i -= 1) {
@@ -468,6 +516,9 @@ export class RoomDO {
           turnIndex: 1,
           activePlayerIndex: 1,
           turnEndsAtMs: null,
+          shotBudget: 1,
+          shotUsed: 0,
+          hasCardUsedThisTurn: false,
           shotCommitted: false,
           awaitingSnapshot: false,
           stones: []
@@ -503,10 +554,27 @@ export class RoomDO {
         turnIndex: 1,
         activePlayerIndex: 1,
         turnEndsAtMs: null,
+        shotBudget: 1,
+        shotUsed: 0,
+        hasCardUsedThisTurn: false,
         shotCommitted: false,
         awaitingSnapshot: false,
         stones: []
       };
+      return;
+    }
+
+    if (typeof this.room.match.playing.shotBudget !== "number" || this.room.match.playing.shotBudget < 1) {
+      this.room.match.playing.shotBudget = 1;
+    }
+    if (typeof this.room.match.playing.shotUsed !== "number" || this.room.match.playing.shotUsed < 0) {
+      this.room.match.playing.shotUsed = 0;
+    }
+    if (typeof this.room.match.playing.hasCardUsedThisTurn !== "boolean") {
+      this.room.match.playing.hasCardUsedThisTurn = false;
+    }
+    if (this.room.match.playing.shotUsed > this.room.match.playing.shotBudget) {
+      this.room.match.playing.shotUsed = this.room.match.playing.shotBudget;
     }
   }
 
@@ -568,6 +636,11 @@ export class RoomDO {
     return role === "host" ? HOST_PICK_COUNT : GUEST_PICK_COUNT;
   }
 
+  private removePickedCardByRole(role: Role, cardId: string): void {
+    const pickedCards = this.getPickedCardsByRole(role).filter((value) => value !== cardId);
+    this.setPickedCardsByRole(role, pickedCards);
+  }
+
   private buildRoomStatePayload(role: Role): Record<string, unknown> {
     const myStones = cloneStones(this.getStonesByRole(role));
     const mySubmitted = this.getSubmittedByRole(role);
@@ -618,6 +691,9 @@ export class RoomDO {
           turnIndex: this.room.match.playing.turnIndex,
           activePlayerIndex: this.room.match.playing.activePlayerIndex,
           turnEndsAtMs: this.room.match.playing.turnEndsAtMs,
+          shotBudget: this.room.match.playing.shotBudget,
+          shotUsed: this.room.match.playing.shotUsed,
+          hasCardUsedThisTurn: this.room.match.playing.hasCardUsedThisTurn,
           shotCommitted: this.room.match.playing.shotCommitted,
           awaitingSnapshot: this.room.match.playing.awaitingSnapshot,
           stones: clonePlayingStones(this.room.match.playing.stones)
@@ -723,6 +799,9 @@ export class RoomDO {
           turnIndex: 1,
           activePlayerIndex: 1,
           turnEndsAtMs: null,
+          shotBudget: 1,
+          shotUsed: 0,
+          hasCardUsedThisTurn: false,
           shotCommitted: false,
           awaitingSnapshot: false,
           stones: []
@@ -887,6 +966,9 @@ export class RoomDO {
     this.room.match.playing.turnIndex = 1;
     this.room.match.playing.activePlayerIndex = 1;
     this.room.match.playing.turnEndsAtMs = null;
+    this.room.match.playing.shotBudget = 1;
+    this.room.match.playing.shotUsed = 0;
+    this.room.match.playing.hasCardUsedThisTurn = false;
     this.room.match.playing.shotCommitted = false;
     this.room.match.playing.awaitingSnapshot = false;
     this.room.match.playing.stones = [];
@@ -959,6 +1041,10 @@ export class RoomDO {
     }
     if (envelope.type === "client.match.cards.pick") {
       await this.handleCardPick(token, session, envelope.payload);
+      return;
+    }
+    if (envelope.type === "client.match.turn.cardUse") {
+      await this.handleTurnCardUse(token, session, envelope.payload);
       return;
     }
     if (envelope.type === "client.match.turn.shot") {
@@ -1101,6 +1187,9 @@ export class RoomDO {
     this.room.match.playing.turnIndex = this.room.match.playing.turnIndex > 0 ? this.room.match.playing.turnIndex : 1;
     this.room.match.playing.activePlayerIndex = activePlayerIndex;
     this.room.match.playing.turnEndsAtMs = turnEndsAtMs;
+    this.room.match.playing.shotBudget = 1;
+    this.room.match.playing.shotUsed = 0;
+    this.room.match.playing.hasCardUsedThisTurn = false;
     this.room.match.playing.shotCommitted = false;
     this.room.match.playing.awaitingSnapshot = false;
     this.room.timers.turnEndsAtMs = turnEndsAtMs;
@@ -1110,7 +1199,10 @@ export class RoomDO {
     this.broadcast("match.turn.start", {
       turnIndex: this.room.match.playing.turnIndex,
       activePlayerIndex: this.room.match.playing.activePlayerIndex,
-      turnEndsAtMs: this.room.match.playing.turnEndsAtMs
+      turnEndsAtMs: this.room.match.playing.turnEndsAtMs,
+      shotBudget: this.room.match.playing.shotBudget,
+      shotUsed: this.room.match.playing.shotUsed,
+      hasCardUsedThisTurn: this.room.match.playing.hasCardUsedThisTurn
     });
   }
 
@@ -1208,6 +1300,81 @@ export class RoomDO {
     this.broadcastRoomState();
   }
 
+  private async handleTurnCardUse(token: string, session: Session, payload: unknown): Promise<void> {
+    if (this.room.phase !== PHASE_PLAYING) {
+      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      return;
+    }
+
+    const cardUsePayload = parseCardUsePayload(payload);
+    if (!cardUsePayload) {
+      this.sendToToken(token, "error.generic", errorPayload("invalid_payload"));
+      return;
+    }
+    if (cardUsePayload.turnIndex !== this.room.match.playing.turnIndex) {
+      this.sendToToken(token, "error.generic", errorPayload("turn_mismatch"));
+      return;
+    }
+    if (session.playerIndex !== this.room.match.playing.activePlayerIndex) {
+      this.sendToToken(token, "error.generic", errorPayload("not_your_turn"));
+      return;
+    }
+    if (this.room.match.playing.awaitingSnapshot) {
+      this.sendToToken(token, "error.generic", errorPayload("awaiting_snapshot"));
+      return;
+    }
+    const turnEndsAtMs = this.room.match.playing.turnEndsAtMs;
+    if (!turnEndsAtMs || Date.now() > turnEndsAtMs) {
+      this.sendToToken(token, "error.generic", errorPayload("timeout"));
+      return;
+    }
+    if (this.room.match.playing.hasCardUsedThisTurn) {
+      this.sendToToken(token, "error.generic", errorPayload("card_already_used"));
+      return;
+    }
+    if (this.room.match.playing.shotUsed > 0) {
+      this.sendToToken(token, "error.generic", errorPayload("card_use_window_closed"));
+      return;
+    }
+    if (!(CARD_POOL as readonly string[]).includes(cardUsePayload.cardId)) {
+      this.sendToToken(token, "error.generic", errorPayload("invalid_card_id"));
+      return;
+    }
+
+    const pickedCards = this.getPickedCardsByRole(session.role);
+    if (!pickedCards.includes(cardUsePayload.cardId)) {
+      this.sendToToken(token, "error.generic", errorPayload("card_not_owned"));
+      return;
+    }
+
+    if (cardUsePayload.cardId !== "agile") {
+      this.sendToToken(token, "error.generic", errorPayload("card_not_implemented"));
+      return;
+    }
+
+    this.broadcast("match.turn.cardCue", {
+      turnIndex: this.room.match.playing.turnIndex,
+      playerIndex: session.playerIndex,
+      cardId: cardUsePayload.cardId,
+      target: cardUsePayload.target
+    });
+
+    this.room.match.playing.hasCardUsedThisTurn = true;
+    this.room.match.playing.shotBudget = Math.max(this.room.match.playing.shotBudget, 2);
+    this.removePickedCardByRole(session.role, cardUsePayload.cardId);
+
+    await this.saveState();
+    this.broadcast("match.turn.cardApplied", {
+      turnIndex: this.room.match.playing.turnIndex,
+      playerIndex: session.playerIndex,
+      cardId: cardUsePayload.cardId,
+      effect: {
+        shotBudget: this.room.match.playing.shotBudget
+      }
+    });
+    this.broadcastRoomState();
+  }
+
   private async handleTurnShot(token: string, session: Session, payload: unknown): Promise<void> {
     if (this.room.phase !== PHASE_PLAYING) {
       this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
@@ -1227,8 +1394,8 @@ export class RoomDO {
       this.sendToToken(token, "error.generic", errorPayload("not_your_turn"));
       return;
     }
-    if (this.room.match.playing.shotCommitted) {
-      this.sendToToken(token, "error.generic", errorPayload("already_shot"));
+    if (this.room.match.playing.shotUsed >= this.room.match.playing.shotBudget) {
+      this.sendToToken(token, "error.generic", errorPayload("shot_budget_exceeded"));
       return;
     }
     if (this.room.match.playing.awaitingSnapshot) {
@@ -1258,7 +1425,8 @@ export class RoomDO {
       return;
     }
 
-    this.room.match.playing.shotCommitted = true;
+    this.room.match.playing.shotUsed += 1;
+    this.room.match.playing.shotCommitted = this.room.match.playing.shotUsed >= this.room.match.playing.shotBudget;
     await this.saveState();
 
     this.broadcast("match.turn.shotAccepted", {
@@ -1267,10 +1435,17 @@ export class RoomDO {
       stoneId: shotPayload.stoneId,
       dirX: shotPayload.dirX / dirLength,
       dirY: shotPayload.dirY / dirLength,
-      power: shotPayload.power
+      power: shotPayload.power,
+      shotUsed: this.room.match.playing.shotUsed,
+      shotBudget: this.room.match.playing.shotBudget
     });
 
-    await this.requestSnapshotFromHost("shot_committed");
+    if (this.room.match.playing.shotCommitted) {
+      await this.requestSnapshotFromHost("shot_committed");
+      return;
+    }
+
+    this.broadcastRoomState();
   }
 
   private async handleTurnSnapshot(token: string, session: Session, payload: unknown): Promise<void> {
