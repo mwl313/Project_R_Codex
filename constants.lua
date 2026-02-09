@@ -20,6 +20,15 @@ local Constants = {
   SERVER_HTTP_BASE_URL = "http://127.0.0.1:8787",
   SERVER_WS_BASE_URL = "ws://127.0.0.1:8787",
 
+  SAVE_IDENTITY = "project_r",
+  SETTINGS_FILENAME = "settings.ini",
+
+  DISPLAY_MODE_WINDOWED = "windowed_1280x720",
+  DISPLAY_MODE_FULLSCREEN = "fullscreen_native",
+  WINDOWED_W = 1280,
+  WINDOWED_H = 720,
+  OVERLAY_PANEL_RATIO = 0.70,
+
   FONT_KR_REGULAR_PATH = "assets/fonts/NotoSansKR-Regular.ttf",
   FONT_SIZE_TITLE = 34,
   FONT_SIZE_UI = 22,
@@ -38,9 +47,11 @@ local Constants = {
   COLOR_TEXT_SUB = { 0.74, 0.79, 0.88, 1.0 },
   COLOR_BUTTON = { 0.18, 0.25, 0.39, 1.0 },
   COLOR_BUTTON_HOVER = { 0.24, 0.32, 0.50, 1.0 },
+  COLOR_BUTTON_SELECTED = { 0.20, 0.44, 0.34, 1.0 },
   COLOR_BUTTON_DISABLED = { 0.16, 0.16, 0.18, 1.0 },
   COLOR_DANGER = { 0.65, 0.20, 0.22, 1.0 },
-  COLOR_INPUT_BG = { 0.10, 0.12, 0.18, 1.0 }
+  COLOR_INPUT_BG = { 0.10, 0.12, 0.18, 1.0 },
+  COLOR_OVERLAY_DIM = { 0.0, 0.0, 0.0, 0.56 }
 }
 
 return Constants

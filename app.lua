@@ -23,6 +23,7 @@ local Constants = require("constants")
 local Json = require("utils.json")
 local FontManager = require("assets.font_manager")
 local SceneManager = require("managers.scene_manager")
+local SettingsManager = require("managers.settings_manager")
 local HttpClient = require("net.http_client")
 local WsClient = require("net.ws_client")
 
@@ -52,6 +53,7 @@ function App.new(renderScale)
     _renderScale = renderScale,
     _httpClient = HttpClient.new(),
     _wsClient = WsClient.new(),
+    _settingsManager = SettingsManager.new(),
     _sceneManager = nil,
     _pendingHttpMap = {},
     _session = {
@@ -61,14 +63,20 @@ function App.new(renderScale)
       role = nil
     },
     _nickname = "Player",
+    _displayMode = Constants.DISPLAY_MODE_WINDOWED,
     _fontWarningText = FontManager.getWarningMessage(),
     _worldMouseX = 0,
-    _worldMouseY = 0
+    _worldMouseY = 0,
+    _pendingBootWarningText = nil
   }
   setmetatable(instance, App)
 
+  instance:loadPersistentSettings()
   instance._sceneManager = SceneManager.new(createSceneFactoryTable(), instance)
   instance._sceneManager:setScene("lobby")
+  if instance._pendingBootWarningText then
+    instance:emitUiStatus(instance._pendingBootWarningText, Constants.COLOR_DANGER)
+  end
   return instance
 end
 
@@ -77,7 +85,65 @@ function App:getNickname()
 end
 
 function App:setNickname(nickname)
-  self._nickname = nickname
+  local normalized = self._settingsManager:normalizeSettings({
+    nickname = nickname,
+    displayMode = self._displayMode
+  })
+  self._nickname = normalized.nickname
+end
+
+function App:getDisplayMode()
+  return self._displayMode
+end
+
+function App:getSettingsDebugPath()
+  return self._settingsManager:getSettingsDebugPath()
+end
+
+function App:loadPersistentSettings()
+  local loadedSettings, loadError = self._settingsManager:loadSettings()
+  local normalizedSettings = self._settingsManager:normalizeSettings(loadedSettings)
+
+  self._nickname = normalizedSettings.nickname
+  local appliedDisplayMode, applyError = self._settingsManager:applyDisplayMode(normalizedSettings.displayMode)
+  self._displayMode = appliedDisplayMode
+  self:resize(love.graphics.getDimensions())
+
+  if loadError then
+    self._pendingBootWarningText = "settings.ini 로드 실패, 기본값 사용: " .. tostring(loadError)
+    return
+  end
+  if applyError then
+    self._pendingBootWarningText = "디스플레이 적용 실패, 창모드 사용: " .. tostring(applyError)
+  end
+end
+
+function App:savePersistentSettings(patchSettings)
+  local mergedSettings = self._settingsManager:normalizeSettings({
+    nickname = patchSettings and patchSettings.nickname or self._nickname,
+    displayMode = patchSettings and patchSettings.displayMode or self._displayMode
+  })
+
+  local applyWarning = nil
+  if mergedSettings.displayMode ~= self._displayMode then
+    local appliedDisplayMode, applyError = self._settingsManager:applyDisplayMode(mergedSettings.displayMode)
+    self._displayMode = appliedDisplayMode
+    mergedSettings.displayMode = appliedDisplayMode
+    self:resize(love.graphics.getDimensions())
+    applyWarning = applyError
+  end
+
+  self._nickname = mergedSettings.nickname
+
+  local isSaved, saveError = self._settingsManager:saveSettings(mergedSettings)
+  if not isSaved then
+    return false, "settings.ini 저장 실패: " .. tostring(saveError)
+  end
+
+  if applyWarning then
+    return true, "디스플레이 모드 적용 경고: " .. tostring(applyWarning)
+  end
+  return true, nil
 end
 
 function App:getSession()

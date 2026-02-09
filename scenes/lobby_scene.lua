@@ -5,12 +5,13 @@
 역할:
 - 로비 메뉴 표시 및 입력 처리
 - 방 생성/방 찾기 진입
+- 닉네임/환경설정 오버레이 처리
 
 외부에서 사용 가능한 함수:
 - LobbyScene.new(app)
 
 주의:
-- 미구현 메뉴는 안내 문구만 노출한다
+- 오버레이는 씬 전환이 아닌 팝업으로 처리한다
 ]]
 
 local Constants = require("constants")
@@ -21,12 +22,20 @@ local TextInput = require("ui.text_input")
 local LobbyScene = {}
 LobbyScene.__index = LobbyScene
 
+local function getDisplayModeLabel(displayMode)
+  if displayMode == Constants.DISPLAY_MODE_FULLSCREEN then
+    return "전체화면(현재 모니터 해상도)"
+  end
+  return "창모드(1280x720 고정)"
+end
+
 local function createMenuList(scene)
   local menuLabelList = {
     "싱글플레이어",
     "방 생성",
     "방 찾기",
     "닉네임 변경",
+    "환경설정",
     "가이드",
     "스킨",
     "크레딧",
@@ -35,7 +44,7 @@ local function createMenuList(scene)
 
   local buttonList = {}
   local startX = (Constants.BASE_WORLD_W - Constants.BUTTON_W) * 0.5
-  local startY = 170
+  local startY = 150
 
   for index, label in ipairs(menuLabelList) do
     local y = startY + (index - 1) * (Constants.BUTTON_H + Constants.BUTTON_GAP)
@@ -53,42 +62,178 @@ local function createMenuList(scene)
 end
 
 function LobbyScene.new(app)
-  local nicknameInput = TextInput.new({
-    x = 430,
-    y = 120,
-    w = 300,
-    h = 38,
-    placeholder = "닉네임 입력",
-    text = app:getNickname()
-  })
-
   local instance = {
     _app = app,
     _buttonList = {},
-    _nicknameInput = nicknameInput,
-    _applyNicknameButton = nil,
     _statusText = "",
-    _statusColor = Constants.COLOR_TEXT_SUB
+    _statusColor = Constants.COLOR_TEXT_SUB,
+    _overlay = nil
   }
   setmetatable(instance, LobbyScene)
   instance._buttonList = createMenuList(instance)
-  instance._applyNicknameButton = Button.new({
-    x = 740,
-    y = 120,
-    w = 110,
-    h = 38,
-    label = "적용",
-    onClick = function()
-      instance:applyNickname()
-    end
-  })
   return instance
 end
 
 function LobbyScene:enter(params)
   self._statusText = params and params.statusText or ""
   self._statusColor = params and params.statusColor or Constants.COLOR_TEXT_SUB
-  self._nicknameInput:setText(self._app:getNickname())
+end
+
+function LobbyScene:getOverlayRect()
+  local panelW = Constants.BASE_WORLD_W * Constants.OVERLAY_PANEL_RATIO
+  local panelH = Constants.BASE_WORLD_H * Constants.OVERLAY_PANEL_RATIO
+  local panelX = (Constants.BASE_WORLD_W - panelW) * 0.5
+  local panelY = (Constants.BASE_WORLD_H - panelH) * 0.5
+  return panelX, panelY, panelW, panelH
+end
+
+function LobbyScene:openNicknameOverlay()
+  local panelX, panelY, panelW, panelH = self:getOverlayRect()
+  local nicknameInput = TextInput.new({
+    x = panelX + 120,
+    y = panelY + 220,
+    w = panelW - 240,
+    h = 44,
+    placeholder = "닉네임 입력",
+    text = self._app:getNickname(),
+    onEnter = function()
+      self:applyNicknameOverlay()
+    end
+  })
+  nicknameInput:setFocus(true)
+
+  self._overlay = {
+    kind = "nickname",
+    panelX = panelX,
+    panelY = panelY,
+    panelW = panelW,
+    panelH = panelH,
+    nicknameInput = nicknameInput,
+    saveButton = Button.new({
+      x = panelX + panelW * 0.5 - 180,
+      y = panelY + panelH - 90,
+      w = 160,
+      h = 46,
+      label = "저장",
+      onClick = function()
+        self:applyNicknameOverlay()
+      end
+    }),
+    cancelButton = Button.new({
+      x = panelX + panelW * 0.5 + 20,
+      y = panelY + panelH - 90,
+      w = 160,
+      h = 46,
+      label = "취소",
+      onClick = function()
+        self:closeOverlay()
+      end
+    })
+  }
+end
+
+function LobbyScene:openSettingsOverlay()
+  local panelX, panelY, panelW, panelH = self:getOverlayRect()
+  local selectedDisplayMode = self._app:getDisplayMode()
+
+  self._overlay = {
+    kind = "settings",
+    panelX = panelX,
+    panelY = panelY,
+    panelW = panelW,
+    panelH = panelH,
+    selectedDisplayMode = selectedDisplayMode,
+    windowedButton = Button.new({
+      x = panelX + 100,
+      y = panelY + 205,
+      w = panelW - 200,
+      h = 48,
+      label = "창모드 (1280x720)",
+      onClick = function()
+        self._overlay.selectedDisplayMode = Constants.DISPLAY_MODE_WINDOWED
+      end
+    }),
+    fullscreenButton = Button.new({
+      x = panelX + 100,
+      y = panelY + 270,
+      w = panelW - 200,
+      h = 48,
+      label = "전체화면 (현재 모니터)",
+      onClick = function()
+        self._overlay.selectedDisplayMode = Constants.DISPLAY_MODE_FULLSCREEN
+      end
+    }),
+    saveButton = Button.new({
+      x = panelX + panelW * 0.5 - 180,
+      y = panelY + panelH - 90,
+      w = 160,
+      h = 46,
+      label = "저장",
+      onClick = function()
+        self:applySettingsOverlay()
+      end
+    }),
+    cancelButton = Button.new({
+      x = panelX + panelW * 0.5 + 20,
+      y = panelY + panelH - 90,
+      w = 160,
+      h = 46,
+      label = "취소",
+      onClick = function()
+        self:closeOverlay()
+      end
+    })
+  }
+end
+
+function LobbyScene:closeOverlay()
+  self._overlay = nil
+end
+
+function LobbyScene:applyNicknameOverlay()
+  if not self._overlay or self._overlay.kind ~= "nickname" then
+    return
+  end
+
+  local nickname = self._overlay.nicknameInput:getText():gsub("^%s+", ""):gsub("%s+$", "")
+  if nickname == "" then
+    self:setStatus("닉네임은 비어 있을 수 없습니다.", Constants.COLOR_DANGER)
+    return
+  end
+
+  local isSaved, errorText = self._app:savePersistentSettings({
+    nickname = nickname
+  })
+  if not isSaved then
+    self:setStatus(errorText, Constants.COLOR_DANGER)
+    return
+  end
+
+  self:setStatus("닉네임 저장됨: " .. nickname, Constants.COLOR_TEXT_SUB)
+  self:closeOverlay()
+end
+
+function LobbyScene:applySettingsOverlay()
+  if not self._overlay or self._overlay.kind ~= "settings" then
+    return
+  end
+
+  local selectedDisplayMode = self._overlay.selectedDisplayMode
+  local isSaved, warningText = self._app:savePersistentSettings({
+    displayMode = selectedDisplayMode
+  })
+  if not isSaved then
+    self:setStatus(warningText, Constants.COLOR_DANGER)
+    return
+  end
+
+  local savedDisplayMode = self._app:getDisplayMode()
+  local statusText = "환경설정 저장됨: " .. getDisplayModeLabel(savedDisplayMode)
+  if warningText then
+    statusText = statusText .. " / " .. warningText
+  end
+  self:setStatus(statusText, Constants.COLOR_TEXT_SUB)
+  self:closeOverlay()
 end
 
 function LobbyScene:handleMenuClick(label)
@@ -106,8 +251,13 @@ function LobbyScene:handleMenuClick(label)
     return
   end
   if label == "닉네임 변경" then
-    self._nicknameInput:setFocus(true)
-    self:setStatus("상단 입력창에서 닉네임을 수정하고 적용을 누르세요.", Constants.COLOR_TEXT_SUB)
+    self:openNicknameOverlay()
+    self:setStatus("닉네임 오버레이를 열었습니다.", Constants.COLOR_TEXT_SUB)
+    return
+  end
+  if label == "환경설정" then
+    self:openSettingsOverlay()
+    self:setStatus("환경설정 오버레이를 열었습니다.", Constants.COLOR_TEXT_SUB)
     return
   end
   if label == "가이드" then
@@ -127,16 +277,6 @@ function LobbyScene:handleMenuClick(label)
   end
 end
 
-function LobbyScene:applyNickname()
-  local nickname = self._nicknameInput:getText():gsub("^%s+", ""):gsub("%s+$", "")
-  if nickname == "" then
-    self:setStatus("닉네임은 비어 있을 수 없습니다.", Constants.COLOR_DANGER)
-    return
-  end
-  self._app:setNickname(nickname)
-  self:setStatus("닉네임 적용됨: " .. nickname, Constants.COLOR_TEXT_SUB)
-end
-
 function LobbyScene:setStatus(statusText, statusColor)
   self._statusText = statusText or ""
   self._statusColor = statusColor or Constants.COLOR_TEXT_SUB
@@ -145,61 +285,175 @@ end
 function LobbyScene:update(_dt)
 end
 
+function LobbyScene:drawOverlay(mouseX, mouseY)
+  if not self._overlay then
+    return
+  end
+
+  love.graphics.setColor(Constants.COLOR_OVERLAY_DIM)
+  love.graphics.rectangle("fill", 0, 0, Constants.BASE_WORLD_W, Constants.BASE_WORLD_H)
+
+  love.graphics.setColor(Constants.COLOR_PANEL)
+  love.graphics.rectangle("fill", self._overlay.panelX, self._overlay.panelY, self._overlay.panelW, self._overlay.panelH, 10, 10)
+  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+  love.graphics.rectangle("line", self._overlay.panelX, self._overlay.panelY, self._overlay.panelW, self._overlay.panelH, 10, 10)
+
+  if self._overlay.kind == "nickname" then
+    love.graphics.setFont(FontManager.getFont("title"))
+    love.graphics.setColor(Constants.COLOR_TEXT)
+    love.graphics.printf("닉네임 변경", self._overlay.panelX, self._overlay.panelY + 70, self._overlay.panelW, "center")
+
+    love.graphics.setFont(FontManager.getFont("ui"))
+    love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+    love.graphics.printf("새 닉네임을 입력하고 저장하세요.", self._overlay.panelX, self._overlay.panelY + 150, self._overlay.panelW, "center")
+
+    self._overlay.nicknameInput:draw()
+    self._overlay.saveButton:draw(mouseX, mouseY)
+    self._overlay.cancelButton:draw(mouseX, mouseY)
+    return
+  end
+
+  if self._overlay.kind == "settings" then
+    love.graphics.setFont(FontManager.getFont("title"))
+    love.graphics.setColor(Constants.COLOR_TEXT)
+    love.graphics.printf("환경설정", self._overlay.panelX, self._overlay.panelY + 60, self._overlay.panelW, "center")
+
+    love.graphics.setFont(FontManager.getFont("ui"))
+    love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+    love.graphics.printf("디스플레이 모드", self._overlay.panelX, self._overlay.panelY + 130, self._overlay.panelW, "center")
+
+    self._overlay.windowedButton.color = Constants.COLOR_BUTTON
+    self._overlay.fullscreenButton.color = Constants.COLOR_BUTTON
+    if self._overlay.selectedDisplayMode == Constants.DISPLAY_MODE_WINDOWED then
+      self._overlay.windowedButton.color = Constants.COLOR_BUTTON_SELECTED
+    else
+      self._overlay.fullscreenButton.color = Constants.COLOR_BUTTON_SELECTED
+    end
+
+    self._overlay.windowedButton:draw(mouseX, mouseY)
+    self._overlay.fullscreenButton:draw(mouseX, mouseY)
+
+    love.graphics.setFont(FontManager.getFont("small"))
+    love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+    love.graphics.printf(
+      "저장 경로: " .. self._app:getSettingsDebugPath(),
+      self._overlay.panelX + 40,
+      self._overlay.panelY + self._overlay.panelH - 130,
+      self._overlay.panelW - 80,
+      "center"
+    )
+
+    self._overlay.saveButton:draw(mouseX, mouseY)
+    self._overlay.cancelButton:draw(mouseX, mouseY)
+  end
+end
+
 function LobbyScene:draw()
   local mouseX, mouseY = self._app:getMouseWorldPosition()
 
   love.graphics.setFont(FontManager.getFont("title"))
   love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf("ProjectR Lobby", 0, 72, Constants.BASE_WORLD_W, "center")
+  love.graphics.printf("ProjectR Lobby", 0, 62, Constants.BASE_WORLD_W, "center")
 
-  love.graphics.setFont(FontManager.getFont("ui"))
+  love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
-  love.graphics.printf("닉네임:", 350, 130, 80, "right")
-  self._nicknameInput:draw()
-  self._applyNicknameButton:draw(mouseX, mouseY)
+  love.graphics.printf("현재 닉네임: " .. self._app:getNickname(), 0, 106, Constants.BASE_WORLD_W, "center")
 
   for _, button in ipairs(self._buttonList) do
     button:draw(mouseX, mouseY)
   end
 
+  self:drawOverlay(mouseX, mouseY)
+
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(self._statusColor)
-  love.graphics.printf(self._statusText, 0, 650, Constants.BASE_WORLD_W, "center")
+  love.graphics.printf(self._statusText, 0, 690, Constants.BASE_WORLD_W, "center")
+end
+
+function LobbyScene:handleOverlayMousePressed(mouseX, mouseY, button)
+  if not self._overlay then
+    return false
+  end
+
+  if self._overlay.kind == "nickname" then
+    if self._overlay.nicknameInput:mousepressed(mouseX, mouseY, button) then
+      return true
+    end
+    if self._overlay.saveButton:isHovered(mouseX, mouseY) then
+      self._overlay.saveButton:onClick()
+      return true
+    end
+    if self._overlay.cancelButton:isHovered(mouseX, mouseY) then
+      self._overlay.cancelButton:onClick()
+      return true
+    end
+    self._overlay.nicknameInput:setFocus(false)
+    return true
+  end
+
+  if self._overlay.kind == "settings" then
+    if self._overlay.windowedButton:isHovered(mouseX, mouseY) then
+      self._overlay.windowedButton:onClick()
+      return true
+    end
+    if self._overlay.fullscreenButton:isHovered(mouseX, mouseY) then
+      self._overlay.fullscreenButton:onClick()
+      return true
+    end
+    if self._overlay.saveButton:isHovered(mouseX, mouseY) then
+      self._overlay.saveButton:onClick()
+      return true
+    end
+    if self._overlay.cancelButton:isHovered(mouseX, mouseY) then
+      self._overlay.cancelButton:onClick()
+      return true
+    end
+    return true
+  end
+
+  return true
 end
 
 function LobbyScene:mousepressed(mouseX, mouseY, button)
   if button ~= 1 then
     return
   end
-  if self._nicknameInput:mousepressed(mouseX, mouseY, button) then
+
+  if self._overlay and self:handleOverlayMousePressed(mouseX, mouseY, button) then
     return
   end
-  if self._applyNicknameButton:isHovered(mouseX, mouseY) then
-    self._applyNicknameButton:onClick()
-    return
-  end
+
   for _, uiButton in ipairs(self._buttonList) do
     if uiButton:isHovered(mouseX, mouseY) then
       uiButton:onClick()
       return
     end
   end
-  self._nicknameInput:setFocus(false)
 end
 
 function LobbyScene:textinput(text)
-  self._nicknameInput:textinput(text)
+  if self._overlay and self._overlay.kind == "nickname" then
+    self._overlay.nicknameInput:textinput(text)
+  end
 end
 
 function LobbyScene:textedited(text, start, length)
-  self._nicknameInput:textedited(text, start, length)
+  if self._overlay and self._overlay.kind == "nickname" then
+    self._overlay.nicknameInput:textedited(text, start, length)
+  end
 end
 
 function LobbyScene:keypressed(key)
-  if self._nicknameInput:keypressed(key) then
-    if key == "return" or key == "kpenter" then
-      self:applyNickname()
+  if self._overlay then
+    if key == "escape" then
+      self:closeOverlay()
+      return
     end
+
+    if self._overlay.kind == "nickname" and self._overlay.nicknameInput:keypressed(key) then
+      return
+    end
+
     return
   end
 end
