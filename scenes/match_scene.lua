@@ -3,7 +3,7 @@
 모듈명: MatchScene
 
 역할:
-- Phase 3 매치 진행 화면(배치/공개/카드선택)
+- Phase 3 매치 진행 화면(배치/공개/카드선택/턴 플레이 기본)
 - 배치 클릭 입력, 제출, 공개 렌더링, 카드 선택 처리
 
 외부에서 사용 가능한 함수:
@@ -64,6 +64,20 @@ local function cloneStringList(valueList)
   return cloned
 end
 
+local function clonePlayingStoneList(stoneList)
+  local cloned = {}
+  for _, stone in ipairs(stoneList or {}) do
+    cloned[#cloned + 1] = {
+      id = stone.id,
+      ownerPlayerIndex = stone.ownerPlayerIndex,
+      x = stone.x,
+      y = stone.y,
+      alive = stone.alive ~= false
+    }
+  end
+  return cloned
+end
+
 local function createDefaultRoomState()
   return {
     phase = Constants.PHASE_PLACEMENT_PRIVATE,
@@ -83,6 +97,14 @@ local function createDefaultRoomState()
         myLocked = false,
         opponentLocked = false,
         selectEndsAtMs = nil
+      },
+      playing = {
+        turnIndex = 1,
+        activePlayerIndex = 1,
+        turnEndsAtMs = nil,
+        shotCommitted = false,
+        awaitingSnapshot = false,
+        stones = {}
       }
     }
   }
@@ -138,7 +160,18 @@ function MatchScene.new(app)
     _isCardPickPending = false,
     _cardSelectEndsAtMs = nil,
     _cardOptionButtonList = {},
-    _cardConfirmButton = nil
+    _cardConfirmButton = nil,
+
+    _playingStoneList = {},
+    _playingTurnIndex = 1,
+    _activePlayerIndex = 1,
+    _turnEndsAtMs = nil,
+    _isPlayingShotCommitted = false,
+    _isPlayingAwaitingSnapshot = false,
+    _isTurnShotPending = false,
+    _isAimDragging = false,
+    _aimStoneId = nil,
+    _lastAutoSnapshotTurnIndex = nil
   }
   setmetatable(instance, MatchScene)
 
@@ -185,6 +218,17 @@ function MatchScene:enter(params)
   self._cardSelectEndsAtMs = nil
   self._cardOptionButtonList = {}
 
+  self._playingStoneList = {}
+  self._playingTurnIndex = 1
+  self._activePlayerIndex = 1
+  self._turnEndsAtMs = nil
+  self._isPlayingShotCommitted = false
+  self._isPlayingAwaitingSnapshot = false
+  self._isTurnShotPending = false
+  self._isAimDragging = false
+  self._aimStoneId = nil
+  self._lastAutoSnapshotTurnIndex = nil
+
   if params and type(params.roomState) == "table" then
     self:applyRoomState(params.roomState)
   end
@@ -219,6 +263,18 @@ function MatchScene:isCardSelectPhase()
   return self._roomState.phase == Constants.PHASE_CARD_SELECT
 end
 
+function MatchScene:isPlayingPhase()
+  return self._roomState.phase == Constants.PHASE_PLAYING
+end
+
+function MatchScene:isMyTurn()
+  return self:isPlayingPhase() and self:getMyPlayerIndex() == self._activePlayerIndex
+end
+
+function MatchScene:isShotInputEnabled()
+  return self:isMyTurn() and (not self._isPlayingShotCommitted) and (not self._isPlayingAwaitingSnapshot) and (not self._isTurnShotPending)
+end
+
 function MatchScene:isRevealVisiblePhase()
   local phase = self._roomState.phase
   return phase == Constants.PHASE_PLACEMENT_REVEAL or phase == Constants.PHASE_CARD_SELECT or phase == Constants.PHASE_PLAYING or phase == Constants.PHASE_RESULT
@@ -249,6 +305,10 @@ function MatchScene:toBoardLocal(worldX, worldY)
   return localX, localY
 end
 
+function MatchScene:toBoardLocalNoClamp(worldX, worldY)
+  return worldX - self._boardX, worldY - self._boardY
+end
+
 function MatchScene:canPlaceAtCanonical(canonicalX, canonicalY)
   local minX = Constants.STONE_RADIUS
   local maxX = Constants.BOARD_W - Constants.STONE_RADIUS
@@ -277,6 +337,36 @@ function MatchScene:canPlaceAtCanonical(canonicalX, canonicalY)
   end
 
   return true, nil
+end
+
+function MatchScene:getAliveStoneById(stoneId)
+  for _, stone in ipairs(self._playingStoneList) do
+    if stone.id == stoneId and stone.alive ~= false then
+      return stone
+    end
+  end
+  return nil
+end
+
+function MatchScene:findAimStoneAt(worldX, worldY)
+  local myPlayerIndex = self:getMyPlayerIndex()
+  if not myPlayerIndex then
+    return nil
+  end
+
+  for _, stone in ipairs(self._playingStoneList) do
+    if stone.alive ~= false and stone.ownerPlayerIndex == myPlayerIndex then
+      local localX, localY = self:canonicalToLocal(stone.x, stone.y)
+      local stoneWorldX = self._boardX + localX
+      local stoneWorldY = self._boardY + localY
+      local dx = worldX - stoneWorldX
+      local dy = worldY - stoneWorldY
+      if math.sqrt(dx * dx + dy * dy) <= Constants.STONE_RADIUS + 6 then
+        return stone
+      end
+    end
+  end
+  return nil
 end
 
 function MatchScene:addPlacementByWorld(worldX, worldY)
@@ -403,6 +493,102 @@ function MatchScene:submitCardPick()
   self:setStatus("카드 선택 확정 요청 전송...", Constants.COLOR_TEXT_SUB)
 end
 
+function MatchScene:beginAimDrag(worldX, worldY)
+  if not self:isShotInputEnabled() then
+    return
+  end
+
+  local stone = self:findAimStoneAt(worldX, worldY)
+  if not stone then
+    return
+  end
+
+  self._isAimDragging = true
+  self._aimStoneId = stone.id
+  self:setStatus("조준 중... 마우스를 놓아 발사, ESC/우클릭으로 취소", Constants.COLOR_TEXT_SUB)
+end
+
+function MatchScene:cancelAimDrag()
+  if not self._isAimDragging then
+    return
+  end
+  self._isAimDragging = false
+  self._aimStoneId = nil
+  self:setStatus("발사를 취소했습니다.", Constants.COLOR_TEXT_SUB)
+end
+
+function MatchScene:commitAimDrag(worldX, worldY)
+  if not self._isAimDragging then
+    return
+  end
+  if not self:isShotInputEnabled() then
+    self:cancelAimDrag()
+    return
+  end
+
+  local stone = self:getAliveStoneById(self._aimStoneId)
+  self._isAimDragging = false
+  self._aimStoneId = nil
+  if not stone then
+    self:setStatus("발사할 알을 찾지 못했습니다.", Constants.COLOR_DANGER)
+    return
+  end
+
+  local stoneLocalX, stoneLocalY = self:canonicalToLocal(stone.x, stone.y)
+  local mouseLocalX, mouseLocalY = self:toBoardLocalNoClamp(worldX, worldY)
+
+  local dirLocalX = stoneLocalX - mouseLocalX
+  local dirLocalY = stoneLocalY - mouseLocalY
+  local dragLength = math.sqrt(dirLocalX * dirLocalX + dirLocalY * dirLocalY)
+  if dragLength < 1 then
+    self:setStatus("드래그 거리가 너무 짧습니다.", Constants.COLOR_DANGER)
+    return
+  end
+
+  local dirCanonicalX = dirLocalX
+  local dirCanonicalY = dirLocalY
+  if self:getMyRole() == "guest" then
+    dirCanonicalY = -dirCanonicalY
+  end
+
+  local canonicalLen = math.sqrt(dirCanonicalX * dirCanonicalX + dirCanonicalY * dirCanonicalY)
+  if canonicalLen <= 0 then
+    self:setStatus("발사 방향 계산 실패", Constants.COLOR_DANGER)
+    return
+  end
+
+  local power = math.min(Constants.MAX_SHOT_POWER, dragLength * Constants.POWER_PER_PIXEL)
+  self._app:sendWsEnvelope("client.match.turn.shot", {
+    turnIndex = self._playingTurnIndex,
+    stoneId = stone.id,
+    dirX = dirCanonicalX / canonicalLen,
+    dirY = dirCanonicalY / canonicalLen,
+    power = power
+  })
+  self._isTurnShotPending = true
+  self:setStatus("발사 요청 전송...", Constants.COLOR_TEXT_SUB)
+end
+
+function MatchScene:sendHostSnapshotIfNeeded(turnIndex, reason)
+  local session = self._app:getSession()
+  if not session or session.role ~= "host" then
+    return
+  end
+  if not turnIndex or turnIndex ~= self._playingTurnIndex then
+    return
+  end
+  if self._lastAutoSnapshotTurnIndex == turnIndex then
+    return
+  end
+
+  self._lastAutoSnapshotTurnIndex = turnIndex
+  self._app:sendWsEnvelope("client.match.turn.snapshot", {
+    turnIndex = turnIndex,
+    stones = clonePlayingStoneList(self._playingStoneList)
+  })
+  self:setStatus("턴 스냅샷 제출 (" .. tostring(reason or "auto") .. ")", Constants.COLOR_TEXT_SUB)
+end
+
 function MatchScene:applyRoomState(payload)
   self._roomState = payload
 
@@ -471,6 +657,38 @@ function MatchScene:applyRoomState(payload)
     self:rebuildCardOptionButtons()
   end
 
+  local playing = payload.match and payload.match.playing or nil
+  if type(playing) == "table" then
+    if type(playing.turnIndex) == "number" then
+      self._playingTurnIndex = playing.turnIndex
+    end
+    if type(playing.activePlayerIndex) == "number" then
+      self._activePlayerIndex = playing.activePlayerIndex
+    end
+    if type(playing.turnEndsAtMs) == "number" then
+      self._turnEndsAtMs = playing.turnEndsAtMs
+    else
+      self._turnEndsAtMs = nil
+    end
+    if type(playing.shotCommitted) == "boolean" then
+      self._isPlayingShotCommitted = playing.shotCommitted
+      if playing.shotCommitted then
+        self._isTurnShotPending = false
+      end
+    end
+    if type(playing.awaitingSnapshot) == "boolean" then
+      self._isPlayingAwaitingSnapshot = playing.awaitingSnapshot
+      if playing.awaitingSnapshot then
+        self._isTurnShotPending = false
+        self._isAimDragging = false
+        self._aimStoneId = nil
+      end
+    end
+    if type(playing.stones) == "table" then
+      self._playingStoneList = clonePlayingStoneList(playing.stones)
+    end
+  end
+
   if payload.phase == Constants.PHASE_PLACEMENT_PRIVATE then
     self:setStatus("배치 단계: 클릭으로 7개를 배치한 뒤 제출하세요.", Constants.COLOR_TEXT_SUB)
   elseif payload.phase == Constants.PHASE_PLACEMENT_REVEAL then
@@ -478,7 +696,14 @@ function MatchScene:applyRoomState(payload)
   elseif payload.phase == Constants.PHASE_CARD_SELECT then
     self:setStatus("카드 선택 단계입니다.", Constants.COLOR_TEXT_SUB)
   elseif payload.phase == Constants.PHASE_PLAYING then
-    self:setStatus("PLAYING 단계 진입 (턴 플레이 구현 예정)", Constants.COLOR_TEXT_SUB)
+    if self:isMyTurn() then
+      self:setStatus("내 턴입니다. 알을 드래그해 발사하세요.", Constants.COLOR_TEXT_SUB)
+    else
+      self:setStatus("상대 턴 진행 중...", Constants.COLOR_TEXT_SUB)
+    end
+    if self._isPlayingAwaitingSnapshot then
+      self:sendHostSnapshotIfNeeded(self._playingTurnIndex, "state_sync")
+    end
   elseif payload.phase == Constants.PHASE_RESULT then
     self:setStatus("결과 단계 진입", Constants.COLOR_DANGER)
   end
@@ -519,14 +744,18 @@ end
 function MatchScene:drawStoneList(stoneList, color)
   love.graphics.setColor(color)
   for _, stone in ipairs(stoneList or {}) do
-    local localX, localY = self:canonicalToLocal(stone.x, stone.y)
-    love.graphics.circle("fill", self._boardX + localX, self._boardY + localY, Constants.STONE_RADIUS)
+    if stone.alive ~= false then
+      local localX, localY = self:canonicalToLocal(stone.x, stone.y)
+      love.graphics.circle("fill", self._boardX + localX, self._boardY + localY, Constants.STONE_RADIUS)
+    end
   end
 
   love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
   for _, stone in ipairs(stoneList or {}) do
-    local localX, localY = self:canonicalToLocal(stone.x, stone.y)
-    love.graphics.circle("line", self._boardX + localX, self._boardY + localY, Constants.STONE_RADIUS)
+    if stone.alive ~= false then
+      local localX, localY = self:canonicalToLocal(stone.x, stone.y)
+      love.graphics.circle("line", self._boardX + localX, self._boardY + localY, Constants.STONE_RADIUS)
+    end
   end
 end
 
@@ -550,6 +779,60 @@ function MatchScene:drawPlacementInfo()
     Constants.BASE_WORLD_W,
     "center"
   )
+end
+
+function MatchScene:drawPlayingInfo()
+  local remainSec = 0
+  if self._turnEndsAtMs then
+    remainSec = math.max(0, math.ceil((self._turnEndsAtMs - nowEpochMs()) / 1000))
+  end
+
+  local turnOwnerText = self._activePlayerIndex == self:getMyPlayerIndex() and "내 턴" or "상대 턴"
+  local stateText = "조준 가능"
+  if self._isPlayingAwaitingSnapshot then
+    stateText = "스냅샷 대기"
+  elseif self._isPlayingShotCommitted then
+    stateText = "발사 완료"
+  elseif self._isTurnShotPending then
+    stateText = "발사 요청 전송 중"
+  end
+
+  love.graphics.setFont(FontManager.getFont("small"))
+  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+  love.graphics.printf(
+    string.format("턴 %d | %s | 남은 시간: %ds | 상태: %s", self._playingTurnIndex, turnOwnerText, remainSec, stateText),
+    0,
+    636,
+    Constants.BASE_WORLD_W,
+    "center"
+  )
+end
+
+function MatchScene:drawAimGuide(mouseX, mouseY)
+  if not self._isAimDragging then
+    return
+  end
+  local stone = self:getAliveStoneById(self._aimStoneId)
+  if not stone then
+    return
+  end
+
+  local localX, localY = self:canonicalToLocal(stone.x, stone.y)
+  local stoneWorldX = self._boardX + localX
+  local stoneWorldY = self._boardY + localY
+  local dirX = stoneWorldX - mouseX
+  local dirY = stoneWorldY - mouseY
+  local distance = math.sqrt(dirX * dirX + dirY * dirY)
+  local power = math.min(Constants.MAX_SHOT_POWER, distance * Constants.POWER_PER_PIXEL)
+
+  love.graphics.setColor(0.95, 0.92, 0.35, 0.95)
+  love.graphics.setLineWidth(2)
+  love.graphics.line(stoneWorldX, stoneWorldY, mouseX, mouseY)
+  love.graphics.setLineWidth(1)
+
+  love.graphics.setFont(FontManager.getFont("small"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.printf(string.format("Power %.0f", power), stoneWorldX - 50, stoneWorldY - 30, 100, "center")
 end
 
 function MatchScene:drawCardSelectPanel(mouseX, mouseY)
@@ -616,7 +899,19 @@ function MatchScene:draw()
 
   self:drawBoardFrame()
 
-  if self:isRevealVisiblePhase() and self._revealStoneMap then
+  if self._roomState.phase == Constants.PHASE_PLAYING or self._roomState.phase == Constants.PHASE_RESULT then
+    local hostStoneList = {}
+    local guestStoneList = {}
+    for _, stone in ipairs(self._playingStoneList) do
+      if stone.ownerPlayerIndex == 1 then
+        hostStoneList[#hostStoneList + 1] = stone
+      else
+        guestStoneList[#guestStoneList + 1] = stone
+      end
+    end
+    self:drawStoneList(hostStoneList, Constants.COLOR_STONE_HOST)
+    self:drawStoneList(guestStoneList, Constants.COLOR_STONE_GUEST)
+  elseif self:isRevealVisiblePhase() and self._revealStoneMap then
     self:drawStoneList(self._revealStoneMap.host, Constants.COLOR_STONE_HOST)
     self:drawStoneList(self._revealStoneMap.guest, Constants.COLOR_STONE_GUEST)
   else
@@ -624,6 +919,8 @@ function MatchScene:draw()
     local color = role == "guest" and Constants.COLOR_STONE_GUEST or Constants.COLOR_STONE_HOST
     self:drawStoneList(self._myStoneList, color)
   end
+
+  self:drawAimGuide(mouseX, mouseY)
 
   if self:isPlacementPhase() then
     local canSubmit = (not self._isPlacementSubmitted) and (not self._isSubmitPending) and #self._myStoneList == Constants.STONE_COUNT_PER_PLAYER
@@ -633,6 +930,8 @@ function MatchScene:draw()
 
   if self._roomState.phase == Constants.PHASE_CARD_SELECT then
     self:drawCardSelectPanel(mouseX, mouseY)
+  elseif self._roomState.phase == Constants.PHASE_PLAYING or self._roomState.phase == Constants.PHASE_RESULT then
+    self:drawPlayingInfo()
   else
     self:drawPlacementInfo()
   end
@@ -643,6 +942,11 @@ function MatchScene:draw()
 end
 
 function MatchScene:mousepressed(mouseX, mouseY, button)
+  if self:isPlayingPhase() and button == 2 then
+    self:cancelAimDrag()
+    return
+  end
+
   if button ~= 1 then
     return
   end
@@ -661,6 +965,11 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
     return
   end
 
+  if self:isPlayingPhase() then
+    self:beginAimDrag(mouseX, mouseY)
+    return
+  end
+
   if self._submitButton:isHovered(mouseX, mouseY) and self._submitButton.isEnabled then
     self._submitButton:onClick()
     return
@@ -671,6 +980,15 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
   end
 end
 
+function MatchScene:mousereleased(mouseX, mouseY, button)
+  if button ~= 1 then
+    return
+  end
+  if self:isPlayingPhase() and self._isAimDragging then
+    self:commitAimDrag(mouseX, mouseY)
+  end
+end
+
 function MatchScene:textinput(_text)
 end
 
@@ -678,6 +996,10 @@ function MatchScene:textedited(_text, _start, _length)
 end
 
 function MatchScene:keypressed(key)
+  if key == "escape" and self._isAimDragging then
+    self:cancelAimDrag()
+    return
+  end
   if key == "escape" and self._roomState.phase == Constants.PHASE_RESULT then
     self._app:goLobby({
       statusText = "RESULT에서 로비로 복귀했습니다.",
@@ -752,6 +1074,75 @@ function MatchScene:onWsEnvelope(envelope)
     return
   end
 
+  if envelope.type == "match.turn.start" then
+    local payload = envelope.payload or {}
+    if type(payload.turnIndex) == "number" then
+      self._playingTurnIndex = payload.turnIndex
+    end
+    if type(payload.activePlayerIndex) == "number" then
+      self._activePlayerIndex = payload.activePlayerIndex
+    end
+    if type(payload.turnEndsAtMs) == "number" then
+      self._turnEndsAtMs = payload.turnEndsAtMs
+    else
+      self._turnEndsAtMs = nil
+    end
+    self._isPlayingShotCommitted = false
+    self._isPlayingAwaitingSnapshot = false
+    self._isTurnShotPending = false
+    self._isAimDragging = false
+    self._aimStoneId = nil
+    if self:isMyTurn() then
+      self:setStatus("내 턴 시작. 드래그해서 발사하세요.", Constants.COLOR_TEXT_SUB)
+    else
+      self:setStatus("상대 턴 시작", Constants.COLOR_TEXT_SUB)
+    end
+    return
+  end
+
+  if envelope.type == "match.turn.shotAccepted" then
+    local payload = envelope.payload or {}
+    if type(payload.turnIndex) == "number" then
+      self._playingTurnIndex = payload.turnIndex
+    end
+    self._isPlayingShotCommitted = true
+    self._isTurnShotPending = false
+    self._isAimDragging = false
+    self._aimStoneId = nil
+    self:setStatus("발사 수락, 스냅샷 대기 중...", Constants.COLOR_TEXT_SUB)
+    return
+  end
+
+  if envelope.type == "match.turn.snapshotRequested" then
+    local payload = envelope.payload or {}
+    if type(payload.turnIndex) == "number" then
+      self._playingTurnIndex = payload.turnIndex
+    end
+    self._isPlayingAwaitingSnapshot = true
+    self._turnEndsAtMs = nil
+    self._isTurnShotPending = false
+    self._isAimDragging = false
+    self._aimStoneId = nil
+    self:setStatus("서버가 턴 스냅샷을 요청했습니다.", Constants.COLOR_TEXT_SUB)
+    self:sendHostSnapshotIfNeeded(payload.turnIndex, payload.reason)
+    return
+  end
+
+  if envelope.type == "match.turn.snapshotApplied" then
+    local payload = envelope.payload or {}
+    if type(payload.turnIndex) == "number" then
+      self._playingTurnIndex = payload.turnIndex
+    end
+    if type(payload.stones) == "table" then
+      self._playingStoneList = clonePlayingStoneList(payload.stones)
+    end
+    self._isPlayingAwaitingSnapshot = false
+    self._isPlayingShotCommitted = false
+    self._isTurnShotPending = false
+    self:setStatus("턴 스냅샷 적용 완료", Constants.COLOR_TEXT_SUB)
+    return
+  end
+
   if envelope.type == "match.result" then
     local payload = envelope.payload or {}
     self:setStatus("결과: winner P" .. tostring(payload.winnerPlayerIndex or "?"), Constants.COLOR_DANGER)
@@ -765,6 +1156,12 @@ function MatchScene:onWsEnvelope(envelope)
     end
     if payload.code == "invalid_card_pick" or payload.code == "already_locked" then
       self._isCardPickPending = false
+    end
+    if payload.code == "invalid_shot_power" or payload.code == "invalid_shot_dir" or payload.code == "invalid_shot_stone" or payload.code == "not_your_turn" or payload.code == "timeout" or payload.code == "turn_mismatch" or payload.code == "already_shot" then
+      self._isTurnShotPending = false
+      self._isPlayingShotCommitted = false
+      self._isAimDragging = false
+      self._aimStoneId = nil
     end
     self:setStatus("서버 오류: " .. tostring(payload.code or "unknown"), Constants.COLOR_DANGER)
     return

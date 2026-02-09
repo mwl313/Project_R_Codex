@@ -11,6 +11,7 @@
 - App:update(dt)
 - App:draw()
 - App:mousepressed(x, y, button)
+- App:mousereleased(x, y, button)
 - App:keypressed(key)
 - App:textinput(text)
 - App:textedited(text, start, length)
@@ -355,6 +356,11 @@ end
 function App:mousepressed(screenX, screenY, button)
   local worldX, worldY = self._renderScale:toWorld(screenX, screenY)
   self._sceneManager:dispatch("mousepressed", worldX, worldY, button)
+end
+
+function App:mousereleased(screenX, screenY, button)
+  local worldX, worldY = self._renderScale:toWorld(screenX, screenY)
+  self._sceneManager:dispatch("mousereleased", worldX, worldY, button)
 end
 
 function App:keypressed(key)

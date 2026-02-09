@@ -11,6 +11,7 @@
 - love.update(dt)
 - love.draw()
 - love.mousepressed(x, y, button)
+- love.mousereleased(x, y, button)
 - love.keypressed(key)
 - love.textinput(text)
 - love.textedited(text, start, length)
@@ -51,6 +52,10 @@ end
 
 function love.mousepressed(x, y, button)
   app:mousepressed(x, y, button)
+end
+
+function love.mousereleased(x, y, button)
+  app:mousereleased(x, y, button)
 end
 
 function love.keypressed(key)

@@ -45,8 +45,11 @@ local Constants = {
   MIN_PLACE_DISTANCE = 19,
   NO_PLACE_BUFFER = 19,
   CARD_PICK_SEC = 15,
+  TURN_TIME_LIMIT_SEC = 30,
   HOST_PICK_COUNT = 1,
   GUEST_PICK_COUNT = 2,
+  MAX_SHOT_POWER = 900,
+  POWER_PER_PIXEL = 4.0,
 
   FONT_KR_REGULAR_PATH = "assets/fonts/NotoSansKR-Regular.ttf",
   FONT_SIZE_TITLE = 34,

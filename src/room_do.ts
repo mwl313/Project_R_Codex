@@ -25,7 +25,9 @@ import {
   PHASE_WAITING,
   PLACEMENT_REVEAL_SEC,
   STONE_COUNT_PER_PLAYER,
-  STONE_RADIUS
+  STONE_RADIUS,
+  TURN_TIME_LIMIT_SEC,
+  MAX_SHOT_POWER
 } from "./rules";
 import { errorPayload, serializeEnvelope, type WsEnvelope } from "./protocol";
 
@@ -74,10 +76,28 @@ interface MatchCardSelectState {
   selectEndsAtMs: number | null;
 }
 
+interface MatchPlayingStone {
+  id: string;
+  ownerPlayerIndex: 1 | 2;
+  x: number;
+  y: number;
+  alive: boolean;
+}
+
+interface MatchPlayingState {
+  turnIndex: number;
+  activePlayerIndex: 1 | 2;
+  turnEndsAtMs: number | null;
+  shotCommitted: boolean;
+  awaitingSnapshot: boolean;
+  stones: MatchPlayingStone[];
+}
+
 interface MatchState {
   firstPlayerIndex: 1 | 2 | null;
   placement: MatchPlacementState;
   cardSelect: MatchCardSelectState;
+  playing: MatchPlayingState;
 }
 
 interface RoomState {
@@ -142,6 +162,14 @@ function createDefaultRoomState(): RoomState {
         hostLocked: false,
         guestLocked: false,
         selectEndsAtMs: null
+      },
+      playing: {
+        turnIndex: 1,
+        activePlayerIndex: 1,
+        turnEndsAtMs: null,
+        shotCommitted: false,
+        awaitingSnapshot: false,
+        stones: []
       }
     },
     result: null
@@ -191,6 +219,16 @@ function cloneStones(stoneList: StonePlacement[]): StonePlacement[] {
     id: stone.id,
     x: stone.x,
     y: stone.y
+  }));
+}
+
+function clonePlayingStones(stoneList: MatchPlayingStone[]): MatchPlayingStone[] {
+  return stoneList.map((stone) => ({
+    id: stone.id,
+    ownerPlayerIndex: stone.ownerPlayerIndex,
+    x: stone.x,
+    y: stone.y,
+    alive: stone.alive
   }));
 }
 
@@ -258,6 +296,82 @@ function parseCardPickList(payload: unknown): string[] | null {
     picks.push(raw);
   }
   return picks;
+}
+
+function parseShotPayload(payload: unknown): { turnIndex: number; stoneId: string; dirX: number; dirY: number; power: number } | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const value = payload as {
+    turnIndex?: unknown;
+    stoneId?: unknown;
+    dirX?: unknown;
+    dirY?: unknown;
+    power?: unknown;
+  };
+
+  if (typeof value.turnIndex !== "number" || typeof value.stoneId !== "string" || typeof value.dirX !== "number" || typeof value.dirY !== "number" || typeof value.power !== "number") {
+    return null;
+  }
+  if (!Number.isFinite(value.turnIndex) || !Number.isFinite(value.dirX) || !Number.isFinite(value.dirY) || !Number.isFinite(value.power)) {
+    return null;
+  }
+  if (value.turnIndex < 1 || Math.floor(value.turnIndex) !== value.turnIndex) {
+    return null;
+  }
+  if (value.stoneId.trim().length === 0) {
+    return null;
+  }
+
+  return {
+    turnIndex: value.turnIndex,
+    stoneId: value.stoneId,
+    dirX: value.dirX,
+    dirY: value.dirY,
+    power: value.power
+  };
+}
+
+function parseSnapshotPayload(payload: unknown): { turnIndex: number; stones: MatchPlayingStone[] } | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const value = payload as { turnIndex?: unknown; stones?: unknown };
+  if (typeof value.turnIndex !== "number" || !Array.isArray(value.stones)) {
+    return null;
+  }
+  if (!Number.isFinite(value.turnIndex) || value.turnIndex < 1 || Math.floor(value.turnIndex) !== value.turnIndex) {
+    return null;
+  }
+
+  const stoneList: MatchPlayingStone[] = [];
+  for (const raw of value.stones) {
+    if (!raw || typeof raw !== "object") {
+      return null;
+    }
+    const stone = raw as { id?: unknown; ownerPlayerIndex?: unknown; x?: unknown; y?: unknown; alive?: unknown };
+    if (typeof stone.id !== "string" || (stone.ownerPlayerIndex !== 1 && stone.ownerPlayerIndex !== 2)) {
+      return null;
+    }
+    if (typeof stone.x !== "number" || typeof stone.y !== "number" || typeof stone.alive !== "boolean") {
+      return null;
+    }
+    if (!Number.isFinite(stone.x) || !Number.isFinite(stone.y)) {
+      return null;
+    }
+    stoneList.push({
+      id: stone.id,
+      ownerPlayerIndex: stone.ownerPlayerIndex,
+      x: stone.x,
+      y: stone.y,
+      alive: stone.alive
+    });
+  }
+
+  return {
+    turnIndex: value.turnIndex,
+    stones: stoneList
+  };
 }
 
 function shuffleCards(cardList: string[]): string[] {
@@ -349,6 +463,14 @@ export class RoomDO {
           hostLocked: false,
           guestLocked: false,
           selectEndsAtMs: null
+        },
+        playing: {
+          turnIndex: 1,
+          activePlayerIndex: 1,
+          turnEndsAtMs: null,
+          shotCommitted: false,
+          awaitingSnapshot: false,
+          stones: []
         }
       };
       return;
@@ -373,6 +495,17 @@ export class RoomDO {
         hostLocked: false,
         guestLocked: false,
         selectEndsAtMs: null
+      };
+    }
+
+    if (!this.room.match.playing) {
+      this.room.match.playing = {
+        turnIndex: 1,
+        activePlayerIndex: 1,
+        turnEndsAtMs: null,
+        shotCommitted: false,
+        awaitingSnapshot: false,
+        stones: []
       };
     }
   }
@@ -480,6 +613,14 @@ export class RoomDO {
           hostLocked: this.room.match.cardSelect.hostLocked,
           guestLocked: this.room.match.cardSelect.guestLocked,
           selectEndsAtMs: this.room.match.cardSelect.selectEndsAtMs
+        },
+        playing: {
+          turnIndex: this.room.match.playing.turnIndex,
+          activePlayerIndex: this.room.match.playing.activePlayerIndex,
+          turnEndsAtMs: this.room.match.playing.turnEndsAtMs,
+          shotCommitted: this.room.match.playing.shotCommitted,
+          awaitingSnapshot: this.room.match.playing.awaitingSnapshot,
+          stones: clonePlayingStones(this.room.match.playing.stones)
         }
       },
       result: this.room.result
@@ -577,6 +718,14 @@ export class RoomDO {
           hostLocked: false,
           guestLocked: false,
           selectEndsAtMs: null
+        },
+        playing: {
+          turnIndex: 1,
+          activePlayerIndex: 1,
+          turnEndsAtMs: null,
+          shotCommitted: false,
+          awaitingSnapshot: false,
+          stones: []
         }
       },
       result: null
@@ -735,6 +884,13 @@ export class RoomDO {
     this.room.match.cardSelect.guestLocked = false;
     this.room.match.cardSelect.selectEndsAtMs = null;
 
+    this.room.match.playing.turnIndex = 1;
+    this.room.match.playing.activePlayerIndex = 1;
+    this.room.match.playing.turnEndsAtMs = null;
+    this.room.match.playing.shotCommitted = false;
+    this.room.match.playing.awaitingSnapshot = false;
+    this.room.match.playing.stones = [];
+
     const firstPlayerIndex: 1 | 2 = Math.random() < 0.5 ? 1 : 2;
     this.room.match.firstPlayerIndex = firstPlayerIndex;
 
@@ -803,6 +959,14 @@ export class RoomDO {
     }
     if (envelope.type === "client.match.cards.pick") {
       await this.handleCardPick(token, session, envelope.payload);
+      return;
+    }
+    if (envelope.type === "client.match.turn.shot") {
+      await this.handleTurnShot(token, session, envelope.payload);
+      return;
+    }
+    if (envelope.type === "client.match.turn.snapshot") {
+      await this.handleTurnSnapshot(token, session, envelope.payload);
       return;
     }
 
@@ -899,13 +1063,262 @@ export class RoomDO {
     this.room.phase = PHASE_PLAYING;
     this.room.timers.phaseEndsAtMs = undefined;
     this.room.match.cardSelect.selectEndsAtMs = null;
+    this.initializePlayingStateFromPlacements();
+    this.startNewTurn(this.room.match.firstPlayerIndex ?? 1);
 
     await this.saveState();
     this.broadcast("match.phaseChanged", {
       from: fromPhase,
       to: PHASE_PLAYING
     });
+    this.broadcastTurnStart();
     this.broadcastRoomState();
+    if (this.room.match.playing.turnEndsAtMs) {
+      await this.state.storage.setAlarm(this.room.match.playing.turnEndsAtMs);
+    }
+  }
+
+  private initializePlayingStateFromPlacements(): void {
+    const hostStones = this.room.match.placement.hostStones.map((stone) => ({
+      id: stone.id,
+      ownerPlayerIndex: 1 as 1 | 2,
+      x: stone.x,
+      y: stone.y,
+      alive: true
+    }));
+    const guestStones = this.room.match.placement.guestStones.map((stone) => ({
+      id: stone.id,
+      ownerPlayerIndex: 2 as 1 | 2,
+      x: stone.x,
+      y: stone.y,
+      alive: true
+    }));
+    this.room.match.playing.stones = [...hostStones, ...guestStones];
+  }
+
+  private startNewTurn(activePlayerIndex: 1 | 2): void {
+    const turnEndsAtMs = Date.now() + TURN_TIME_LIMIT_SEC * 1000;
+    this.room.match.playing.turnIndex = this.room.match.playing.turnIndex > 0 ? this.room.match.playing.turnIndex : 1;
+    this.room.match.playing.activePlayerIndex = activePlayerIndex;
+    this.room.match.playing.turnEndsAtMs = turnEndsAtMs;
+    this.room.match.playing.shotCommitted = false;
+    this.room.match.playing.awaitingSnapshot = false;
+    this.room.timers.turnEndsAtMs = turnEndsAtMs;
+  }
+
+  private broadcastTurnStart(): void {
+    this.broadcast("match.turn.start", {
+      turnIndex: this.room.match.playing.turnIndex,
+      activePlayerIndex: this.room.match.playing.activePlayerIndex,
+      turnEndsAtMs: this.room.match.playing.turnEndsAtMs
+    });
+  }
+
+  private getAliveCount(playerIndex: 1 | 2): number {
+    let count = 0;
+    for (const stone of this.room.match.playing.stones) {
+      if (stone.ownerPlayerIndex === playerIndex && stone.alive) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  private async settleResultIfNeeded(): Promise<boolean> {
+    const hostAlive = this.getAliveCount(1);
+    const guestAlive = this.getAliveCount(2);
+
+    let winnerPlayerIndex: 1 | 2 | null = null;
+    let reason = "";
+    if (hostAlive <= 0 && guestAlive <= 0) {
+      reason = "draw";
+    } else if (hostAlive <= 0) {
+      winnerPlayerIndex = 2;
+      reason = "stone_zero";
+    } else if (guestAlive <= 0) {
+      winnerPlayerIndex = 1;
+      reason = "stone_zero";
+    } else {
+      return false;
+    }
+
+    const fromPhase = this.room.phase;
+    this.room.phase = PHASE_RESULT;
+    this.room.result = {
+      reason,
+      winnerPlayerIndex
+    };
+    this.room.timers.phaseEndsAtMs = undefined;
+    this.room.timers.turnEndsAtMs = undefined;
+    this.room.match.playing.turnEndsAtMs = null;
+
+    await this.saveState();
+    this.broadcast("match.phaseChanged", {
+      from: fromPhase,
+      to: PHASE_RESULT
+    });
+    this.broadcast("match.result", {
+      reason,
+      winnerPlayerIndex
+    });
+    this.broadcastRoomState();
+    return true;
+  }
+
+  private normalizeSnapshotStones(snapshotStones: MatchPlayingStone[]): MatchPlayingStone[] {
+    const byId = new Map<string, MatchPlayingStone>();
+    for (const stone of snapshotStones) {
+      byId.set(stone.id, stone);
+    }
+
+    const normalized: MatchPlayingStone[] = [];
+    for (const baseStone of this.room.match.playing.stones) {
+      const incoming = byId.get(baseStone.id);
+      if (!incoming) {
+        normalized.push({
+          ...baseStone
+        });
+      } else {
+        const isInside = incoming.x >= 0 && incoming.x <= BOARD_W && incoming.y >= 0 && incoming.y <= BOARD_H;
+        normalized.push({
+          id: baseStone.id,
+          ownerPlayerIndex: baseStone.ownerPlayerIndex,
+          x: incoming.x,
+          y: incoming.y,
+          alive: incoming.alive && isInside
+        });
+      }
+    }
+    return normalized;
+  }
+
+  private async requestSnapshotFromHost(reason: "shot_committed" | "turn_timeout"): Promise<void> {
+    if (this.room.phase !== PHASE_PLAYING) {
+      return;
+    }
+    this.room.match.playing.awaitingSnapshot = true;
+    this.room.match.playing.turnEndsAtMs = null;
+    this.room.timers.turnEndsAtMs = undefined;
+
+    await this.saveState();
+    this.broadcast("match.turn.snapshotRequested", {
+      turnIndex: this.room.match.playing.turnIndex,
+      reason
+    });
+    this.broadcastRoomState();
+  }
+
+  private async handleTurnShot(token: string, session: Session, payload: unknown): Promise<void> {
+    if (this.room.phase !== PHASE_PLAYING) {
+      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      return;
+    }
+
+    const shotPayload = parseShotPayload(payload);
+    if (!shotPayload) {
+      this.sendToToken(token, "error.generic", errorPayload("invalid_payload"));
+      return;
+    }
+    if (shotPayload.turnIndex !== this.room.match.playing.turnIndex) {
+      this.sendToToken(token, "error.generic", errorPayload("turn_mismatch"));
+      return;
+    }
+    if (session.playerIndex !== this.room.match.playing.activePlayerIndex) {
+      this.sendToToken(token, "error.generic", errorPayload("not_your_turn"));
+      return;
+    }
+    if (this.room.match.playing.shotCommitted) {
+      this.sendToToken(token, "error.generic", errorPayload("already_shot"));
+      return;
+    }
+    if (this.room.match.playing.awaitingSnapshot) {
+      this.sendToToken(token, "error.generic", errorPayload("awaiting_snapshot"));
+      return;
+    }
+    if (shotPayload.power < 0 || shotPayload.power > MAX_SHOT_POWER) {
+      this.sendToToken(token, "error.generic", errorPayload("invalid_shot_power"));
+      return;
+    }
+
+    const dirLength = Math.sqrt(shotPayload.dirX * shotPayload.dirX + shotPayload.dirY * shotPayload.dirY);
+    if (!Number.isFinite(dirLength) || dirLength <= 0) {
+      this.sendToToken(token, "error.generic", errorPayload("invalid_shot_dir"));
+      return;
+    }
+
+    const turnEndsAtMs = this.room.match.playing.turnEndsAtMs;
+    if (!turnEndsAtMs || Date.now() > turnEndsAtMs) {
+      this.sendToToken(token, "error.generic", errorPayload("timeout"));
+      return;
+    }
+
+    const shotStone = this.room.match.playing.stones.find((stone) => stone.id === shotPayload.stoneId);
+    if (!shotStone || !shotStone.alive || shotStone.ownerPlayerIndex !== session.playerIndex) {
+      this.sendToToken(token, "error.generic", errorPayload("invalid_shot_stone"));
+      return;
+    }
+
+    this.room.match.playing.shotCommitted = true;
+    await this.saveState();
+
+    this.broadcast("match.turn.shotAccepted", {
+      turnIndex: this.room.match.playing.turnIndex,
+      playerIndex: session.playerIndex,
+      stoneId: shotPayload.stoneId,
+      dirX: shotPayload.dirX / dirLength,
+      dirY: shotPayload.dirY / dirLength,
+      power: shotPayload.power
+    });
+
+    await this.requestSnapshotFromHost("shot_committed");
+  }
+
+  private async handleTurnSnapshot(token: string, session: Session, payload: unknown): Promise<void> {
+    if (this.room.phase !== PHASE_PLAYING) {
+      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      return;
+    }
+    if (session.role !== "host") {
+      this.sendToToken(token, "error.generic", errorPayload("host_only"));
+      return;
+    }
+
+    const snapshotPayload = parseSnapshotPayload(payload);
+    if (!snapshotPayload) {
+      this.sendToToken(token, "error.generic", errorPayload("invalid_payload"));
+      return;
+    }
+    if (snapshotPayload.turnIndex !== this.room.match.playing.turnIndex) {
+      this.sendToToken(token, "error.generic", errorPayload("turn_mismatch"));
+      return;
+    }
+    if (!this.room.match.playing.awaitingSnapshot) {
+      this.sendToToken(token, "error.generic", errorPayload("snapshot_not_requested"));
+      return;
+    }
+
+    this.room.match.playing.stones = this.normalizeSnapshotStones(snapshotPayload.stones);
+    this.room.match.playing.awaitingSnapshot = false;
+
+    this.broadcast("match.turn.snapshotApplied", {
+      turnIndex: this.room.match.playing.turnIndex,
+      stones: clonePlayingStones(this.room.match.playing.stones)
+    });
+
+    if (await this.settleResultIfNeeded()) {
+      return;
+    }
+
+    this.room.match.playing.turnIndex += 1;
+    const nextPlayerIndex: 1 | 2 = this.room.match.playing.activePlayerIndex === 1 ? 2 : 1;
+    this.startNewTurn(nextPlayerIndex);
+
+    await this.saveState();
+    this.broadcastTurnStart();
+    this.broadcastRoomState();
+    if (this.room.match.playing.turnEndsAtMs) {
+      await this.state.storage.setAlarm(this.room.match.playing.turnEndsAtMs);
+    }
   }
 
   private async handleCardPick(token: string, session: Session, payload: unknown): Promise<void> {
@@ -1065,6 +1478,20 @@ export class RoomDO {
   }
 
   private async processPhaseTimers(nowMs: number): Promise<void> {
+    if (this.room.phase === PHASE_PLAYING) {
+      const turnEndsAtMs = this.room.timers.turnEndsAtMs;
+      if (turnEndsAtMs) {
+        if (nowMs < turnEndsAtMs) {
+          await this.state.storage.setAlarm(turnEndsAtMs);
+          return;
+        }
+        if (!this.room.match.playing.awaitingSnapshot) {
+          await this.requestSnapshotFromHost("turn_timeout");
+        }
+        return;
+      }
+    }
+
     const phaseEndsAtMs = this.room.timers.phaseEndsAtMs;
     if (!phaseEndsAtMs) {
       return;

@@ -11,6 +11,11 @@ export type ServerEventType =
   | "match.placement.revealStart"
   | "match.cards.dealt"
   | "match.cards.locked"
+  | "match.turn.start"
+  | "match.turn.shotAccepted"
+  | "match.turn.snapshotRequested"
+  | "match.turn.snapshotApplied"
+  | "match.result"
   | "error.generic";
 
 export type ClientCommandType =
@@ -18,7 +23,9 @@ export type ClientCommandType =
   | "client.room.leave"
   | "client.match.start"
   | "client.match.placement.submit"
-  | "client.match.cards.pick";
+  | "client.match.cards.pick"
+  | "client.match.turn.shot"
+  | "client.match.turn.snapshot";
 
 export interface WsEnvelope<T = unknown> {
   type: string;
