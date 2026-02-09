@@ -369,6 +369,43 @@ function MatchScene:findAimStoneAt(worldX, worldY)
   return nil
 end
 
+function MatchScene:getPlayingStoneById(stoneId)
+  for _, stone in ipairs(self._playingStoneList) do
+    if stone.id == stoneId then
+      return stone
+    end
+  end
+  return nil
+end
+
+function MatchScene:applySimpleShotToPlayingState(shotPayload)
+  if type(shotPayload) ~= "table" then
+    return
+  end
+  if type(shotPayload.stoneId) ~= "string" then
+    return
+  end
+  if type(shotPayload.dirX) ~= "number" or type(shotPayload.dirY) ~= "number" or type(shotPayload.power) ~= "number" then
+    return
+  end
+
+  local stone = self:getPlayingStoneById(shotPayload.stoneId)
+  if not stone or stone.alive == false then
+    return
+  end
+
+  local distance = math.max(0, shotPayload.power / Constants.POWER_PER_PIXEL)
+  local nextX = stone.x + shotPayload.dirX * distance
+  local nextY = stone.y + shotPayload.dirY * distance
+  local isInside = nextX >= Constants.STONE_RADIUS and nextX <= Constants.BOARD_W - Constants.STONE_RADIUS and nextY >= Constants.STONE_RADIUS and nextY <= Constants.BOARD_H - Constants.STONE_RADIUS
+
+  stone.x = nextX
+  stone.y = nextY
+  if not isInside then
+    stone.alive = false
+  end
+end
+
 function MatchScene:addPlacementByWorld(worldX, worldY)
   if not self:isPlacementPhase() then
     return
@@ -1105,6 +1142,7 @@ function MatchScene:onWsEnvelope(envelope)
     if type(payload.turnIndex) == "number" then
       self._playingTurnIndex = payload.turnIndex
     end
+    self:applySimpleShotToPlayingState(payload)
     self._isPlayingShotCommitted = true
     self._isTurnShotPending = false
     self._isAimDragging = false
