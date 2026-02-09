@@ -46,7 +46,7 @@ Date: 2026-02-09
 - Base world resolution: `1280x720`.
 - Stones per player at match start: `7`.
 - Turn limit: `30 seconds`.
-- Reveal duration: `10 seconds`.
+- Reveal duration: `5 seconds`.
 - Base shots per turn: `1` (extendable by card effects).
 - Card use count per turn: max `1` (pre-shot stage).
 
@@ -75,3 +75,7 @@ Date: 2026-02-09
   3. complete game flow to result
   4. rematch/lobby return and leave handling
 - No crash in end-to-end run.
+
+## 10. Change Log
+- 2026-02-09:
+  - Resolved spec conflict: reveal duration updated from `10 seconds` to `5 seconds` to match current gameplay rules and implementation.

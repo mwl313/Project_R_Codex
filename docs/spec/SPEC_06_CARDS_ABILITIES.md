@@ -106,7 +106,7 @@ Date: 2026-02-09
 ### 7.5 Gameplay end-to-end with card rules
 1. `TURN_ORDER` entered.
 2. Valid placements from both players.
-3. 10s reveal transition.
+3. 5s reveal transition.
 4. Host/guest draft and pick lock (timeout auto-pick from front).
 5. Turn subflow order:
    - `CARD_ACTION -> AIM -> SHOT -> SIM -> SNAPSHOT_RECONCILE`

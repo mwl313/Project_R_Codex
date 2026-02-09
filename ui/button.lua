@@ -31,7 +31,8 @@ function Button.new(params)
     label = params.label or "Button",
     onClick = params.onClick or function() end,
     isEnabled = params.isEnabled ~= false,
-    color = params.color or Constants.COLOR_BUTTON
+    color = params.color or Constants.COLOR_BUTTON,
+    hoverColor = params.hoverColor
   }
   return setmetatable(instance, Button)
 end
@@ -46,7 +47,7 @@ function Button:draw(mouseX, mouseY)
   if not self.isEnabled then
     drawColor = Constants.COLOR_BUTTON_DISABLED
   elseif self:isHovered(mouseX, mouseY) then
-    drawColor = Constants.COLOR_BUTTON_HOVER
+    drawColor = self.hoverColor or Constants.COLOR_BUTTON_HOVER
   end
 
   love.graphics.setColor(drawColor)

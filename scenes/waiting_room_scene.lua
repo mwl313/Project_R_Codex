@@ -107,10 +107,17 @@ function WaitingRoomScene.new(app)
   return instance
 end
 
-function WaitingRoomScene:enter(_params)
+function WaitingRoomScene:enter(params)
   self._chatInput:setFocus(true)
-  self._roomState = createDefaultRoomState()
+  if params and type(params.roomState) == "table" then
+    self._roomState = params.roomState
+  else
+    self._roomState = createDefaultRoomState()
+  end
   self._chatMessageList = {}
+  if params and params.statusText then
+    self:setStatus(params.statusText, params.statusColor)
+  end
 end
 
 function WaitingRoomScene:addChatLine(line)

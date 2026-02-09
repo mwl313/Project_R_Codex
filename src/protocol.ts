@@ -27,6 +27,8 @@ export type ClientCommandType =
   | "client.match.placement.submit"
   | "client.match.cards.pick"
   | "client.match.turn.cardUse"
+  | "client.match.rematch.vote"
+  | "client.match.surrender"
   | "client.match.turn.shot"
   | "client.match.turn.snapshot";
 

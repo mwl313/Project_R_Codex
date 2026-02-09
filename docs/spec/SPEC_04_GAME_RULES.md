@@ -26,7 +26,7 @@ Date: 2026-02-09
 - Both submitted -> `PLACEMENT_REVEAL`.
 
 ### 1.4 `PLACEMENT_REVEAL`
-- Server starts authoritative 10-second reveal timer.
+- Server starts authoritative 5-second reveal timer.
 - On timeout -> `CARD_SELECT`.
 
 ### 1.5 `CARD_SELECT`
@@ -54,9 +54,11 @@ Date: 2026-02-09
 
 ### 1.7 `RESULT`
 - End reason shown with winner/draw metadata.
-- Vote handling:
-  - any `to_lobby` => both to lobby
-  - both `rematch` => return to waiting/rematch-ready state
+- Vote handling (server authoritative):
+  - action choices: `rematch`, `to_lobby`
+  - any `to_lobby` => room closes, both clients return to lobby
+  - both `rematch` => phase transitions to `WAITING` in same room
+  - vote progress is exposed in room state (`result.myVote`, `result.opponentVote`)
 
 ## 2. Shot Input and Power
 - Input: drag vector from selected stone.

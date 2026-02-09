@@ -78,6 +78,55 @@ local function clonePlayingStoneList(stoneList)
   return cloned
 end
 
+local function cloneObstacleList(obstacleList)
+  local cloned = {}
+  for _, obstacle in ipairs(obstacleList or {}) do
+    cloned[#cloned + 1] = {
+      id = obstacle.id,
+      x = obstacle.x,
+      y = obstacle.y,
+      width = obstacle.width or Constants.ROCK_OBSTACLE_WIDTH,
+      height = obstacle.height or Constants.ROCK_OBSTACLE_HEIGHT
+    }
+  end
+  return cloned
+end
+
+local function clamp(value, minValue, maxValue)
+  return math.max(minValue, math.min(maxValue, value))
+end
+
+local function intersectsStoneAndObstacle(stoneX, stoneY, obstacle)
+  local halfW = (obstacle.width or Constants.ROCK_OBSTACLE_WIDTH) * 0.5
+  local halfH = (obstacle.height or Constants.ROCK_OBSTACLE_HEIGHT) * 0.5
+  local left = obstacle.x - halfW
+  local right = obstacle.x + halfW
+  local top = obstacle.y - halfH
+  local bottom = obstacle.y + halfH
+  local closestX = clamp(stoneX, left, right)
+  local closestY = clamp(stoneY, top, bottom)
+  local dx = stoneX - closestX
+  local dy = stoneY - closestY
+  return dx * dx + dy * dy < Constants.STONE_RADIUS * Constants.STONE_RADIUS
+end
+
+local function intersectsObstacleAndObstacle(firstObstacle, secondObstacle)
+  local firstHalfW = (firstObstacle.width or Constants.ROCK_OBSTACLE_WIDTH) * 0.5
+  local firstHalfH = (firstObstacle.height or Constants.ROCK_OBSTACLE_HEIGHT) * 0.5
+  local secondHalfW = (secondObstacle.width or Constants.ROCK_OBSTACLE_WIDTH) * 0.5
+  local secondHalfH = (secondObstacle.height or Constants.ROCK_OBSTACLE_HEIGHT) * 0.5
+  return math.abs(firstObstacle.x - secondObstacle.x) < (firstHalfW + secondHalfW)
+    and math.abs(firstObstacle.y - secondObstacle.y) < (firstHalfH + secondHalfH)
+end
+
+local function listToSet(valueList)
+  local valueSet = {}
+  for _, value in ipairs(valueList or {}) do
+    valueSet[tostring(value)] = true
+  end
+  return valueSet
+end
+
 local function createDefaultRoomState()
   return {
     phase = Constants.PHASE_PLACEMENT_PRIVATE,
@@ -102,11 +151,19 @@ local function createDefaultRoomState()
         turnIndex = 1,
         activePlayerIndex = 1,
         turnEndsAtMs = nil,
+        shotBudget = 1,
+        shotUsed = 0,
+        hasCardUsedThisTurn = false,
+        lockedStoneIds = {},
+        obstacles = {},
+        invincibleTurnByPlayer = { [1] = nil, [2] = nil },
+        shockwaveOwnerPlayerIndex = nil,
         shotCommitted = false,
         awaitingSnapshot = false,
         stones = {}
       }
-    }
+    },
+    result = nil
   }
 end
 
@@ -169,10 +226,16 @@ function MatchScene.new(app)
     _playingShotBudget = 1,
     _playingShotUsed = 0,
     _hasUsedCardThisTurn = false,
+    _lockedStoneIdSet = {},
+    _obstacleList = {},
+    _invincibleTurnByPlayer = { [1] = nil, [2] = nil },
+    _shockwaveOwnerPlayerIndex = nil,
     _isPlayingShotCommitted = false,
     _isPlayingAwaitingSnapshot = false,
     _isTurnShotPending = false,
     _isCardUsePending = false,
+    _pendingCardTargetId = nil,
+    _isSurrenderPending = false,
     _isAimDragging = false,
     _aimStoneId = nil,
     _lastAutoSnapshotTurnIndex = nil,
@@ -181,7 +244,13 @@ function MatchScene.new(app)
     _simElapsedSec = 0,
     _isShotSimulating = false,
     _shouldSendSnapshotAfterSim = false,
-    _playingCardButtonList = {}
+    _playingCardButtonList = {},
+    _surrenderButton = nil,
+    _resultRematchButton = nil,
+    _resultLobbyButton = nil,
+    _isResultVotePending = false,
+    _myResultVote = nil,
+    _opponentResultVote = nil
   }
   setmetatable(instance, MatchScene)
 
@@ -204,6 +273,43 @@ function MatchScene.new(app)
     label = "선택 확정",
     onClick = function()
       instance:submitCardPick()
+    end
+  })
+
+  instance._surrenderButton = Button.new({
+    x = Constants.BASE_WORLD_W - 250,
+    y = 16,
+    w = 220,
+    h = 40,
+    label = "기권",
+    color = Constants.COLOR_DANGER,
+    hoverColor = { 0.80, 0.28, 0.30, 1.0 },
+    onClick = function()
+      instance:requestSurrender()
+    end
+  })
+
+  instance._resultRematchButton = Button.new({
+    x = 0,
+    y = 0,
+    w = 190,
+    h = 44,
+    label = "재대결",
+    onClick = function()
+      instance:requestResultVote("rematch")
+    end
+  })
+
+  instance._resultLobbyButton = Button.new({
+    x = 0,
+    y = 0,
+    w = 190,
+    h = 44,
+    label = "로비로",
+    color = Constants.COLOR_DANGER,
+    hoverColor = { 0.80, 0.28, 0.30, 1.0 },
+    onClick = function()
+      instance:requestResultVote("to_lobby")
     end
   })
 
@@ -235,10 +341,16 @@ function MatchScene:enter(params)
   self._playingShotBudget = 1
   self._playingShotUsed = 0
   self._hasUsedCardThisTurn = false
+  self._lockedStoneIdSet = {}
+  self._obstacleList = {}
+  self._invincibleTurnByPlayer = { [1] = nil, [2] = nil }
+  self._shockwaveOwnerPlayerIndex = nil
   self._isPlayingShotCommitted = false
   self._isPlayingAwaitingSnapshot = false
   self._isTurnShotPending = false
   self._isCardUsePending = false
+  self._pendingCardTargetId = nil
+  self._isSurrenderPending = false
   self._isAimDragging = false
   self._aimStoneId = nil
   self._lastAutoSnapshotTurnIndex = nil
@@ -248,6 +360,9 @@ function MatchScene:enter(params)
   self._isShotSimulating = false
   self._shouldSendSnapshotAfterSim = false
   self._playingCardButtonList = {}
+  self._isResultVotePending = false
+  self._myResultVote = nil
+  self._opponentResultVote = nil
 
   if params and type(params.roomState) == "table" then
     self:applyRoomState(params.roomState)
@@ -292,7 +407,12 @@ function MatchScene:isMyTurn()
 end
 
 function MatchScene:isShotInputEnabled()
-  return self:isMyTurn() and (not self._isPlayingShotCommitted) and (not self._isPlayingAwaitingSnapshot) and (not self._isTurnShotPending) and (not self._isCardUsePending)
+  return self:isMyTurn()
+    and (not self._isPlayingShotCommitted)
+    and (not self._isPlayingAwaitingSnapshot)
+    and (not self._isTurnShotPending)
+    and (not self._isCardUsePending)
+    and (not self._pendingCardTargetId)
 end
 
 function MatchScene:isRevealVisiblePhase()
@@ -375,7 +495,7 @@ function MatchScene:findAimStoneAt(worldX, worldY)
   end
 
   for _, stone in ipairs(self._playingStoneList) do
-    if stone.alive ~= false and stone.ownerPlayerIndex == myPlayerIndex then
+    if stone.alive ~= false and stone.ownerPlayerIndex == myPlayerIndex and (not self._lockedStoneIdSet[stone.id]) then
       local localX, localY = self:canonicalToLocal(stone.x, stone.y)
       local stoneWorldX = self._boardX + localX
       local stoneWorldY = self._boardY + localY
@@ -407,10 +527,94 @@ function MatchScene:getStoneVelocity(stoneId)
   return velocity
 end
 
+function MatchScene:isInvincibleOnCurrentTurn(playerIndex)
+  local protectedTurnIndex = self._invincibleTurnByPlayer and self._invincibleTurnByPlayer[playerIndex] or nil
+  return protectedTurnIndex ~= nil and protectedTurnIndex == self._playingTurnIndex
+end
+
+function MatchScene:applyShockwaveFromPoint(centerX, centerY)
+  local shockwaveRadius = Constants.STONE_RADIUS * Constants.SHOCKWAVE_RANGE_MULTIPLIER
+  if shockwaveRadius <= 0 then
+    return
+  end
+  for _, stone in ipairs(self._playingStoneList) do
+    if stone.alive ~= false then
+      local dx = stone.x - centerX
+      local dy = stone.y - centerY
+      local distance = math.sqrt(dx * dx + dy * dy)
+      if distance > 0 and distance <= shockwaveRadius then
+        local velocity = self:getStoneVelocity(stone.id)
+        local impulseScale = (1 - (distance / shockwaveRadius)) * Constants.SHOCKWAVE_STRENGTH
+        velocity.vx = velocity.vx + (dx / distance) * impulseScale
+        velocity.vy = velocity.vy + (dy / distance) * impulseScale
+      end
+    end
+  end
+end
+
 function MatchScene:resetStoneVelocities()
   self._stoneVelocityMap = {}
   for _, stone in ipairs(self._playingStoneList) do
     self._stoneVelocityMap[stone.id] = { vx = 0, vy = 0 }
+  end
+end
+
+function MatchScene:resolveObstacleCollision(stone, obstacle)
+  local halfW = (obstacle.width or Constants.ROCK_OBSTACLE_WIDTH) * 0.5
+  local halfH = (obstacle.height or Constants.ROCK_OBSTACLE_HEIGHT) * 0.5
+  local left = obstacle.x - halfW
+  local right = obstacle.x + halfW
+  local top = obstacle.y - halfH
+  local bottom = obstacle.y + halfH
+  local closestX = clamp(stone.x, left, right)
+  local closestY = clamp(stone.y, top, bottom)
+  local dx = stone.x - closestX
+  local dy = stone.y - closestY
+  local distanceSq = dx * dx + dy * dy
+  local minDistanceSq = Constants.STONE_RADIUS * Constants.STONE_RADIUS
+
+  if distanceSq >= minDistanceSq then
+    return
+  end
+
+  local normalX, normalY
+  local overlap
+
+  if distanceSq > 0 then
+    local distance = math.sqrt(distanceSq)
+    normalX = dx / distance
+    normalY = dy / distance
+    overlap = Constants.STONE_RADIUS - distance
+  else
+    local penLeft = math.abs(stone.x - left)
+    local penRight = math.abs(right - stone.x)
+    local penTop = math.abs(stone.y - top)
+    local penBottom = math.abs(bottom - stone.y)
+    local minPen = math.min(penLeft, penRight, penTop, penBottom)
+    if minPen == penLeft then
+      normalX, normalY = -1, 0
+      overlap = Constants.STONE_RADIUS + penLeft
+    elseif minPen == penRight then
+      normalX, normalY = 1, 0
+      overlap = Constants.STONE_RADIUS + penRight
+    elseif minPen == penTop then
+      normalX, normalY = 0, -1
+      overlap = Constants.STONE_RADIUS + penTop
+    else
+      normalX, normalY = 0, 1
+      overlap = Constants.STONE_RADIUS + penBottom
+    end
+  end
+
+  stone.x = stone.x + normalX * overlap
+  stone.y = stone.y + normalY * overlap
+
+  local velocity = self:getStoneVelocity(stone.id)
+  local normalSpeed = velocity.vx * normalX + velocity.vy * normalY
+  if normalSpeed < 0 then
+    local reflectScale = -(1 + Constants.PHYSICS_RESTITUTION) * normalSpeed
+    velocity.vx = velocity.vx + reflectScale * normalX
+    velocity.vy = velocity.vy + reflectScale * normalY
   end
 end
 
@@ -497,12 +701,23 @@ function MatchScene:resolveStoneCollision(firstStone, secondStone)
   local normalX = dx / distance
   local normalY = dy / distance
   local penetration = minDistance - distance
-  local correctionX = normalX * penetration * 0.5
-  local correctionY = normalY * penetration * 0.5
-  firstStone.x = firstStone.x - correctionX
-  firstStone.y = firstStone.y - correctionY
-  secondStone.x = secondStone.x + correctionX
-  secondStone.y = secondStone.y + correctionY
+  local firstInvincible = self:isInvincibleOnCurrentTurn(firstStone.ownerPlayerIndex)
+  local secondInvincible = self:isInvincibleOnCurrentTurn(secondStone.ownerPlayerIndex)
+
+  if firstInvincible and not secondInvincible then
+    secondStone.x = secondStone.x + normalX * penetration
+    secondStone.y = secondStone.y + normalY * penetration
+  elseif secondInvincible and not firstInvincible then
+    firstStone.x = firstStone.x - normalX * penetration
+    firstStone.y = firstStone.y - normalY * penetration
+  else
+    local correctionX = normalX * penetration * 0.5
+    local correctionY = normalY * penetration * 0.5
+    firstStone.x = firstStone.x - correctionX
+    firstStone.y = firstStone.y - correctionY
+    secondStone.x = secondStone.x + correctionX
+    secondStone.y = secondStone.y + correctionY
+  end
 
   local firstVelocity = self:getStoneVelocity(firstStone.id)
   local secondVelocity = self:getStoneVelocity(secondStone.id)
@@ -514,10 +729,22 @@ function MatchScene:resolveStoneCollision(firstStone, secondStone)
   end
 
   local impulse = -(1 + Constants.PHYSICS_RESTITUTION) * normalSpeed * 0.5
-  firstVelocity.vx = firstVelocity.vx - impulse * normalX
-  firstVelocity.vy = firstVelocity.vy - impulse * normalY
-  secondVelocity.vx = secondVelocity.vx + impulse * normalX
-  secondVelocity.vy = secondVelocity.vy + impulse * normalY
+  if not firstInvincible then
+    firstVelocity.vx = firstVelocity.vx - impulse * normalX
+    firstVelocity.vy = firstVelocity.vy - impulse * normalY
+  end
+  if not secondInvincible then
+    secondVelocity.vx = secondVelocity.vx + impulse * normalX
+    secondVelocity.vy = secondVelocity.vy + impulse * normalY
+  end
+
+  if self._shockwaveOwnerPlayerIndex then
+    if firstStone.ownerPlayerIndex == self._shockwaveOwnerPlayerIndex or secondStone.ownerPlayerIndex == self._shockwaveOwnerPlayerIndex then
+      local collisionX = (firstStone.x + secondStone.x) * 0.5
+      local collisionY = (firstStone.y + secondStone.y) * 0.5
+      self:applyShockwaveFromPoint(collisionX, collisionY)
+    end
+  end
 end
 
 function MatchScene:simulateShotStep(stepSec)
@@ -537,6 +764,12 @@ function MatchScene:simulateShotStep(stepSec)
     else
       velocity.vx = 0
       velocity.vy = 0
+    end
+  end
+
+  for _, stone in ipairs(aliveStoneList) do
+    for _, obstacle in ipairs(self._obstacleList) do
+      self:resolveObstacleCollision(stone, obstacle)
     end
   end
 
@@ -732,6 +965,17 @@ function MatchScene:getPlayingCardPanelRect()
   }
 end
 
+function MatchScene:getResultPanelRect()
+  local panelW = 460
+  local panelH = 280
+  return {
+    x = (Constants.BASE_WORLD_W - panelW) * 0.5,
+    y = (Constants.BASE_WORLD_H - panelH) * 0.5,
+    w = panelW,
+    h = panelH
+  }
+end
+
 function MatchScene:canUseCardInTurn(cardId)
   if not self:isPlayingPhase() then
     return false
@@ -748,10 +992,10 @@ function MatchScene:canUseCardInTurn(cardId)
   if self._playingShotUsed > 0 then
     return false
   end
-  if cardId ~= "agile" then
+  if self._pendingCardTargetId then
     return false
   end
-  return true
+  return cardId == "agile" or cardId == "reinforcement" or cardId == "rockfall" or cardId == "invincible" or cardId == "shockwave"
 end
 
 function MatchScene:rebuildPlayingCardButtons()
@@ -777,20 +1021,164 @@ end
 
 function MatchScene:requestTurnCardUse(cardId)
   if not self:canUseCardInTurn(cardId) then
-    if cardId ~= "agile" then
-      self:setStatus("해당 카드는 아직 구현되지 않았습니다.", Constants.COLOR_DANGER)
-    else
-      self:setStatus("지금은 카드를 사용할 수 없습니다.", Constants.COLOR_DANGER)
-    end
+    self:setStatus("지금은 카드를 사용할 수 없습니다.", Constants.COLOR_DANGER)
     return
+  end
+
+  if cardId == "rockfall" then
+    self._pendingCardTargetId = cardId
+    self._isAimDragging = false
+    self._aimStoneId = nil
+    self:setStatus("낙석 대상 선택: 보드 위를 클릭해 장애물을 배치하세요. ESC/우클릭 취소", Constants.COLOR_TEXT_SUB)
+    return
+  end
+
+  local cardTarget = nil
+  if cardId == "reinforcement" then
+    local mouseWorldX, mouseWorldY = self._app:getMouseWorldPosition()
+    local boardLocalX, boardLocalY = self:toBoardLocal(mouseWorldX, mouseWorldY)
+    if not boardLocalX then
+      self:setStatus("카드 대상은 보드 안에서 선택해야 합니다.", Constants.COLOR_DANGER)
+      return
+    end
+    local canonicalX, canonicalY = self:localToCanonical(boardLocalX, boardLocalY)
+    cardTarget = {
+      x = canonicalX,
+      y = canonicalY
+    }
+  end
+
+  local payload = {
+    turnIndex = self._playingTurnIndex,
+    cardId = cardId
+  }
+  if cardTarget then
+    payload.target = cardTarget
+  end
+
+  self._app:sendWsEnvelope("client.match.turn.cardUse", payload)
+  self._isCardUsePending = true
+  self:setStatus("카드 사용 요청 전송...", Constants.COLOR_TEXT_SUB)
+end
+
+function MatchScene:cancelPendingCardTarget()
+  if not self._pendingCardTargetId then
+    return
+  end
+  self._pendingCardTargetId = nil
+  self:setStatus("카드 대상 선택을 취소했습니다.", Constants.COLOR_TEXT_SUB)
+end
+
+function MatchScene:canPlaceRockfallAtCanonical(canonicalX, canonicalY)
+  local width = Constants.ROCK_OBSTACLE_WIDTH
+  local height = Constants.ROCK_OBSTACLE_HEIGHT
+  local halfW = width * 0.5
+  local halfH = height * 0.5
+  local margin = Constants.ROCK_OBSTACLE_MARGIN
+
+  if canonicalX - halfW < margin or canonicalX + halfW > Constants.BOARD_W - margin then
+    return false, "장애물은 보드 경계에서 5px 안쪽에만 배치할 수 있습니다."
+  end
+  if canonicalY - halfH < margin or canonicalY + halfH > Constants.BOARD_H - margin then
+    return false, "장애물은 보드 경계에서 5px 안쪽에만 배치할 수 있습니다."
+  end
+
+  local previewObstacle = {
+    x = canonicalX,
+    y = canonicalY,
+    width = width,
+    height = height
+  }
+
+  for _, stone in ipairs(self._playingStoneList) do
+    if stone.alive ~= false and intersectsStoneAndObstacle(stone.x, stone.y, previewObstacle) then
+      return false, "장애물은 알과 겹칠 수 없습니다."
+    end
+  end
+
+  for _, obstacle in ipairs(self._obstacleList) do
+    if intersectsObstacleAndObstacle(previewObstacle, obstacle) then
+      return false, "기존 장애물과 겹칠 수 없습니다."
+    end
+  end
+
+  return true, nil
+end
+
+function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
+  if self._pendingCardTargetId ~= "rockfall" then
+    return false
+  end
+  if not self:isMyTurn() or self._hasUsedCardThisTurn or self._playingShotUsed > 0 then
+    self._pendingCardTargetId = nil
+    self:setStatus("지금은 카드를 사용할 수 없습니다.", Constants.COLOR_DANGER)
+    return true
+  end
+
+  local boardLocalX, boardLocalY = self:toBoardLocal(worldX, worldY)
+  if not boardLocalX then
+    self:setStatus("보드 안을 클릭해 낙석 위치를 선택하세요.", Constants.COLOR_DANGER)
+    return true
+  end
+
+  local canonicalX, canonicalY = self:localToCanonical(boardLocalX, boardLocalY)
+  local canPlace, reason = self:canPlaceRockfallAtCanonical(canonicalX, canonicalY)
+  if not canPlace then
+    self:setStatus(reason or "해당 위치에는 배치할 수 없습니다.", Constants.COLOR_DANGER)
+    return true
   end
 
   self._app:sendWsEnvelope("client.match.turn.cardUse", {
     turnIndex = self._playingTurnIndex,
-    cardId = cardId
+    cardId = "rockfall",
+    target = {
+      x = canonicalX,
+      y = canonicalY
+    }
   })
+  self._pendingCardTargetId = nil
   self._isCardUsePending = true
-  self:setStatus("카드 사용 요청 전송...", Constants.COLOR_TEXT_SUB)
+  self:setStatus("낙석 카드 사용 요청 전송...", Constants.COLOR_TEXT_SUB)
+  return true
+end
+
+function MatchScene:requestSurrender()
+  if not self:isPlayingPhase() then
+    self:setStatus("지금은 기권할 수 없습니다.", Constants.COLOR_DANGER)
+    return
+  end
+  if self._isSurrenderPending then
+    return
+  end
+  self._pendingCardTargetId = nil
+  self._isAimDragging = false
+  self._aimStoneId = nil
+  self._app:sendWsEnvelope("client.match.surrender", {})
+  self._isSurrenderPending = true
+  self:setStatus("기권 요청 전송...", Constants.COLOR_DANGER)
+end
+
+function MatchScene:requestResultVote(action)
+  if self._roomState.phase ~= Constants.PHASE_RESULT then
+    self:setStatus("지금은 결과 투표를 할 수 없습니다.", Constants.COLOR_DANGER)
+    return
+  end
+  if action ~= "rematch" and action ~= "to_lobby" then
+    return
+  end
+  if self._isResultVotePending then
+    return
+  end
+
+  self._app:sendWsEnvelope("client.match.rematch.vote", {
+    action = action
+  })
+  self._isResultVotePending = true
+  if action == "rematch" then
+    self:setStatus("재대결 투표 전송...", Constants.COLOR_TEXT_SUB)
+  else
+    self:setStatus("로비 복귀 투표 전송...", Constants.COLOR_TEXT_SUB)
+  end
 end
 
 function MatchScene:beginAimDrag(worldX, worldY)
@@ -894,7 +1282,27 @@ function MatchScene:sendHostSnapshotIfNeeded(turnIndex, reason)
 end
 
 function MatchScene:applyRoomState(payload)
+  if payload.phase == Constants.PHASE_WAITING then
+    self._app:goWaitingRoom({
+      roomState = payload,
+      statusText = "재대결 대기 상태로 복귀했습니다.",
+      statusColor = Constants.COLOR_TEXT_SUB
+    })
+    return
+  end
+
   self._roomState = payload
+
+  if type(payload.result) == "table" then
+    self._myResultVote = payload.result.myVote
+    self._opponentResultVote = payload.result.opponentVote
+    if self._myResultVote then
+      self._isResultVotePending = false
+    end
+  else
+    self._myResultVote = nil
+    self._opponentResultVote = nil
+  end
 
   local placement = payload.match and payload.match.placement or nil
   if type(placement) == "table" then
@@ -992,6 +1400,29 @@ function MatchScene:applyRoomState(payload)
         self._isCardUsePending = false
       end
     end
+    if type(playing.lockedStoneIds) == "table" then
+      self._lockedStoneIdSet = listToSet(playing.lockedStoneIds)
+    else
+      self._lockedStoneIdSet = {}
+    end
+    if type(playing.obstacles) == "table" then
+      self._obstacleList = cloneObstacleList(playing.obstacles)
+    else
+      self._obstacleList = {}
+    end
+    if type(playing.invincibleTurnByPlayer) == "table" then
+      self._invincibleTurnByPlayer = {
+        [1] = type(playing.invincibleTurnByPlayer[1]) == "number" and playing.invincibleTurnByPlayer[1] or nil,
+        [2] = type(playing.invincibleTurnByPlayer[2]) == "number" and playing.invincibleTurnByPlayer[2] or nil
+      }
+    else
+      self._invincibleTurnByPlayer = { [1] = nil, [2] = nil }
+    end
+    if playing.shockwaveOwnerPlayerIndex == 1 or playing.shockwaveOwnerPlayerIndex == 2 then
+      self._shockwaveOwnerPlayerIndex = playing.shockwaveOwnerPlayerIndex
+    else
+      self._shockwaveOwnerPlayerIndex = nil
+    end
     if type(playing.shotCommitted) == "boolean" then
       self._isPlayingShotCommitted = playing.shotCommitted
       if playing.shotCommitted then
@@ -1010,6 +1441,9 @@ function MatchScene:applyRoomState(payload)
       self._playingStoneList = clonePlayingStoneList(playing.stones)
       self:syncStoneVelocityMap()
     end
+    if self._pendingCardTargetId and (not self:isMyTurn() or self._hasUsedCardThisTurn or self._playingShotUsed > 0 or self._isCardUsePending) then
+      self._pendingCardTargetId = nil
+    end
     self:rebuildPlayingCardButtons()
   end
 
@@ -1017,6 +1451,15 @@ function MatchScene:applyRoomState(payload)
     self._shouldSendSnapshotAfterSim = false
     self:stopShotSimulation()
     self:resetStoneVelocities()
+    self._shockwaveOwnerPlayerIndex = nil
+    self._lockedStoneIdSet = {}
+    self._pendingCardTargetId = nil
+    self._isSurrenderPending = false
+  end
+  if payload.phase ~= Constants.PHASE_RESULT then
+    self._isResultVotePending = false
+    self._myResultVote = nil
+    self._opponentResultVote = nil
   end
 
   if payload.phase == Constants.PHASE_PLACEMENT_PRIVATE then
@@ -1026,7 +1469,9 @@ function MatchScene:applyRoomState(payload)
   elseif payload.phase == Constants.PHASE_CARD_SELECT then
     self:setStatus("카드 선택 단계입니다.", Constants.COLOR_TEXT_SUB)
   elseif payload.phase == Constants.PHASE_PLAYING then
-    if self:isMyTurn() then
+    if self._pendingCardTargetId then
+      self:setStatus("낙석 대상 선택: 보드 위를 클릭해 장애물을 배치하세요. ESC/우클릭 취소", Constants.COLOR_TEXT_SUB)
+    elseif self:isMyTurn() then
       self:setStatus("내 턴입니다. 알을 드래그해 발사하세요.", Constants.COLOR_TEXT_SUB)
     else
       self:setStatus("상대 턴 진행 중...", Constants.COLOR_TEXT_SUB)
@@ -1035,7 +1480,12 @@ function MatchScene:applyRoomState(payload)
       self:sendHostSnapshotIfNeeded(self._playingTurnIndex, "state_sync")
     end
   elseif payload.phase == Constants.PHASE_RESULT then
-    self:setStatus("결과 단계 진입", Constants.COLOR_DANGER)
+    local myVoteLabelMap = {
+      rematch = "재대결",
+      to_lobby = "로비"
+    }
+    local myVoteLabel = self._myResultVote and (myVoteLabelMap[self._myResultVote] or tostring(self._myResultVote)) or "없음"
+    self:setStatus("결과 단계: 후속 동작 투표 (내 투표: " .. myVoteLabel .. ")", Constants.COLOR_DANGER)
   end
 end
 
@@ -1056,8 +1506,10 @@ function MatchScene:drawBoardFrame()
   local stripY = centerWorldY - Constants.NO_PLACE_BUFFER
   local stripH = Constants.NO_PLACE_BUFFER * 2
 
-  love.graphics.setColor(0.65, 0.18, 0.22, 0.20)
-  love.graphics.rectangle("fill", self._boardX, stripY, Constants.BOARD_W, stripH)
+  if self._roomState.phase ~= Constants.PHASE_PLAYING and self._roomState.phase ~= Constants.PHASE_RESULT then
+    love.graphics.setColor(0.65, 0.18, 0.22, 0.20)
+    love.graphics.rectangle("fill", self._boardX, stripY, Constants.BOARD_W, stripH)
+  end
 
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
   love.graphics.line(self._boardX, centerWorldY, self._boardX + Constants.BOARD_W, centerWorldY)
@@ -1089,6 +1541,24 @@ function MatchScene:drawStoneList(stoneList, color)
       local localX, localY = self:canonicalToLocal(stone.x, stone.y)
       love.graphics.circle("line", self._boardX + localX, self._boardY + localY, Constants.STONE_RADIUS)
     end
+  end
+end
+
+function MatchScene:drawObstacleList(obstacleList)
+  love.graphics.setColor(0.44, 0.42, 0.40, 1.0)
+  for _, obstacle in ipairs(obstacleList or {}) do
+    local localX, localY = self:canonicalToLocal(obstacle.x, obstacle.y)
+    local width = obstacle.width or Constants.ROCK_OBSTACLE_WIDTH
+    local height = obstacle.height or Constants.ROCK_OBSTACLE_HEIGHT
+    love.graphics.rectangle("fill", self._boardX + localX - width * 0.5, self._boardY + localY - height * 0.5, width, height, 6, 6)
+  end
+
+  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+  for _, obstacle in ipairs(obstacleList or {}) do
+    local localX, localY = self:canonicalToLocal(obstacle.x, obstacle.y)
+    local width = obstacle.width or Constants.ROCK_OBSTACLE_WIDTH
+    local height = obstacle.height or Constants.ROCK_OBSTACLE_HEIGHT
+    love.graphics.rectangle("line", self._boardX + localX - width * 0.5, self._boardY + localY - height * 0.5, width, height, 6, 6)
   end
 end
 
@@ -1124,6 +1594,10 @@ function MatchScene:drawPlayingInfo()
   local stateText = "조준 가능"
   if self._isPlayingAwaitingSnapshot then
     stateText = "스냅샷 대기"
+  elseif self._pendingCardTargetId then
+    stateText = "카드 대상 선택 중"
+  elseif self._isCardUsePending then
+    stateText = "카드 요청 전송 중"
   elseif self._isPlayingShotCommitted then
     stateText = "발사 완료"
     if self._isShotSimulating then
@@ -1165,6 +1639,12 @@ function MatchScene:drawPlayingCardPanel(mouseX, mouseY)
     entry.button.color = canUse and Constants.COLOR_BUTTON or Constants.COLOR_BUTTON_DISABLED
     entry.button:draw(mouseX, mouseY)
   end
+
+  if self._pendingCardTargetId then
+    love.graphics.setFont(FontManager.getFont("small"))
+    love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+    love.graphics.printf("낙석 위치를 보드에서 클릭", rect.x, rect.y + rect.h - 18, rect.w, "center")
+  end
 end
 
 function MatchScene:drawAimGuide(mouseX, mouseY)
@@ -1192,6 +1672,32 @@ function MatchScene:drawAimGuide(mouseX, mouseY)
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT)
   love.graphics.printf(string.format("Power %.0f", power), stoneWorldX - 50, stoneWorldY - 30, 100, "center")
+end
+
+function MatchScene:drawPendingCardPreview(mouseX, mouseY)
+  if self._pendingCardTargetId ~= "rockfall" then
+    return
+  end
+  if not self:isPlayingPhase() or not self:isMyTurn() then
+    return
+  end
+
+  local boardLocalX, boardLocalY = self:toBoardLocal(mouseX, mouseY)
+  if not boardLocalX then
+    return
+  end
+
+  local canonicalX, canonicalY = self:localToCanonical(boardLocalX, boardLocalY)
+  local canPlace = self:canPlaceRockfallAtCanonical(canonicalX, canonicalY)
+  local width = Constants.ROCK_OBSTACLE_WIDTH
+  local height = Constants.ROCK_OBSTACLE_HEIGHT
+  local color = canPlace and { 0.36, 0.90, 0.50, 0.35 } or { 0.90, 0.30, 0.30, 0.35 }
+  local borderColor = canPlace and { 0.36, 0.90, 0.50, 1.0 } or { 0.90, 0.30, 0.30, 1.0 }
+
+  love.graphics.setColor(color)
+  love.graphics.rectangle("fill", mouseX - width * 0.5, mouseY - height * 0.5, width, height, 6, 6)
+  love.graphics.setColor(borderColor)
+  love.graphics.rectangle("line", mouseX - width * 0.5, mouseY - height * 0.5, width, height, 6, 6)
 end
 
 function MatchScene:drawCardSelectPanel(mouseX, mouseY)
@@ -1245,6 +1751,67 @@ function MatchScene:drawCardSelectPanel(mouseX, mouseY)
   love.graphics.printf(lockText .. " | " .. opponentText, panelX, panelY + panelH - 40, panelW, "center")
 end
 
+function MatchScene:drawResultPanel(mouseX, mouseY)
+  local rect = self:getResultPanelRect()
+  local payload = self._roomState.result or {}
+  local winnerPlayerIndex = payload.winnerPlayerIndex
+  local reason = payload.reason or "unknown"
+
+  local resultTitle = "무승부"
+  if winnerPlayerIndex == self:getMyPlayerIndex() then
+    resultTitle = "승리"
+  elseif winnerPlayerIndex == nil then
+    resultTitle = "무승부"
+  else
+    resultTitle = "패배"
+  end
+
+  local reasonLabelMap = {
+    stone_zero = "상대 알 전멸",
+    draw = "무승부",
+    player_left = "상대 이탈",
+    surrender = "기권"
+  }
+  local reasonLabel = reasonLabelMap[reason] or tostring(reason)
+  local voteLabelMap = {
+    rematch = "재대결",
+    to_lobby = "로비"
+  }
+  local myVoteText = self._myResultVote and (voteLabelMap[self._myResultVote] or tostring(self._myResultVote)) or "없음"
+  local opponentVoteText = self._opponentResultVote and (voteLabelMap[self._opponentResultVote] or tostring(self._opponentResultVote)) or "없음"
+
+  love.graphics.setColor(Constants.COLOR_OVERLAY_DIM)
+  love.graphics.rectangle("fill", self._boardX, self._boardY, Constants.BOARD_W, Constants.BOARD_H, 8, 8)
+
+  love.graphics.setColor(Constants.COLOR_PANEL)
+  love.graphics.rectangle("fill", rect.x, rect.y, rect.w, rect.h, 10, 10)
+  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+  love.graphics.rectangle("line", rect.x, rect.y, rect.w, rect.h, 10, 10)
+
+  love.graphics.setFont(FontManager.getFont("title"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.printf("RESULT - " .. resultTitle, rect.x, rect.y + 18, rect.w, "center")
+
+  love.graphics.setFont(FontManager.getFont("ui"))
+  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+  love.graphics.printf("사유: " .. reasonLabel, rect.x, rect.y + 76, rect.w, "center")
+  love.graphics.printf("내 투표: " .. myVoteText .. " | 상대 투표: " .. opponentVoteText, rect.x, rect.y + 112, rect.w, "center")
+
+  local buttonY = rect.y + rect.h - 82
+  self._resultRematchButton.x = rect.x + 30
+  self._resultRematchButton.y = buttonY
+  self._resultLobbyButton.x = rect.x + rect.w - self._resultLobbyButton.w - 30
+  self._resultLobbyButton.y = buttonY
+
+  self._resultRematchButton.isEnabled = not self._isResultVotePending
+  self._resultLobbyButton.isEnabled = not self._isResultVotePending
+  self._resultRematchButton.color = self._myResultVote == "rematch" and Constants.COLOR_BUTTON_SELECTED or Constants.COLOR_BUTTON
+  self._resultLobbyButton.color = self._myResultVote == "to_lobby" and { 0.75, 0.28, 0.30, 1.0 } or Constants.COLOR_DANGER
+
+  self._resultRematchButton:draw(mouseX, mouseY)
+  self._resultLobbyButton:draw(mouseX, mouseY)
+end
+
 function MatchScene:draw()
   local mouseX, mouseY = self._app:getMouseWorldPosition()
 
@@ -1268,6 +1835,7 @@ function MatchScene:draw()
         guestStoneList[#guestStoneList + 1] = stone
       end
     end
+    self:drawObstacleList(self._obstacleList)
     self:drawStoneList(hostStoneList, Constants.COLOR_STONE_HOST)
     self:drawStoneList(guestStoneList, Constants.COLOR_STONE_GUEST)
   elseif self:isRevealVisiblePhase() and self._revealStoneMap then
@@ -1279,6 +1847,7 @@ function MatchScene:draw()
     self:drawStoneList(self._myStoneList, color)
   end
 
+  self:drawPendingCardPreview(mouseX, mouseY)
   self:drawAimGuide(mouseX, mouseY)
 
   if self:isPlacementPhase() then
@@ -1289,9 +1858,13 @@ function MatchScene:draw()
 
   if self._roomState.phase == Constants.PHASE_CARD_SELECT then
     self:drawCardSelectPanel(mouseX, mouseY)
-  elseif self._roomState.phase == Constants.PHASE_PLAYING or self._roomState.phase == Constants.PHASE_RESULT then
+  elseif self._roomState.phase == Constants.PHASE_PLAYING then
     self:drawPlayingInfo()
     self:drawPlayingCardPanel(mouseX, mouseY)
+    self._surrenderButton.isEnabled = not self._isSurrenderPending
+    self._surrenderButton:draw(mouseX, mouseY)
+  elseif self._roomState.phase == Constants.PHASE_RESULT then
+    self:drawResultPanel(mouseX, mouseY)
   else
     self:drawPlacementInfo()
   end
@@ -1303,7 +1876,11 @@ end
 
 function MatchScene:mousepressed(mouseX, mouseY, button)
   if self:isPlayingPhase() and button == 2 then
-    self:cancelAimDrag()
+    if self._pendingCardTargetId then
+      self:cancelPendingCardTarget()
+    else
+      self:cancelAimDrag()
+    end
     return
   end
 
@@ -1326,6 +1903,14 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
   end
 
   if self:isPlayingPhase() then
+    if self._surrenderButton:isHovered(mouseX, mouseY) and self._surrenderButton.isEnabled then
+      self._surrenderButton:onClick()
+      return
+    end
+    if self._pendingCardTargetId then
+      self:commitPendingCardTargetByWorld(mouseX, mouseY)
+      return
+    end
     for _, entry in ipairs(self._playingCardButtonList) do
       if entry.button:isHovered(mouseX, mouseY) and entry.button.isEnabled then
         entry.button:onClick()
@@ -1333,6 +1918,18 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
       end
     end
     self:beginAimDrag(mouseX, mouseY)
+    return
+  end
+
+  if self._roomState.phase == Constants.PHASE_RESULT then
+    if self._resultRematchButton:isHovered(mouseX, mouseY) and self._resultRematchButton.isEnabled then
+      self._resultRematchButton:onClick()
+      return
+    end
+    if self._resultLobbyButton:isHovered(mouseX, mouseY) and self._resultLobbyButton.isEnabled then
+      self._resultLobbyButton:onClick()
+      return
+    end
     return
   end
 
@@ -1362,15 +1959,17 @@ function MatchScene:textedited(_text, _start, _length)
 end
 
 function MatchScene:keypressed(key)
+  if key == "escape" and self._pendingCardTargetId then
+    self:cancelPendingCardTarget()
+    return
+  end
   if key == "escape" and self._isAimDragging then
     self:cancelAimDrag()
     return
   end
   if key == "escape" and self._roomState.phase == Constants.PHASE_RESULT then
-    self._app:goLobby({
-      statusText = "RESULT에서 로비로 복귀했습니다.",
-      statusColor = Constants.COLOR_TEXT_SUB
-    })
+    self:requestResultVote("to_lobby")
+    return
   end
 end
 
@@ -1473,6 +2072,8 @@ function MatchScene:onWsEnvelope(envelope)
     self._isPlayingAwaitingSnapshot = false
     self._isTurnShotPending = false
     self._isCardUsePending = false
+    self._pendingCardTargetId = nil
+    self._isSurrenderPending = false
     self._isAimDragging = false
     self._aimStoneId = nil
     self._lastAutoSnapshotTurnIndex = nil
@@ -1506,10 +2107,70 @@ function MatchScene:onWsEnvelope(envelope)
       if type(payload.effect) == "table" and type(payload.effect.shotBudget) == "number" then
         self._playingShotBudget = payload.effect.shotBudget
       end
+      if type(payload.effect) == "table" and type(payload.effect.lockedStoneIds) == "table" then
+        self._lockedStoneIdSet = listToSet(payload.effect.lockedStoneIds)
+      end
+      if type(payload.effect) == "table" and type(payload.effect.spawnStone) == "table" then
+        self._playingStoneList[#self._playingStoneList + 1] = {
+          id = payload.effect.spawnStone.id,
+          ownerPlayerIndex = payload.effect.spawnStone.ownerPlayerIndex,
+          x = payload.effect.spawnStone.x,
+          y = payload.effect.spawnStone.y,
+          alive = payload.effect.spawnStone.alive ~= false
+        }
+      end
+      if type(payload.effect) == "table" and type(payload.effect.obstacle) == "table" then
+        self._obstacleList[#self._obstacleList + 1] = {
+          id = payload.effect.obstacle.id,
+          x = payload.effect.obstacle.x,
+          y = payload.effect.obstacle.y,
+          width = payload.effect.obstacle.width or Constants.ROCK_OBSTACLE_WIDTH,
+          height = payload.effect.obstacle.height or Constants.ROCK_OBSTACLE_HEIGHT
+        }
+      end
+      if type(payload.effect) == "table" and type(payload.effect.invincibleTurnByPlayer) == "table" then
+        self._invincibleTurnByPlayer = {
+          [1] = type(payload.effect.invincibleTurnByPlayer[1]) == "number" and payload.effect.invincibleTurnByPlayer[1] or nil,
+          [2] = type(payload.effect.invincibleTurnByPlayer[2]) == "number" and payload.effect.invincibleTurnByPlayer[2] or nil
+        }
+      end
+      if type(payload.effect) == "table" and (payload.effect.shockwaveOwnerPlayerIndex == 1 or payload.effect.shockwaveOwnerPlayerIndex == 2) then
+        self._shockwaveOwnerPlayerIndex = payload.effect.shockwaveOwnerPlayerIndex
+      end
       self:rebuildPlayingCardButtons()
     else
       if type(payload.effect) == "table" and type(payload.effect.shotBudget) == "number" then
         self._playingShotBudget = payload.effect.shotBudget
+      end
+      if type(payload.effect) == "table" and type(payload.effect.lockedStoneIds) == "table" then
+        self._lockedStoneIdSet = listToSet(payload.effect.lockedStoneIds)
+      end
+      if type(payload.effect) == "table" and type(payload.effect.spawnStone) == "table" then
+        self._playingStoneList[#self._playingStoneList + 1] = {
+          id = payload.effect.spawnStone.id,
+          ownerPlayerIndex = payload.effect.spawnStone.ownerPlayerIndex,
+          x = payload.effect.spawnStone.x,
+          y = payload.effect.spawnStone.y,
+          alive = payload.effect.spawnStone.alive ~= false
+        }
+      end
+      if type(payload.effect) == "table" and type(payload.effect.obstacle) == "table" then
+        self._obstacleList[#self._obstacleList + 1] = {
+          id = payload.effect.obstacle.id,
+          x = payload.effect.obstacle.x,
+          y = payload.effect.obstacle.y,
+          width = payload.effect.obstacle.width or Constants.ROCK_OBSTACLE_WIDTH,
+          height = payload.effect.obstacle.height or Constants.ROCK_OBSTACLE_HEIGHT
+        }
+      end
+      if type(payload.effect) == "table" and type(payload.effect.invincibleTurnByPlayer) == "table" then
+        self._invincibleTurnByPlayer = {
+          [1] = type(payload.effect.invincibleTurnByPlayer[1]) == "number" and payload.effect.invincibleTurnByPlayer[1] or nil,
+          [2] = type(payload.effect.invincibleTurnByPlayer[2]) == "number" and payload.effect.invincibleTurnByPlayer[2] or nil
+        }
+      end
+      if type(payload.effect) == "table" and (payload.effect.shockwaveOwnerPlayerIndex == 1 or payload.effect.shockwaveOwnerPlayerIndex == 2) then
+        self._shockwaveOwnerPlayerIndex = payload.effect.shockwaveOwnerPlayerIndex
       end
     end
     self:setStatus("카드 효과 적용됨: " .. tostring(getCardLabel(payload.cardId)), Constants.COLOR_TEXT_SUB)
@@ -1531,6 +2192,7 @@ function MatchScene:onWsEnvelope(envelope)
     self._isPlayingShotCommitted = self._playingShotUsed >= self._playingShotBudget
     self._isTurnShotPending = false
     self._isCardUsePending = false
+    self._pendingCardTargetId = nil
     self._isAimDragging = false
     self._aimStoneId = nil
     if self._playingShotUsed >= self._playingShotBudget then
@@ -1572,28 +2234,38 @@ function MatchScene:onWsEnvelope(envelope)
     self._isPlayingShotCommitted = false
     self._isTurnShotPending = false
     self._isCardUsePending = false
+    self._pendingCardTargetId = nil
     self:setStatus("턴 스냅샷 적용 완료", Constants.COLOR_TEXT_SUB)
     return
   end
 
   if envelope.type == "match.result" then
     local payload = envelope.payload or {}
+    self._isSurrenderPending = false
+    self._pendingCardTargetId = nil
+    self._isResultVotePending = false
     self:setStatus("결과: winner P" .. tostring(payload.winnerPlayerIndex or "?"), Constants.COLOR_DANGER)
     return
   end
 
   if envelope.type == "error.generic" then
     local payload = envelope.payload or {}
+    if self._isSurrenderPending then
+      self._isSurrenderPending = false
+    end
+    if self._isResultVotePending then
+      self._isResultVotePending = false
+    end
     if payload.code == "invalid_placement" or payload.code == "already_submitted" then
       self._isSubmitPending = false
     end
     if payload.code == "invalid_card_pick" or payload.code == "already_locked" then
       self._isCardPickPending = false
     end
-    if payload.code == "card_already_used" or payload.code == "card_use_window_closed" or payload.code == "card_not_owned" or payload.code == "card_not_implemented" or payload.code == "invalid_card_id" then
+    if payload.code == "card_already_used" or payload.code == "card_use_window_closed" or payload.code == "card_not_owned" or payload.code == "card_not_implemented" or payload.code == "invalid_card_id" or payload.code == "invalid_card_target" then
       self._isCardUsePending = false
     end
-    if payload.code == "invalid_shot_power" or payload.code == "invalid_shot_dir" or payload.code == "invalid_shot_stone" or payload.code == "not_your_turn" or payload.code == "timeout" or payload.code == "turn_mismatch" or payload.code == "already_shot" or payload.code == "shot_budget_exceeded" then
+    if payload.code == "invalid_shot_power" or payload.code == "invalid_shot_dir" or payload.code == "invalid_shot_stone" or payload.code == "not_your_turn" or payload.code == "timeout" or payload.code == "turn_mismatch" or payload.code == "already_shot" or payload.code == "shot_budget_exceeded" or payload.code == "stone_locked_this_turn" then
       self._isTurnShotPending = false
       self._isPlayingShotCommitted = false
       self._isAimDragging = false

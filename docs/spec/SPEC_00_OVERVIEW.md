@@ -3,7 +3,7 @@ Date: 2026-02-09
 
 ## 1. Goal
 - Build a fully playable 2-player MVP flow:
-  `MATCHING -> WAITING -> TURN_ORDER -> PLACEMENT -> REVEAL(10s) -> CARD_SELECT -> PLAYING(30s turn limit) -> RESULT -> REMATCH/LOBBY`.
+  `MATCHING -> WAITING -> TURN_ORDER -> PLACEMENT -> REVEAL(5s) -> CARD_SELECT -> PLAYING(30s turn limit) -> RESULT -> REMATCH/LOBBY`.
 - Stack is fixed:
   - Client: LÖVE 11.x (Lua)
   - Server: Cloudflare Workers + Durable Objects (TypeScript)

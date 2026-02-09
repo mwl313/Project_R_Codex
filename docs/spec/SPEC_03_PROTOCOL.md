@@ -172,6 +172,23 @@ Date: 2026-02-09
 - On success:
   - server normalizes and broadcasts authoritative turn snapshot.
 
+### 6.6 `client.match.rematch.vote` (result only)
+- Purpose:
+  - vote post-result action (`rematch` or `to_lobby`).
+- Payload:
+```json
+{
+  "action": "rematch"
+}
+```
+- Validation:
+  - phase must be `RESULT`
+  - action must be one of: `rematch`, `to_lobby`
+- Resolution:
+  - any `to_lobby` vote => server closes room and both clients return to lobby
+  - both players vote `rematch` => server transitions `RESULT -> WAITING`
+  - vote progress is reflected via `room.state.result.myVote/opponentVote`
+
 ## 7. Error Events
 - `error.generic`:
 ```json

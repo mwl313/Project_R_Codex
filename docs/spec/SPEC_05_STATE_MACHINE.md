@@ -63,6 +63,16 @@ Date: 2026-02-09
 - `TURN_ORDER` and later gameplay:
   - disconnect/surrender routes to `RESULT` (server authoritative).
 
+## 5.1 Result Post-Flow (`RESULT`)
+- Client command:
+  - `client.match.rematch.vote` with `action = rematch | to_lobby`
+- Transition rules:
+  - any `to_lobby` vote => room close + both lobby
+  - both `rematch` votes => `RESULT -> WAITING`
+- `room.state.result` carries vote mirror fields for UI:
+  - `myVote`
+  - `opponentVote`
+
 ## 6. Implementation Phases
 ### 6.1 Phase 1 - Server Minimum Skeleton
 - Implement:
@@ -96,7 +106,7 @@ Date: 2026-02-09
   - no remove/reposition in MVP
   - center strip + min distance validation
 - Reveal:
-  - 10s authoritative timer
+  - 5s authoritative timer
 - Card select:
   - role-based host/guest draft and pick
   - timeout auto-pick
