@@ -9,9 +9,16 @@ export type ServerEventType =
   | "match.turnOrder"
   | "match.phaseChanged"
   | "match.placement.revealStart"
+  | "match.cards.dealt"
+  | "match.cards.locked"
   | "error.generic";
 
-export type ClientCommandType = "client.chat.send" | "client.room.leave" | "client.match.start" | "client.match.placement.submit";
+export type ClientCommandType =
+  | "client.chat.send"
+  | "client.room.leave"
+  | "client.match.start"
+  | "client.match.placement.submit"
+  | "client.match.cards.pick";
 
 export interface WsEnvelope<T = unknown> {
   type: string;

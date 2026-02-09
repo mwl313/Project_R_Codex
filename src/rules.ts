@@ -20,6 +20,14 @@ export const PLACE_GAP_PX = 5;
 export const MIN_PLACE_DISTANCE = STONE_RADIUS + PLACE_GAP_PX;
 export const NO_PLACE_BUFFER = 19;
 export const PLACEMENT_REVEAL_SEC = 10;
+export const CARD_PICK_SEC = 15;
+
+export const CARD_POOL = ["reinforcement", "shockwave", "invincible", "rockfall", "agile"] as const;
+export type CardId = (typeof CARD_POOL)[number];
+export const HOST_DEAL_COUNT = 2;
+export const HOST_PICK_COUNT = 1;
+export const GUEST_DEAL_COUNT = 3;
+export const GUEST_PICK_COUNT = 2;
 
 export const CHAT_MAX_LENGTH = 120;
 export const CHAT_RATE_WINDOW_SEC = 10;

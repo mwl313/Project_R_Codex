@@ -3,8 +3,8 @@
 모듈명: MatchScene
 
 역할:
-- Phase 3 매치 진행 화면(배치/공개/카드선택 진입 전)
-- 배치 클릭 입력, 제출, 공개 렌더링 처리
+- Phase 3 매치 진행 화면(배치/공개/카드선택)
+- 배치 클릭 입력, 제출, 공개 렌더링, 카드 선택 처리
 
 외부에서 사용 가능한 함수:
 - MatchScene.new(app)
@@ -20,23 +20,27 @@ local Button = require("ui.button")
 local MatchScene = {}
 MatchScene.__index = MatchScene
 
+local CARD_LABEL_MAP = {
+  reinforcement = "신병",
+  shockwave = "충격파",
+  invincible = "무적",
+  rockfall = "낙석",
+  agile = "날렵함"
+}
+
 local function nowEpochMs()
   return os.time() * 1000
 end
 
-local function createDefaultRoomState()
+local function getCardSelectPanelRect(boardX, boardY)
+  local panelMarginX = 70
+  local panelMarginTop = 54
+  local panelMarginBottom = 54
   return {
-    phase = Constants.PHASE_PLACEMENT_PRIVATE,
-    timers = {},
-    match = {
-      firstPlayerIndex = nil,
-      placement = {
-        mySubmitted = false,
-        opponentSubmitted = false,
-        myStones = {},
-        revealStones = nil
-      }
-    }
+    x = boardX + panelMarginX,
+    y = boardY + panelMarginTop,
+    w = Constants.BOARD_W - panelMarginX * 2,
+    h = Constants.BOARD_H - panelMarginTop - panelMarginBottom
   }
 end
 
@@ -52,6 +56,61 @@ local function cloneStoneList(stoneList)
   return cloned
 end
 
+local function cloneStringList(valueList)
+  local cloned = {}
+  for _, value in ipairs(valueList or {}) do
+    cloned[#cloned + 1] = tostring(value)
+  end
+  return cloned
+end
+
+local function createDefaultRoomState()
+  return {
+    phase = Constants.PHASE_PLACEMENT_PRIVATE,
+    timers = {},
+    match = {
+      firstPlayerIndex = nil,
+      placement = {
+        mySubmitted = false,
+        opponentSubmitted = false,
+        myStones = {},
+        revealStones = nil
+      },
+      cardSelect = {
+        myDealtCards = {},
+        myPickedCards = {},
+        myPickCount = 0,
+        myLocked = false,
+        opponentLocked = false,
+        selectEndsAtMs = nil
+      }
+    }
+  }
+end
+
+local function containsString(valueList, target)
+  for _, value in ipairs(valueList) do
+    if value == target then
+      return true
+    end
+  end
+  return false
+end
+
+local function removeString(valueList, target)
+  for index, value in ipairs(valueList) do
+    if value == target then
+      table.remove(valueList, index)
+      return true
+    end
+  end
+  return false
+end
+
+local function getCardLabel(cardId)
+  return CARD_LABEL_MAP[cardId] or tostring(cardId)
+end
+
 function MatchScene.new(app)
   local boardX = (Constants.BASE_WORLD_W - Constants.BOARD_W) * 0.5
   local boardY = (Constants.BASE_WORLD_H - Constants.BOARD_H) * 0.5
@@ -63,11 +122,23 @@ function MatchScene.new(app)
     _statusColor = Constants.COLOR_TEXT_SUB,
     _boardX = boardX,
     _boardY = boardY,
+
     _myStoneList = {},
     _isPlacementSubmitted = false,
     _isSubmitPending = false,
     _revealStoneMap = nil,
-    _submitButton = nil
+    _submitButton = nil,
+
+    _myDealtCardList = {},
+    _myPickedCardList = {},
+    _selectedCardList = {},
+    _myPickCount = 0,
+    _isMyCardLocked = false,
+    _isOpponentCardLocked = false,
+    _isCardPickPending = false,
+    _cardSelectEndsAtMs = nil,
+    _cardOptionButtonList = {},
+    _cardConfirmButton = nil
   }
   setmetatable(instance, MatchScene)
 
@@ -82,15 +153,37 @@ function MatchScene.new(app)
     end
   })
 
+  instance._cardConfirmButton = Button.new({
+    x = 0,
+    y = 0,
+    w = 220,
+    h = 42,
+    label = "선택 확정",
+    onClick = function()
+      instance:submitCardPick()
+    end
+  })
+
   return instance
 end
 
 function MatchScene:enter(params)
   self._roomState = createDefaultRoomState()
+
   self._myStoneList = {}
   self._isPlacementSubmitted = false
   self._isSubmitPending = false
   self._revealStoneMap = nil
+
+  self._myDealtCardList = {}
+  self._myPickedCardList = {}
+  self._selectedCardList = {}
+  self._myPickCount = 0
+  self._isMyCardLocked = false
+  self._isOpponentCardLocked = false
+  self._isCardPickPending = false
+  self._cardSelectEndsAtMs = nil
+  self._cardOptionButtonList = {}
 
   if params and type(params.roomState) == "table" then
     self:applyRoomState(params.roomState)
@@ -120,6 +213,10 @@ end
 
 function MatchScene:isPlacementPhase()
   return self._roomState.phase == Constants.PHASE_PLACEMENT_PRIVATE
+end
+
+function MatchScene:isCardSelectPhase()
+  return self._roomState.phase == Constants.PHASE_CARD_SELECT
 end
 
 function MatchScene:isRevealVisiblePhase()
@@ -236,6 +333,76 @@ function MatchScene:submitPlacement()
   self:setStatus("배치 제출 완료, 상대를 기다리는 중...", Constants.COLOR_TEXT_SUB)
 end
 
+function MatchScene:rebuildCardOptionButtons()
+  self._cardOptionButtonList = {}
+
+  local rect = getCardSelectPanelRect(self._boardX, self._boardY)
+  local panelX = rect.x
+  local panelY = rect.y
+  local panelW = rect.w
+  local panelH = rect.h
+
+  for index, cardId in ipairs(self._myDealtCardList) do
+    local button = Button.new({
+      x = panelX + 36,
+      y = panelY + 122 + (index - 1) * 58,
+      w = panelW - 72,
+      h = 44,
+      label = getCardLabel(cardId),
+      onClick = function()
+        self:toggleCardSelection(cardId)
+      end
+    })
+    self._cardOptionButtonList[#self._cardOptionButtonList + 1] = {
+      cardId = cardId,
+      button = button
+    }
+  end
+
+  self._cardConfirmButton.x = panelX + (panelW - self._cardConfirmButton.w) * 0.5
+  self._cardConfirmButton.y = panelY + panelH - 108
+end
+
+function MatchScene:toggleCardSelection(cardId)
+  if not self:isCardSelectPhase() then
+    return
+  end
+  if self._isMyCardLocked or self._isCardPickPending then
+    return
+  end
+
+  if removeString(self._selectedCardList, cardId) then
+    return
+  end
+
+  if #self._selectedCardList >= self._myPickCount then
+    self:setStatus(string.format("최대 %d장까지만 선택할 수 있습니다.", self._myPickCount), Constants.COLOR_DANGER)
+    return
+  end
+
+  self._selectedCardList[#self._selectedCardList + 1] = cardId
+end
+
+function MatchScene:submitCardPick()
+  if not self:isCardSelectPhase() then
+    return
+  end
+  if self._isMyCardLocked or self._isCardPickPending then
+    return
+  end
+
+  if #self._selectedCardList ~= self._myPickCount then
+    self:setStatus(string.format("%d장을 선택 후 확정하세요.", self._myPickCount), Constants.COLOR_DANGER)
+    return
+  end
+
+  self._app:sendWsEnvelope("client.match.cards.pick", {
+    picks = cloneStringList(self._selectedCardList)
+  })
+  self._isCardPickPending = true
+  self:setStatus("카드 선택 확정 요청 전송...", Constants.COLOR_TEXT_SUB)
+end
+
 function MatchScene:applyRoomState(payload)
   self._roomState = payload
 
@@ -261,12 +428,57 @@ function MatchScene:applyRoomState(payload)
     end
   end
 
+  local cardSelect = payload.match and payload.match.cardSelect or nil
+  if type(cardSelect) == "table" then
+    if type(cardSelect.myDealtCards) == "table" then
+      self._myDealtCardList = cloneStringList(cardSelect.myDealtCards)
+    end
+    if type(cardSelect.myPickedCards) == "table" then
+      self._myPickedCardList = cloneStringList(cardSelect.myPickedCards)
+    end
+    if type(cardSelect.myPickCount) == "number" then
+      self._myPickCount = cardSelect.myPickCount
+    end
+    if type(cardSelect.myLocked) == "boolean" then
+      self._isMyCardLocked = cardSelect.myLocked
+      if self._isMyCardLocked then
+        self._selectedCardList = cloneStringList(self._myPickedCardList)
+        self._isCardPickPending = false
+      end
+    end
+    if type(cardSelect.opponentLocked) == "boolean" then
+      self._isOpponentCardLocked = cardSelect.opponentLocked
+    end
+    if type(cardSelect.selectEndsAtMs) == "number" then
+      self._cardSelectEndsAtMs = cardSelect.selectEndsAtMs
+    else
+      self._cardSelectEndsAtMs = nil
+    end
+
+    if not self._isMyCardLocked then
+      local filtered = {}
+      for _, cardId in ipairs(self._selectedCardList) do
+        if containsString(self._myDealtCardList, cardId) then
+          filtered[#filtered + 1] = cardId
+        end
+      end
+      self._selectedCardList = filtered
+      while #self._selectedCardList > self._myPickCount do
+        table.remove(self._selectedCardList)
+      end
+    end
+
+    self:rebuildCardOptionButtons()
+  end
+
   if payload.phase == Constants.PHASE_PLACEMENT_PRIVATE then
     self:setStatus("배치 단계: 클릭으로 7개를 배치한 뒤 제출하세요.", Constants.COLOR_TEXT_SUB)
   elseif payload.phase == Constants.PHASE_PLACEMENT_REVEAL then
     self:setStatus("배치 공개 중...", Constants.COLOR_TEXT_SUB)
   elseif payload.phase == Constants.PHASE_CARD_SELECT then
-    self:setStatus("카드 선택 단계 진입 (후속 구현 예정)", Constants.COLOR_TEXT_SUB)
+    self:setStatus("카드 선택 단계입니다.", Constants.COLOR_TEXT_SUB)
+  elseif payload.phase == Constants.PHASE_PLAYING then
+    self:setStatus("PLAYING 단계 진입 (턴 플레이 구현 예정)", Constants.COLOR_TEXT_SUB)
   elseif payload.phase == Constants.PHASE_RESULT then
     self:setStatus("결과 단계 진입", Constants.COLOR_DANGER)
   end
@@ -340,6 +552,57 @@ function MatchScene:drawPlacementInfo()
   )
 end
 
+function MatchScene:drawCardSelectPanel(mouseX, mouseY)
+  local rect = getCardSelectPanelRect(self._boardX, self._boardY)
+  local panelX = rect.x
+  local panelY = rect.y
+  local panelW = rect.w
+  local panelH = rect.h
+
+  love.graphics.setColor(Constants.COLOR_OVERLAY_DIM)
+  love.graphics.rectangle("fill", self._boardX, self._boardY, Constants.BOARD_W, Constants.BOARD_H, 8, 8)
+
+  love.graphics.setColor(Constants.COLOR_PANEL)
+  love.graphics.rectangle("fill", panelX, panelY, panelW, panelH, 10, 10)
+  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+  love.graphics.rectangle("line", panelX, panelY, panelW, panelH, 10, 10)
+
+  love.graphics.setFont(FontManager.getFont("ui"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.printf("카드 선택", panelX, panelY + 22, panelW, "center")
+
+  love.graphics.setFont(FontManager.getFont("small"))
+  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+
+  local remainSec = 0
+  if self._cardSelectEndsAtMs then
+    remainSec = math.max(0, math.ceil((self._cardSelectEndsAtMs - nowEpochMs()) / 1000))
+  end
+
+  love.graphics.printf(
+    string.format("선택 수: %d장 / 선택됨: %d장 / 남은 시간: %ds", self._myPickCount, #self._selectedCardList, remainSec),
+    panelX,
+    panelY + 56,
+    panelW,
+    "center"
+  )
+
+  for _, entry in ipairs(self._cardOptionButtonList) do
+    local isSelected = containsString(self._selectedCardList, entry.cardId)
+    entry.button.color = isSelected and Constants.COLOR_BUTTON_SELECTED_ALT or Constants.COLOR_BUTTON
+    entry.button.isEnabled = not self._isMyCardLocked and not self._isCardPickPending
+    entry.button:draw(mouseX, mouseY)
+  end
+
+  self._cardConfirmButton.isEnabled = (not self._isMyCardLocked) and (not self._isCardPickPending) and (#self._selectedCardList == self._myPickCount)
+  self._cardConfirmButton:draw(mouseX, mouseY)
+
+  local lockText = self._isMyCardLocked and "내 선택 확정 완료" or "내 선택 대기중"
+  local opponentText = self._isOpponentCardLocked and "상대 확정 완료" or "상대 선택 중"
+  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+  love.graphics.printf(lockText .. " | " .. opponentText, panelX, panelY + panelH - 40, panelW, "center")
+end
+
 function MatchScene:draw()
   local mouseX, mouseY = self._app:getMouseWorldPosition()
 
@@ -362,11 +625,17 @@ function MatchScene:draw()
     self:drawStoneList(self._myStoneList, color)
   end
 
-  local canSubmit = self:isPlacementPhase() and (not self._isPlacementSubmitted) and (not self._isSubmitPending) and #self._myStoneList == Constants.STONE_COUNT_PER_PLAYER
-  self._submitButton.isEnabled = canSubmit
-  self._submitButton:draw(mouseX, mouseY)
+  if self:isPlacementPhase() then
+    local canSubmit = (not self._isPlacementSubmitted) and (not self._isSubmitPending) and #self._myStoneList == Constants.STONE_COUNT_PER_PLAYER
+    self._submitButton.isEnabled = canSubmit
+    self._submitButton:draw(mouseX, mouseY)
+  end
 
-  self:drawPlacementInfo()
+  if self._roomState.phase == Constants.PHASE_CARD_SELECT then
+    self:drawCardSelectPanel(mouseX, mouseY)
+  else
+    self:drawPlacementInfo()
+  end
 
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(self._statusColor)
@@ -375,6 +644,20 @@ end
 
 function MatchScene:mousepressed(mouseX, mouseY, button)
   if button ~= 1 then
+    return
+  end
+
+  if self:isCardSelectPhase() then
+    for _, entry in ipairs(self._cardOptionButtonList) do
+      if entry.button:isHovered(mouseX, mouseY) and entry.button.isEnabled then
+        entry.button:onClick()
+        return
+      end
+    end
+    if self._cardConfirmButton:isHovered(mouseX, mouseY) and self._cardConfirmButton.isEnabled then
+      self._cardConfirmButton:onClick()
+      return
+    end
     return
   end
 
@@ -435,6 +718,40 @@ function MatchScene:onWsEnvelope(envelope)
     return
   end
 
+  if envelope.type == "match.cards.dealt" then
+    local payload = envelope.payload or {}
+    if type(payload.pickCount) == "number" then
+      self._myPickCount = payload.pickCount
+    end
+    if type(payload.dealtCards) == "table" then
+      self._myDealtCardList = cloneStringList(payload.dealtCards)
+      self:rebuildCardOptionButtons()
+    end
+    if type(payload.selectEndsAtMs) == "number" then
+      self._cardSelectEndsAtMs = payload.selectEndsAtMs
+    end
+    self:setStatus("카드가 분배되었습니다. 선택 후 확정하세요.", Constants.COLOR_TEXT_SUB)
+    return
+  end
+
+  if envelope.type == "match.cards.locked" then
+    local payload = envelope.payload or {}
+    local myPlayerIndex = self:getMyPlayerIndex()
+    if payload.playerIndex == myPlayerIndex then
+      self._isMyCardLocked = true
+      self._isCardPickPending = false
+      if type(payload.pickedCards) == "table" then
+        self._myPickedCardList = cloneStringList(payload.pickedCards)
+        self._selectedCardList = cloneStringList(payload.pickedCards)
+      end
+      self:setStatus("내 카드 선택이 확정되었습니다.", Constants.COLOR_TEXT_SUB)
+    else
+      self._isOpponentCardLocked = true
+      self:setStatus("상대가 카드 선택을 확정했습니다.", Constants.COLOR_TEXT_SUB)
+    end
+    return
+  end
+
   if envelope.type == "match.result" then
     local payload = envelope.payload or {}
     self:setStatus("결과: winner P" .. tostring(payload.winnerPlayerIndex or "?"), Constants.COLOR_DANGER)
@@ -445,6 +762,9 @@ function MatchScene:onWsEnvelope(envelope)
     local payload = envelope.payload or {}
     if payload.code == "invalid_placement" or payload.code == "already_submitted" then
       self._isSubmitPending = false
+    end
+    if payload.code == "invalid_card_pick" or payload.code == "already_locked" then
+      self._isCardPickPending = false
     end
     self:setStatus("서버 오류: " .. tostring(payload.code or "unknown"), Constants.COLOR_DANGER)
     return

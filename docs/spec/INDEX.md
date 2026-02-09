@@ -23,3 +23,5 @@
 ## Local Test Guides
 - `docs/spec/PHASE_01_SERVER_LOCAL_TEST.md`
 - `docs/spec/PHASE_02_CLIENT_LOCAL_TEST.md`
+- `docs/spec/PHASE_03_PLACEMENT_REVEAL_LOCAL_TEST.md`
+- `docs/spec/PHASE_03_CARD_SELECT_LOCAL_TEST.md`

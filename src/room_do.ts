@@ -1,16 +1,23 @@
 import {
   BOARD_H,
   BOARD_W,
+  CARD_PICK_SEC,
+  CARD_POOL,
   CHAT_ALLOWED_PHASES,
   CHAT_MAX_LENGTH,
   CHAT_RATE_BURST,
   CHAT_RATE_MAX_MSG,
   CHAT_RATE_WINDOW_SEC,
   DEFAULT_PHASE,
+  GUEST_DEAL_COUNT,
+  GUEST_PICK_COUNT,
+  HOST_DEAL_COUNT,
+  HOST_PICK_COUNT,
   MIN_PLACE_DISTANCE,
   NICKNAME_MAX_LENGTH,
   NO_PLACE_BUFFER,
   PHASE_CARD_SELECT,
+  PHASE_PLAYING,
   PHASE_PLACEMENT_PRIVATE,
   PHASE_PLACEMENT_REVEAL,
   PHASE_RESULT,
@@ -27,13 +34,14 @@ const STORAGE_KEY = "room_state_v2";
 type LeaveReason = "leave" | "disconnect" | "kick" | "unknown";
 type ChatDeniedReason = "rate_limited" | "too_long" | "not_allowed_phase";
 type Role = "host" | "guest";
+type CardLockReason = "manual" | "timeout_auto";
 type Phase =
   | typeof PHASE_WAITING
   | typeof PHASE_TURN_ORDER
   | typeof PHASE_PLACEMENT_PRIVATE
   | typeof PHASE_PLACEMENT_REVEAL
   | typeof PHASE_CARD_SELECT
-  | "PLAYING"
+  | typeof PHASE_PLAYING
   | typeof PHASE_RESULT;
 
 interface StonePlacement {
@@ -56,9 +64,20 @@ interface MatchPlacementState {
   revealEndsAtMs: number | null;
 }
 
+interface MatchCardSelectState {
+  hostDealtCards: string[];
+  guestDealtCards: string[];
+  hostPickedCards: string[];
+  guestPickedCards: string[];
+  hostLocked: boolean;
+  guestLocked: boolean;
+  selectEndsAtMs: number | null;
+}
+
 interface MatchState {
   firstPlayerIndex: 1 | 2 | null;
   placement: MatchPlacementState;
+  cardSelect: MatchCardSelectState;
 }
 
 interface RoomState {
@@ -114,6 +133,15 @@ function createDefaultRoomState(): RoomState {
         hostSubmitted: false,
         guestSubmitted: false,
         revealEndsAtMs: null
+      },
+      cardSelect: {
+        hostDealtCards: [],
+        guestDealtCards: [],
+        hostPickedCards: [],
+        guestPickedCards: [],
+        hostLocked: false,
+        guestLocked: false,
+        selectEndsAtMs: null
       }
     },
     result: null
@@ -213,6 +241,38 @@ function parsePlacementStones(payload: unknown): StonePlacement[] | null {
   return parsed;
 }
 
+function parseCardPickList(payload: unknown): string[] | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const value = payload as { picks?: unknown };
+  if (!Array.isArray(value.picks)) {
+    return null;
+  }
+
+  const picks: string[] = [];
+  for (const raw of value.picks) {
+    if (typeof raw !== "string" || raw.trim().length === 0) {
+      return null;
+    }
+    picks.push(raw);
+  }
+  return picks;
+}
+
+function shuffleCards(cardList: string[]): string[] {
+  const shuffled = [...cardList];
+  for (let i = shuffled.length - 1; i > 0; i -= 1) {
+    const randomByte = new Uint8Array(1);
+    crypto.getRandomValues(randomByte);
+    const j = randomByte[0] % (i + 1);
+    const temp = shuffled[i];
+    shuffled[i] = shuffled[j];
+    shuffled[j] = temp;
+  }
+  return shuffled;
+}
+
 export class RoomDO {
   private readonly state: DurableObjectState;
   private readonly sessions = new Map<string, Session>();
@@ -259,6 +319,61 @@ export class RoomDO {
     const stored = await this.state.storage.get<RoomState>(STORAGE_KEY);
     if (stored) {
       this.room = stored;
+      this.ensureRoomStateShape();
+    }
+  }
+
+  private ensureRoomStateShape(): void {
+    if (!this.room.timers) {
+      this.room.timers = {};
+    }
+    if (!this.room.chatLimiter) {
+      this.room.chatLimiter = {};
+    }
+
+    if (!this.room.match) {
+      this.room.match = {
+        firstPlayerIndex: null,
+        placement: {
+          hostStones: [],
+          guestStones: [],
+          hostSubmitted: false,
+          guestSubmitted: false,
+          revealEndsAtMs: null
+        },
+        cardSelect: {
+          hostDealtCards: [],
+          guestDealtCards: [],
+          hostPickedCards: [],
+          guestPickedCards: [],
+          hostLocked: false,
+          guestLocked: false,
+          selectEndsAtMs: null
+        }
+      };
+      return;
+    }
+
+    if (!this.room.match.placement) {
+      this.room.match.placement = {
+        hostStones: [],
+        guestStones: [],
+        hostSubmitted: false,
+        guestSubmitted: false,
+        revealEndsAtMs: null
+      };
+    }
+
+    if (!this.room.match.cardSelect) {
+      this.room.match.cardSelect = {
+        hostDealtCards: [],
+        guestDealtCards: [],
+        hostPickedCards: [],
+        guestPickedCards: [],
+        hostLocked: false,
+        guestLocked: false,
+        selectEndsAtMs: null
+      };
     }
   }
 
@@ -286,6 +401,38 @@ export class RoomDO {
 
   private getSubmittedByRole(role: Role): boolean {
     return role === "host" ? this.room.match.placement.hostSubmitted : this.room.match.placement.guestSubmitted;
+  }
+
+  private getDealtCardsByRole(role: Role): string[] {
+    return role === "host" ? this.room.match.cardSelect.hostDealtCards : this.room.match.cardSelect.guestDealtCards;
+  }
+
+  private getPickedCardsByRole(role: Role): string[] {
+    return role === "host" ? this.room.match.cardSelect.hostPickedCards : this.room.match.cardSelect.guestPickedCards;
+  }
+
+  private setPickedCardsByRole(role: Role, pickedCards: string[]): void {
+    if (role === "host") {
+      this.room.match.cardSelect.hostPickedCards = pickedCards;
+      return;
+    }
+    this.room.match.cardSelect.guestPickedCards = pickedCards;
+  }
+
+  private isLockedByRole(role: Role): boolean {
+    return role === "host" ? this.room.match.cardSelect.hostLocked : this.room.match.cardSelect.guestLocked;
+  }
+
+  private setLockedByRole(role: Role, isLocked: boolean): void {
+    if (role === "host") {
+      this.room.match.cardSelect.hostLocked = isLocked;
+      return;
+    }
+    this.room.match.cardSelect.guestLocked = isLocked;
+  }
+
+  private getPickCountByRole(role: Role): number {
+    return role === "host" ? HOST_PICK_COUNT : GUEST_PICK_COUNT;
   }
 
   private buildRoomStatePayload(role: Role): Record<string, unknown> {
@@ -323,6 +470,16 @@ export class RoomDO {
           guestSubmitted: this.room.match.placement.guestSubmitted,
           revealStones,
           revealEndsAtMs: this.room.match.placement.revealEndsAtMs
+        },
+        cardSelect: {
+          myDealtCards: [...this.getDealtCardsByRole(role)],
+          myPickedCards: [...this.getPickedCardsByRole(role)],
+          myPickCount: this.getPickCountByRole(role),
+          myLocked: this.isLockedByRole(role),
+          opponentLocked: this.isLockedByRole(role === "host" ? "guest" : "host"),
+          hostLocked: this.room.match.cardSelect.hostLocked,
+          guestLocked: this.room.match.cardSelect.guestLocked,
+          selectEndsAtMs: this.room.match.cardSelect.selectEndsAtMs
         }
       },
       result: this.room.result
@@ -411,6 +568,15 @@ export class RoomDO {
           hostSubmitted: false,
           guestSubmitted: false,
           revealEndsAtMs: null
+        },
+        cardSelect: {
+          hostDealtCards: [],
+          guestDealtCards: [],
+          hostPickedCards: [],
+          guestPickedCards: [],
+          hostLocked: false,
+          guestLocked: false,
+          selectEndsAtMs: null
         }
       },
       result: null
@@ -527,6 +693,13 @@ export class RoomDO {
       playerIndex
     });
     this.broadcastRoomState();
+    if (this.room.phase === PHASE_CARD_SELECT && this.room.match.cardSelect.selectEndsAtMs) {
+      this.sendToSocket(socket, "match.cards.dealt", {
+        dealtCards: [...this.getDealtCardsByRole(role)],
+        pickCount: this.getPickCountByRole(role),
+        selectEndsAtMs: this.room.match.cardSelect.selectEndsAtMs
+      });
+    }
 
     socket.addEventListener("message", (event: MessageEvent) => {
       void this.handleMessage(token, event);
@@ -546,6 +719,21 @@ export class RoomDO {
     if (!this.room.host.connected || !this.room.guest.connected) {
       return;
     }
+
+    this.room.result = null;
+    this.room.match.placement.hostStones = [];
+    this.room.match.placement.guestStones = [];
+    this.room.match.placement.hostSubmitted = false;
+    this.room.match.placement.guestSubmitted = false;
+    this.room.match.placement.revealEndsAtMs = null;
+
+    this.room.match.cardSelect.hostDealtCards = [];
+    this.room.match.cardSelect.guestDealtCards = [];
+    this.room.match.cardSelect.hostPickedCards = [];
+    this.room.match.cardSelect.guestPickedCards = [];
+    this.room.match.cardSelect.hostLocked = false;
+    this.room.match.cardSelect.guestLocked = false;
+    this.room.match.cardSelect.selectEndsAtMs = null;
 
     const firstPlayerIndex: 1 | 2 = Math.random() < 0.5 ? 1 : 2;
     this.room.match.firstPlayerIndex = firstPlayerIndex;
@@ -613,6 +801,10 @@ export class RoomDO {
       await this.handlePlacementSubmit(token, session, envelope.payload);
       return;
     }
+    if (envelope.type === "client.match.cards.pick") {
+      await this.handleCardPick(token, session, envelope.payload);
+      return;
+    }
 
     this.sendToToken(token, "error.generic", errorPayload("unsupported_command"));
   }
@@ -663,6 +855,79 @@ export class RoomDO {
     if (this.room.match.placement.hostSubmitted && this.room.match.placement.guestSubmitted) {
       await this.startPlacementReveal();
     }
+  }
+
+  private isValidCardPick(role: Role, picks: string[]): boolean {
+    if (picks.length !== this.getPickCountByRole(role)) {
+      return false;
+    }
+
+    const dealtCards = this.getDealtCardsByRole(role);
+    const dealtSet = new Set(dealtCards);
+    const pickSet = new Set<string>();
+    for (const pick of picks) {
+      if (!dealtSet.has(pick)) {
+        return false;
+      }
+      if (pickSet.has(pick)) {
+        return false;
+      }
+      pickSet.add(pick);
+    }
+    return true;
+  }
+
+  private lockCards(role: Role, pickedCards: string[], reason: CardLockReason): void {
+    this.setPickedCardsByRole(role, [...pickedCards]);
+    this.setLockedByRole(role, true);
+    this.broadcast("match.cards.locked", {
+      playerIndex: this.getPlayerIndex(role),
+      pickedCards: [...pickedCards],
+      reason
+    });
+  }
+
+  private async finalizeCardSelectIfReady(): Promise<void> {
+    if (this.room.phase !== PHASE_CARD_SELECT) {
+      return;
+    }
+    if (!this.room.match.cardSelect.hostLocked || !this.room.match.cardSelect.guestLocked) {
+      return;
+    }
+
+    const fromPhase = this.room.phase;
+    this.room.phase = PHASE_PLAYING;
+    this.room.timers.phaseEndsAtMs = undefined;
+    this.room.match.cardSelect.selectEndsAtMs = null;
+
+    await this.saveState();
+    this.broadcast("match.phaseChanged", {
+      from: fromPhase,
+      to: PHASE_PLAYING
+    });
+    this.broadcastRoomState();
+  }
+
+  private async handleCardPick(token: string, session: Session, payload: unknown): Promise<void> {
+    if (this.room.phase !== PHASE_CARD_SELECT) {
+      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      return;
+    }
+    if (this.isLockedByRole(session.role)) {
+      this.sendToToken(token, "error.generic", errorPayload("already_locked"));
+      return;
+    }
+
+    const picks = parseCardPickList(payload);
+    if (!picks || !this.isValidCardPick(session.role, picks)) {
+      this.sendToToken(token, "error.generic", errorPayload("invalid_card_pick"));
+      return;
+    }
+
+    this.lockCards(session.role, picks, "manual");
+    await this.saveState();
+    this.broadcastRoomState();
+    await this.finalizeCardSelectIfReady();
   }
 
   private validatePlacementStones(stoneList: StonePlacement[], role: Role): boolean {
@@ -739,11 +1004,67 @@ export class RoomDO {
     await this.state.storage.setAlarm(phaseEndsAtMs);
   }
 
-  private async processPhaseTimers(nowMs: number): Promise<void> {
+  private initializeCardSelectDraft(): void {
+    if (this.room.match.cardSelect.hostDealtCards.length > 0 && this.room.match.cardSelect.guestDealtCards.length > 0) {
+      return;
+    }
+
+    const shuffledPool = shuffleCards([...CARD_POOL]);
+    this.room.match.cardSelect.hostDealtCards = shuffledPool.slice(0, HOST_DEAL_COUNT);
+    this.room.match.cardSelect.guestDealtCards = shuffledPool.slice(HOST_DEAL_COUNT, HOST_DEAL_COUNT + GUEST_DEAL_COUNT);
+    this.room.match.cardSelect.hostPickedCards = [];
+    this.room.match.cardSelect.guestPickedCards = [];
+    this.room.match.cardSelect.hostLocked = false;
+    this.room.match.cardSelect.guestLocked = false;
+  }
+
+  private sendCardDealsToConnectedClients(selectEndsAtMs: number): void {
+    for (const [token, session] of this.sessions.entries()) {
+      this.sendToToken(token, "match.cards.dealt", {
+        dealtCards: [...this.getDealtCardsByRole(session.role)],
+        pickCount: this.getPickCountByRole(session.role),
+        selectEndsAtMs
+      });
+    }
+  }
+
+  private async startCardSelectPhase(): Promise<void> {
     if (this.room.phase !== PHASE_PLACEMENT_REVEAL) {
       return;
     }
 
+    const fromPhase = this.room.phase;
+    const selectEndsAtMs = Date.now() + CARD_PICK_SEC * 1000;
+    this.room.phase = PHASE_CARD_SELECT;
+    this.room.timers.phaseEndsAtMs = selectEndsAtMs;
+    this.room.match.cardSelect.selectEndsAtMs = selectEndsAtMs;
+    this.initializeCardSelectDraft();
+
+    await this.saveState();
+
+    this.broadcast("match.phaseChanged", {
+      from: fromPhase,
+      to: PHASE_CARD_SELECT
+    });
+    this.sendCardDealsToConnectedClients(selectEndsAtMs);
+    this.broadcastRoomState();
+    await this.state.storage.setAlarm(selectEndsAtMs);
+  }
+
+  private autoLockMissingCardPicksOnTimeout(): void {
+    const roleList: Role[] = ["host", "guest"];
+    for (const role of roleList) {
+      if (this.isLockedByRole(role)) {
+        continue;
+      }
+      const dealtCards = this.getDealtCardsByRole(role);
+      const pickCount = this.getPickCountByRole(role);
+      const autoPickedCards = dealtCards.slice(0, pickCount);
+      this.lockCards(role, autoPickedCards, "timeout_auto");
+    }
+  }
+
+  private async processPhaseTimers(nowMs: number): Promise<void> {
     const phaseEndsAtMs = this.room.timers.phaseEndsAtMs;
     if (!phaseEndsAtMs) {
       return;
@@ -754,17 +1075,17 @@ export class RoomDO {
       return;
     }
 
-    const fromPhase = this.room.phase;
-    this.room.phase = PHASE_CARD_SELECT;
-    this.room.timers.phaseEndsAtMs = undefined;
+    if (this.room.phase === PHASE_PLACEMENT_REVEAL) {
+      await this.startCardSelectPhase();
+      return;
+    }
 
-    await this.saveState();
-
-    this.broadcast("match.phaseChanged", {
-      from: fromPhase,
-      to: PHASE_CARD_SELECT
-    });
-    this.broadcastRoomState();
+    if (this.room.phase === PHASE_CARD_SELECT) {
+      this.autoLockMissingCardPicksOnTimeout();
+      await this.saveState();
+      this.broadcastRoomState();
+      await this.finalizeCardSelectIfReady();
+    }
   }
 
   private async handleChatSend(token: string, session: Session, payload: unknown): Promise<void> {
