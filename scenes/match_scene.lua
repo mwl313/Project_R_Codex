@@ -171,7 +171,12 @@ function MatchScene.new(app)
     _isTurnShotPending = false,
     _isAimDragging = false,
     _aimStoneId = nil,
-    _lastAutoSnapshotTurnIndex = nil
+    _lastAutoSnapshotTurnIndex = nil,
+    _stoneVelocityMap = {},
+    _simAccumulatorSec = 0,
+    _simElapsedSec = 0,
+    _isShotSimulating = false,
+    _shouldSendSnapshotAfterSim = false
   }
   setmetatable(instance, MatchScene)
 
@@ -228,6 +233,11 @@ function MatchScene:enter(params)
   self._isAimDragging = false
   self._aimStoneId = nil
   self._lastAutoSnapshotTurnIndex = nil
+  self._stoneVelocityMap = {}
+  self._simAccumulatorSec = 0
+  self._simElapsedSec = 0
+  self._isShotSimulating = false
+  self._shouldSendSnapshotAfterSim = false
 
   if params and type(params.roomState) == "table" then
     self:applyRoomState(params.roomState)
@@ -378,7 +388,57 @@ function MatchScene:getPlayingStoneById(stoneId)
   return nil
 end
 
-function MatchScene:applySimpleShotToPlayingState(shotPayload)
+function MatchScene:getStoneVelocity(stoneId)
+  local velocity = self._stoneVelocityMap[stoneId]
+  if not velocity then
+    velocity = { vx = 0, vy = 0 }
+    self._stoneVelocityMap[stoneId] = velocity
+  end
+  return velocity
+end
+
+function MatchScene:resetStoneVelocities()
+  self._stoneVelocityMap = {}
+  for _, stone in ipairs(self._playingStoneList) do
+    self._stoneVelocityMap[stone.id] = { vx = 0, vy = 0 }
+  end
+end
+
+function MatchScene:syncStoneVelocityMap()
+  local nextVelocityMap = {}
+  for _, stone in ipairs(self._playingStoneList) do
+    local velocity = self._stoneVelocityMap[stone.id]
+    if velocity then
+      nextVelocityMap[stone.id] = { vx = velocity.vx, vy = velocity.vy }
+    else
+      nextVelocityMap[stone.id] = { vx = 0, vy = 0 }
+    end
+    if stone.alive == false then
+      nextVelocityMap[stone.id].vx = 0
+      nextVelocityMap[stone.id].vy = 0
+    end
+  end
+  self._stoneVelocityMap = nextVelocityMap
+end
+
+function MatchScene:startShotSimulation()
+  self._simAccumulatorSec = 0
+  self._simElapsedSec = 0
+  self._isShotSimulating = true
+end
+
+function MatchScene:stopShotSimulation()
+  self._simAccumulatorSec = 0
+  self._simElapsedSec = 0
+  self._isShotSimulating = false
+
+  if self._shouldSendSnapshotAfterSim then
+    self._shouldSendSnapshotAfterSim = false
+    self:sendHostSnapshotIfNeeded(self._playingTurnIndex, "sim_done")
+  end
+end
+
+function MatchScene:applyShotImpulse(shotPayload)
   if type(shotPayload) ~= "table" then
     return
   end
@@ -394,15 +454,136 @@ function MatchScene:applySimpleShotToPlayingState(shotPayload)
     return
   end
 
-  local distance = math.max(0, shotPayload.power / Constants.POWER_PER_PIXEL)
-  local nextX = stone.x + shotPayload.dirX * distance
-  local nextY = stone.y + shotPayload.dirY * distance
-  local isInside = nextX >= Constants.STONE_RADIUS and nextX <= Constants.BOARD_W - Constants.STONE_RADIUS and nextY >= Constants.STONE_RADIUS and nextY <= Constants.BOARD_H - Constants.STONE_RADIUS
+  local directionLength = math.sqrt(shotPayload.dirX * shotPayload.dirX + shotPayload.dirY * shotPayload.dirY)
+  if directionLength <= 0 then
+    return
+  end
 
-  stone.x = nextX
-  stone.y = nextY
-  if not isInside then
-    stone.alive = false
+  local velocity = self:getStoneVelocity(stone.id)
+  local speed = math.max(0, shotPayload.power * Constants.SHOT_SPEED_SCALE)
+  velocity.vx = shotPayload.dirX / directionLength * speed
+  velocity.vy = shotPayload.dirY / directionLength * speed
+  self:startShotSimulation()
+end
+
+function MatchScene:resolveStoneCollision(firstStone, secondStone)
+  local dx = secondStone.x - firstStone.x
+  local dy = secondStone.y - firstStone.y
+  local distanceSq = dx * dx + dy * dy
+  local minDistance = Constants.STONE_RADIUS * 2
+  local minDistanceSq = minDistance * minDistance
+
+  if distanceSq >= minDistanceSq then
+    return
+  end
+
+  local distance = math.sqrt(distanceSq)
+  if distance <= 0 then
+    dx = 0.001
+    dy = 0
+    distance = 0.001
+  end
+
+  local normalX = dx / distance
+  local normalY = dy / distance
+  local penetration = minDistance - distance
+  local correctionX = normalX * penetration * 0.5
+  local correctionY = normalY * penetration * 0.5
+  firstStone.x = firstStone.x - correctionX
+  firstStone.y = firstStone.y - correctionY
+  secondStone.x = secondStone.x + correctionX
+  secondStone.y = secondStone.y + correctionY
+
+  local firstVelocity = self:getStoneVelocity(firstStone.id)
+  local secondVelocity = self:getStoneVelocity(secondStone.id)
+  local relativeX = secondVelocity.vx - firstVelocity.vx
+  local relativeY = secondVelocity.vy - firstVelocity.vy
+  local normalSpeed = relativeX * normalX + relativeY * normalY
+  if normalSpeed >= 0 then
+    return
+  end
+
+  local impulse = -(1 + Constants.PHYSICS_RESTITUTION) * normalSpeed * 0.5
+  firstVelocity.vx = firstVelocity.vx - impulse * normalX
+  firstVelocity.vy = firstVelocity.vy - impulse * normalY
+  secondVelocity.vx = secondVelocity.vx + impulse * normalX
+  secondVelocity.vy = secondVelocity.vy + impulse * normalY
+end
+
+function MatchScene:simulateShotStep(stepSec)
+  local aliveStoneList = {}
+  local minX = Constants.STONE_RADIUS
+  local maxX = Constants.BOARD_W - Constants.STONE_RADIUS
+  local minY = Constants.STONE_RADIUS
+  local maxY = Constants.BOARD_H - Constants.STONE_RADIUS
+  local damping = math.max(0, 1 - Constants.PHYSICS_DAMPING_PER_SEC * stepSec)
+
+  for _, stone in ipairs(self._playingStoneList) do
+    local velocity = self:getStoneVelocity(stone.id)
+    if stone.alive ~= false then
+      stone.x = stone.x + velocity.vx * stepSec
+      stone.y = stone.y + velocity.vy * stepSec
+      aliveStoneList[#aliveStoneList + 1] = stone
+    else
+      velocity.vx = 0
+      velocity.vy = 0
+    end
+  end
+
+  for firstIndex = 1, #aliveStoneList - 1 do
+    for secondIndex = firstIndex + 1, #aliveStoneList do
+      self:resolveStoneCollision(aliveStoneList[firstIndex], aliveStoneList[secondIndex])
+    end
+  end
+
+  for _, stone in ipairs(self._playingStoneList) do
+    local velocity = self:getStoneVelocity(stone.id)
+    if stone.alive ~= false then
+      if stone.x < minX or stone.x > maxX or stone.y < minY or stone.y > maxY then
+        stone.alive = false
+        velocity.vx = 0
+        velocity.vy = 0
+      else
+        velocity.vx = velocity.vx * damping
+        velocity.vy = velocity.vy * damping
+        local speed = math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy)
+        if speed < Constants.PHYSICS_STOP_SPEED then
+          velocity.vx = 0
+          velocity.vy = 0
+        end
+      end
+    end
+  end
+end
+
+function MatchScene:hasAnyStoneInMotion()
+  for _, stone in ipairs(self._playingStoneList) do
+    if stone.alive ~= false then
+      local velocity = self:getStoneVelocity(stone.id)
+      local speed = math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy)
+      if speed >= Constants.PHYSICS_STOP_SPEED then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+function MatchScene:updateShotSimulation(dt)
+  if not self._isShotSimulating then
+    return
+  end
+
+  self._simAccumulatorSec = self._simAccumulatorSec + math.min(dt, 0.05)
+  while self._simAccumulatorSec >= Constants.PHYSICS_FIXED_STEP_SEC do
+    self:simulateShotStep(Constants.PHYSICS_FIXED_STEP_SEC)
+    self._simAccumulatorSec = self._simAccumulatorSec - Constants.PHYSICS_FIXED_STEP_SEC
+    self._simElapsedSec = self._simElapsedSec + Constants.PHYSICS_FIXED_STEP_SEC
+
+    if (not self:hasAnyStoneInMotion()) or self._simElapsedSec >= Constants.PHYSICS_MAX_SIM_SEC then
+      self:stopShotSimulation()
+      break
+    end
   end
 end
 
@@ -617,6 +798,10 @@ function MatchScene:sendHostSnapshotIfNeeded(turnIndex, reason)
   if self._lastAutoSnapshotTurnIndex == turnIndex then
     return
   end
+  if self._isShotSimulating then
+    self._shouldSendSnapshotAfterSim = true
+    return
+  end
 
   self._lastAutoSnapshotTurnIndex = turnIndex
   self._app:sendWsEnvelope("client.match.turn.snapshot", {
@@ -696,6 +881,12 @@ function MatchScene:applyRoomState(payload)
 
   local playing = payload.match and payload.match.playing or nil
   if type(playing) == "table" then
+    local turnIndexFromPayload = type(playing.turnIndex) == "number" and playing.turnIndex or nil
+    local canOverwriteStoneList = true
+    if self._isShotSimulating and turnIndexFromPayload and turnIndexFromPayload == self._playingTurnIndex then
+      canOverwriteStoneList = false
+    end
+
     if type(playing.turnIndex) == "number" then
       self._playingTurnIndex = playing.turnIndex
     end
@@ -721,9 +912,16 @@ function MatchScene:applyRoomState(payload)
         self._aimStoneId = nil
       end
     end
-    if type(playing.stones) == "table" then
+    if canOverwriteStoneList and type(playing.stones) == "table" then
       self._playingStoneList = clonePlayingStoneList(playing.stones)
+      self:syncStoneVelocityMap()
     end
+  end
+
+  if payload.phase ~= Constants.PHASE_PLAYING then
+    self._shouldSendSnapshotAfterSim = false
+    self:stopShotSimulation()
+    self:resetStoneVelocities()
   end
 
   if payload.phase == Constants.PHASE_PLACEMENT_PRIVATE then
@@ -746,7 +944,10 @@ function MatchScene:applyRoomState(payload)
   end
 end
 
-function MatchScene:update(_dt)
+function MatchScene:update(dt)
+  if self:isPlayingPhase() then
+    self:updateShotSimulation(dt)
+  end
 end
 
 function MatchScene:drawBoardFrame()
@@ -830,6 +1031,9 @@ function MatchScene:drawPlayingInfo()
     stateText = "스냅샷 대기"
   elseif self._isPlayingShotCommitted then
     stateText = "발사 완료"
+    if self._isShotSimulating then
+      stateText = "물리 시뮬레이션 중"
+    end
   elseif self._isTurnShotPending then
     stateText = "발사 요청 전송 중"
   end
@@ -1129,6 +1333,10 @@ function MatchScene:onWsEnvelope(envelope)
     self._isTurnShotPending = false
     self._isAimDragging = false
     self._aimStoneId = nil
+    self._lastAutoSnapshotTurnIndex = nil
+    self._shouldSendSnapshotAfterSim = false
+    self:stopShotSimulation()
+    self:resetStoneVelocities()
     if self:isMyTurn() then
       self:setStatus("내 턴 시작. 드래그해서 발사하세요.", Constants.COLOR_TEXT_SUB)
     else
@@ -1142,7 +1350,7 @@ function MatchScene:onWsEnvelope(envelope)
     if type(payload.turnIndex) == "number" then
       self._playingTurnIndex = payload.turnIndex
     end
-    self:applySimpleShotToPlayingState(payload)
+    self:applyShotImpulse(payload)
     self._isPlayingShotCommitted = true
     self._isTurnShotPending = false
     self._isAimDragging = false
@@ -1173,7 +1381,10 @@ function MatchScene:onWsEnvelope(envelope)
     end
     if type(payload.stones) == "table" then
       self._playingStoneList = clonePlayingStoneList(payload.stones)
+      self:resetStoneVelocities()
     end
+    self._shouldSendSnapshotAfterSim = false
+    self:stopShotSimulation()
     self._isPlayingAwaitingSnapshot = false
     self._isPlayingShotCommitted = false
     self._isTurnShotPending = false
@@ -1200,6 +1411,9 @@ function MatchScene:onWsEnvelope(envelope)
       self._isPlayingShotCommitted = false
       self._isAimDragging = false
       self._aimStoneId = nil
+      self._shouldSendSnapshotAfterSim = false
+      self:stopShotSimulation()
+      self:resetStoneVelocities()
     end
     self:setStatus("서버 오류: " .. tostring(payload.code or "unknown"), Constants.COLOR_DANGER)
     return
