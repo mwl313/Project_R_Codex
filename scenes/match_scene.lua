@@ -18,6 +18,7 @@ local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
 local EffectManager = require("effects.effect_manager")
 local Abilities = require("abilities")
+local GameMechanics = require("game_mechanics")
 
 local MatchScene = {}
 MatchScene.__index = MatchScene
@@ -84,10 +85,6 @@ local function cloneObstacleList(obstacleList)
     }
   end
   return cloned
-end
-
-local function clamp(value, minValue, maxValue)
-  return math.max(minValue, math.min(maxValue, value))
 end
 
 local function listToSet(valueList)
@@ -520,300 +517,48 @@ function MatchScene:applyShockwaveFromPoint(centerX, centerY)
   Abilities.applyShockwaveFromPoint(self, centerX, centerY)
 end
 
+function MatchScene:applyInvincibleCollisionResponse(firstInvincible, secondInvincible, normalX, normalY, firstVelocity, secondVelocity)
+  return Abilities.applyInvincibleCollisionResponse(firstInvincible, secondInvincible, normalX, normalY, firstVelocity, secondVelocity)
+end
+
 function MatchScene:resetStoneVelocities()
-  self._stoneVelocityMap = {}
-  for _, stone in ipairs(self._playingStoneList) do
-    self._stoneVelocityMap[stone.id] = { vx = 0, vy = 0 }
-  end
+  GameMechanics.resetStoneVelocities(self)
 end
 
 function MatchScene:resolveObstacleCollision(stone, obstacle)
-  local halfW = (obstacle.width or Constants.ROCK_OBSTACLE_WIDTH) * 0.5
-  local halfH = (obstacle.height or Constants.ROCK_OBSTACLE_HEIGHT) * 0.5
-  local left = obstacle.x - halfW
-  local right = obstacle.x + halfW
-  local top = obstacle.y - halfH
-  local bottom = obstacle.y + halfH
-  local closestX = clamp(stone.x, left, right)
-  local closestY = clamp(stone.y, top, bottom)
-  local dx = stone.x - closestX
-  local dy = stone.y - closestY
-  local distanceSq = dx * dx + dy * dy
-  local minDistanceSq = Constants.STONE_RADIUS * Constants.STONE_RADIUS
-
-  if distanceSq >= minDistanceSq then
-    return false, nil, nil
-  end
-
-  local normalX, normalY
-  local overlap
-
-  if distanceSq > 0 then
-    local distance = math.sqrt(distanceSq)
-    normalX = dx / distance
-    normalY = dy / distance
-    overlap = Constants.STONE_RADIUS - distance
-  else
-    local penLeft = math.abs(stone.x - left)
-    local penRight = math.abs(right - stone.x)
-    local penTop = math.abs(stone.y - top)
-    local penBottom = math.abs(bottom - stone.y)
-    local minPen = math.min(penLeft, penRight, penTop, penBottom)
-    if minPen == penLeft then
-      normalX, normalY = -1, 0
-      overlap = Constants.STONE_RADIUS + penLeft
-    elseif minPen == penRight then
-      normalX, normalY = 1, 0
-      overlap = Constants.STONE_RADIUS + penRight
-    elseif minPen == penTop then
-      normalX, normalY = 0, -1
-      overlap = Constants.STONE_RADIUS + penTop
-    else
-      normalX, normalY = 0, 1
-      overlap = Constants.STONE_RADIUS + penBottom
-    end
-  end
-
-  stone.x = stone.x + normalX * overlap
-  stone.y = stone.y + normalY * overlap
-
-  local velocity = self:getStoneVelocity(stone.id)
-  local normalSpeed = velocity.vx * normalX + velocity.vy * normalY
-  if normalSpeed < 0 then
-    local reflectScale = -(1 + Constants.PHYSICS_RESTITUTION) * normalSpeed
-    velocity.vx = velocity.vx + reflectScale * normalX
-    velocity.vy = velocity.vy + reflectScale * normalY
-  end
-  return true, closestX, closestY
+  return GameMechanics.resolveObstacleCollision(self, stone, obstacle)
 end
 
 function MatchScene:syncStoneVelocityMap()
-  local nextVelocityMap = {}
-  for _, stone in ipairs(self._playingStoneList) do
-    local velocity = self._stoneVelocityMap[stone.id]
-    if velocity then
-      nextVelocityMap[stone.id] = { vx = velocity.vx, vy = velocity.vy }
-    else
-      nextVelocityMap[stone.id] = { vx = 0, vy = 0 }
-    end
-    if stone.alive == false then
-      nextVelocityMap[stone.id].vx = 0
-      nextVelocityMap[stone.id].vy = 0
-    end
-  end
-  self._stoneVelocityMap = nextVelocityMap
+  GameMechanics.syncStoneVelocityMap(self)
 end
 
 function MatchScene:startShotSimulation()
-  self._simAccumulatorSec = 0
-  self._simElapsedSec = 0
-  self._isShotSimulating = true
+  GameMechanics.startShotSimulation(self)
 end
 
 function MatchScene:stopShotSimulation()
-  self._simAccumulatorSec = 0
-  self._simElapsedSec = 0
-  self._isShotSimulating = false
-
-  if self._shouldSendSnapshotAfterSim then
-    self._shouldSendSnapshotAfterSim = false
-    self:sendHostSnapshotIfNeeded(self._playingTurnIndex, "sim_done")
-  end
+  GameMechanics.stopShotSimulation(self)
 end
 
 function MatchScene:applyShotImpulse(shotPayload)
-  if type(shotPayload) ~= "table" then
-    return
-  end
-  if type(shotPayload.stoneId) ~= "string" then
-    return
-  end
-  if type(shotPayload.dirX) ~= "number" or type(shotPayload.dirY) ~= "number" or type(shotPayload.power) ~= "number" then
-    return
-  end
-
-  local stone = self:getPlayingStoneById(shotPayload.stoneId)
-  if not stone or stone.alive == false then
-    return
-  end
-
-  local directionLength = math.sqrt(shotPayload.dirX * shotPayload.dirX + shotPayload.dirY * shotPayload.dirY)
-  if directionLength <= 0 then
-    return
-  end
-
-  local velocity = self:getStoneVelocity(stone.id)
-  local speed = math.max(0, shotPayload.power * Constants.SHOT_SPEED_SCALE)
-  velocity.vx = shotPayload.dirX / directionLength * speed
-  velocity.vy = shotPayload.dirY / directionLength * speed
-  if self._shockwaveOwnerPlayerIndex and stone.ownerPlayerIndex == self._shockwaveOwnerPlayerIndex then
-    self._shockwaveSourceStoneId = stone.id
-  else
-    self._shockwaveSourceStoneId = nil
-  end
-  self:startShotSimulation()
+  GameMechanics.applyShotImpulse(self, shotPayload)
 end
 
 function MatchScene:resolveStoneCollision(firstStone, secondStone)
-  local dx = secondStone.x - firstStone.x
-  local dy = secondStone.y - firstStone.y
-  local distanceSq = dx * dx + dy * dy
-  local minDistance = Constants.STONE_RADIUS * 2
-  local minDistanceSq = minDistance * minDistance
-
-  if distanceSq >= minDistanceSq then
-    return false, nil, nil
-  end
-
-  local distance = math.sqrt(distanceSq)
-  if distance <= 0 then
-    dx = 0.001
-    dy = 0
-    distance = 0.001
-  end
-
-  local normalX = dx / distance
-  local normalY = dy / distance
-  local penetration = minDistance - distance
-  local firstInvincible = self:isInvincibleOnCurrentTurn(firstStone.ownerPlayerIndex)
-  local secondInvincible = self:isInvincibleOnCurrentTurn(secondStone.ownerPlayerIndex)
-
-  if firstInvincible and not secondInvincible then
-    secondStone.x = secondStone.x + normalX * penetration
-    secondStone.y = secondStone.y + normalY * penetration
-  elseif secondInvincible and not firstInvincible then
-    firstStone.x = firstStone.x - normalX * penetration
-    firstStone.y = firstStone.y - normalY * penetration
-  else
-    local correctionX = normalX * penetration * 0.5
-    local correctionY = normalY * penetration * 0.5
-    firstStone.x = firstStone.x - correctionX
-    firstStone.y = firstStone.y - correctionY
-    secondStone.x = secondStone.x + correctionX
-    secondStone.y = secondStone.y + correctionY
-  end
-
-  local firstVelocity = self:getStoneVelocity(firstStone.id)
-  local secondVelocity = self:getStoneVelocity(secondStone.id)
-  if Abilities.applyInvincibleCollisionResponse(firstInvincible, secondInvincible, normalX, normalY, firstVelocity, secondVelocity) then
-    local collisionX = (firstStone.x + secondStone.x) * 0.5
-    local collisionY = (firstStone.y + secondStone.y) * 0.5
-    return true, collisionX, collisionY
-  end
-
-  local relativeX = secondVelocity.vx - firstVelocity.vx
-  local relativeY = secondVelocity.vy - firstVelocity.vy
-  local normalSpeed = relativeX * normalX + relativeY * normalY
-  if normalSpeed < 0 then
-    local impulse = -(1 + Constants.PHYSICS_RESTITUTION) * normalSpeed * 0.5
-    if not firstInvincible then
-      firstVelocity.vx = firstVelocity.vx - impulse * normalX
-      firstVelocity.vy = firstVelocity.vy - impulse * normalY
-    end
-    if not secondInvincible then
-      secondVelocity.vx = secondVelocity.vx + impulse * normalX
-      secondVelocity.vy = secondVelocity.vy + impulse * normalY
-    end
-  end
-  local collisionX = (firstStone.x + secondStone.x) * 0.5
-  local collisionY = (firstStone.y + secondStone.y) * 0.5
-  return true, collisionX, collisionY
+  return GameMechanics.resolveStoneCollision(self, firstStone, secondStone)
 end
 
 function MatchScene:simulateShotStep(stepSec)
-  local aliveStoneList = {}
-  local minX = Constants.STONE_RADIUS
-  local maxX = Constants.BOARD_W - Constants.STONE_RADIUS
-  local minY = Constants.STONE_RADIUS
-  local maxY = Constants.BOARD_H - Constants.STONE_RADIUS
-  local damping = math.max(0, 1 - Constants.PHYSICS_DAMPING_PER_SEC * stepSec)
-
-  for _, stone in ipairs(self._playingStoneList) do
-    local velocity = self:getStoneVelocity(stone.id)
-    if stone.alive ~= false then
-      stone.x = stone.x + velocity.vx * stepSec
-      stone.y = stone.y + velocity.vy * stepSec
-      aliveStoneList[#aliveStoneList + 1] = stone
-    else
-      velocity.vx = 0
-      velocity.vy = 0
-    end
-  end
-
-  for _, stone in ipairs(aliveStoneList) do
-    for _, obstacle in ipairs(self._obstacleList) do
-      local collided = self:resolveObstacleCollision(stone, obstacle)
-      if collided and self:isShockwaveShotStone(stone.id) then
-        self:applyShockwaveFromPoint(stone.x, stone.y)
-      end
-    end
-  end
-
-  for firstIndex = 1, #aliveStoneList - 1 do
-    for secondIndex = firstIndex + 1, #aliveStoneList do
-      local firstStone = aliveStoneList[firstIndex]
-      local secondStone = aliveStoneList[secondIndex]
-      local collided = self:resolveStoneCollision(firstStone, secondStone)
-      if collided and self:isShockwaveShotStone(firstStone.id) then
-        self:applyShockwaveFromPoint(firstStone.x, firstStone.y)
-      elseif collided and self:isShockwaveShotStone(secondStone.id) then
-        self:applyShockwaveFromPoint(secondStone.x, secondStone.y)
-      end
-    end
-  end
-
-  for _, stone in ipairs(self._playingStoneList) do
-    local velocity = self:getStoneVelocity(stone.id)
-    if stone.alive ~= false then
-      if stone.x < minX or stone.x > maxX or stone.y < minY or stone.y > maxY then
-        if self:isShockwaveShotStone(stone.id) then
-          self:applyShockwaveFromPoint(stone.x, stone.y)
-        end
-        stone.alive = false
-        velocity.vx = 0
-        velocity.vy = 0
-      else
-        velocity.vx = velocity.vx * damping
-        velocity.vy = velocity.vy * damping
-        local speed = math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy)
-        if speed < Constants.PHYSICS_STOP_SPEED then
-          velocity.vx = 0
-          velocity.vy = 0
-        end
-      end
-    end
-  end
+  GameMechanics.simulateShotStep(self, stepSec)
 end
 
 function MatchScene:hasAnyStoneInMotion()
-  for _, stone in ipairs(self._playingStoneList) do
-    if stone.alive ~= false then
-      local velocity = self:getStoneVelocity(stone.id)
-      local speed = math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy)
-      if speed >= Constants.PHYSICS_STOP_SPEED then
-        return true
-      end
-    end
-  end
-  return false
+  return GameMechanics.hasAnyStoneInMotion(self)
 end
 
 function MatchScene:updateShotSimulation(dt)
-  if not self._isShotSimulating then
-    return
-  end
-
-  self._simAccumulatorSec = self._simAccumulatorSec + math.min(dt, 0.05)
-  while self._simAccumulatorSec >= Constants.PHYSICS_FIXED_STEP_SEC do
-    self:simulateShotStep(Constants.PHYSICS_FIXED_STEP_SEC)
-    self._simAccumulatorSec = self._simAccumulatorSec - Constants.PHYSICS_FIXED_STEP_SEC
-    self._simElapsedSec = self._simElapsedSec + Constants.PHYSICS_FIXED_STEP_SEC
-
-    if (not self:hasAnyStoneInMotion()) or self._simElapsedSec >= Constants.PHYSICS_MAX_SIM_SEC then
-      self:stopShotSimulation()
-      break
-    end
-  end
+  GameMechanics.updateShotSimulation(self, dt)
 end
 
 function MatchScene:addPlacementByWorld(worldX, worldY)

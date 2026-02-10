@@ -40,6 +40,9 @@ local function createSceneFactoryTable()
     roomSearch = function(app)
       return require("scenes.room_search_scene").new(app)
     end,
+    singleDummy = function(app)
+      return require("scenes.single_dummy_scene").new(app)
+    end,
     waitingRoom = function(app)
       return require("scenes.waiting_room_scene").new(app)
     end,
@@ -218,6 +221,10 @@ end
 
 function App:goRoomSearch(params)
   self._sceneManager:setScene("roomSearch", params)
+end
+
+function App:goSingleDummy(params)
+  self._sceneManager:setScene("singleDummy", params)
 end
 
 function App:goWaitingRoom(params)

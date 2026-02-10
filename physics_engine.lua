@@ -1,0 +1,274 @@
+--[[
+파일명: physics_engine.lua
+모듈명: PhysicsEngine
+
+역할:
+- 공용 물리 시뮬레이션(충돌/감쇠/정지/아웃)을 담당한다.
+- 멀티/싱글 씬에서 동일한 물리 규칙을 재사용할 수 있게 한다.
+
+외부에서 사용 가능한 함수:
+- PhysicsEngine.resolveObstacleCollision(context, stone, obstacle)
+- PhysicsEngine.resolveStoneCollision(context, firstStone, secondStone)
+- PhysicsEngine.simulateShotStep(context, stepSec)
+- PhysicsEngine.hasAnyStoneInMotion(context)
+
+주의:
+- context는 stoneList/obstacleList/getStoneVelocity 콜백을 제공해야 한다.
+]]
+
+local Constants = require("constants")
+
+local PhysicsEngine = {}
+
+local function clamp(value, minValue, maxValue)
+  return math.max(minValue, math.min(maxValue, value))
+end
+
+local function getRules(context)
+  return (context and context.constants) or Constants
+end
+
+function PhysicsEngine.resolveObstacleCollision(context, stone, obstacle)
+  if type(context) ~= "table" or type(stone) ~= "table" or type(obstacle) ~= "table" then
+    return false, nil, nil
+  end
+  if type(context.getStoneVelocity) ~= "function" then
+    return false, nil, nil
+  end
+
+  local rules = getRules(context)
+  local halfW = (obstacle.width or rules.ROCK_OBSTACLE_WIDTH) * 0.5
+  local halfH = (obstacle.height or rules.ROCK_OBSTACLE_HEIGHT) * 0.5
+  local left = obstacle.x - halfW
+  local right = obstacle.x + halfW
+  local top = obstacle.y - halfH
+  local bottom = obstacle.y + halfH
+  local closestX = clamp(stone.x, left, right)
+  local closestY = clamp(stone.y, top, bottom)
+  local dx = stone.x - closestX
+  local dy = stone.y - closestY
+  local distanceSq = dx * dx + dy * dy
+  local minDistanceSq = rules.STONE_RADIUS * rules.STONE_RADIUS
+
+  if distanceSq >= minDistanceSq then
+    return false, nil, nil
+  end
+
+  local normalX
+  local normalY
+  local overlap
+
+  if distanceSq > 0 then
+    local distance = math.sqrt(distanceSq)
+    normalX = dx / distance
+    normalY = dy / distance
+    overlap = rules.STONE_RADIUS - distance
+  else
+    local penLeft = math.abs(stone.x - left)
+    local penRight = math.abs(right - stone.x)
+    local penTop = math.abs(stone.y - top)
+    local penBottom = math.abs(bottom - stone.y)
+    local minPen = math.min(penLeft, penRight, penTop, penBottom)
+    if minPen == penLeft then
+      normalX, normalY = -1, 0
+      overlap = rules.STONE_RADIUS + penLeft
+    elseif minPen == penRight then
+      normalX, normalY = 1, 0
+      overlap = rules.STONE_RADIUS + penRight
+    elseif minPen == penTop then
+      normalX, normalY = 0, -1
+      overlap = rules.STONE_RADIUS + penTop
+    else
+      normalX, normalY = 0, 1
+      overlap = rules.STONE_RADIUS + penBottom
+    end
+  end
+
+  stone.x = stone.x + normalX * overlap
+  stone.y = stone.y + normalY * overlap
+
+  local velocity = context.getStoneVelocity(stone.id)
+  local normalSpeed = velocity.vx * normalX + velocity.vy * normalY
+  if normalSpeed < 0 then
+    local reflectScale = -(1 + rules.PHYSICS_RESTITUTION) * normalSpeed
+    velocity.vx = velocity.vx + reflectScale * normalX
+    velocity.vy = velocity.vy + reflectScale * normalY
+  end
+
+  return true, closestX, closestY
+end
+
+function PhysicsEngine.resolveStoneCollision(context, firstStone, secondStone)
+  if type(context) ~= "table" or type(firstStone) ~= "table" or type(secondStone) ~= "table" then
+    return false, nil, nil
+  end
+  if type(context.getStoneVelocity) ~= "function" or type(context.isInvincibleOnCurrentTurn) ~= "function" then
+    return false, nil, nil
+  end
+
+  local rules = getRules(context)
+  local dx = secondStone.x - firstStone.x
+  local dy = secondStone.y - firstStone.y
+  local distanceSq = dx * dx + dy * dy
+  local minDistance = rules.STONE_RADIUS * 2
+  local minDistanceSq = minDistance * minDistance
+
+  if distanceSq >= minDistanceSq then
+    return false, nil, nil
+  end
+
+  local distance = math.sqrt(distanceSq)
+  if distance <= 0 then
+    dx = 0.001
+    dy = 0
+    distance = 0.001
+  end
+
+  local normalX = dx / distance
+  local normalY = dy / distance
+  local penetration = minDistance - distance
+  local firstInvincible = context.isInvincibleOnCurrentTurn(firstStone.ownerPlayerIndex)
+  local secondInvincible = context.isInvincibleOnCurrentTurn(secondStone.ownerPlayerIndex)
+
+  if firstInvincible and not secondInvincible then
+    secondStone.x = secondStone.x + normalX * penetration
+    secondStone.y = secondStone.y + normalY * penetration
+  elseif secondInvincible and not firstInvincible then
+    firstStone.x = firstStone.x - normalX * penetration
+    firstStone.y = firstStone.y - normalY * penetration
+  else
+    local correctionX = normalX * penetration * 0.5
+    local correctionY = normalY * penetration * 0.5
+    firstStone.x = firstStone.x - correctionX
+    firstStone.y = firstStone.y - correctionY
+    secondStone.x = secondStone.x + correctionX
+    secondStone.y = secondStone.y + correctionY
+  end
+
+  local firstVelocity = context.getStoneVelocity(firstStone.id)
+  local secondVelocity = context.getStoneVelocity(secondStone.id)
+  if type(context.applyInvincibleCollisionResponse) == "function" then
+    if context.applyInvincibleCollisionResponse(firstInvincible, secondInvincible, normalX, normalY, firstVelocity, secondVelocity) then
+      local collisionX = (firstStone.x + secondStone.x) * 0.5
+      local collisionY = (firstStone.y + secondStone.y) * 0.5
+      return true, collisionX, collisionY
+    end
+  end
+
+  local relativeX = secondVelocity.vx - firstVelocity.vx
+  local relativeY = secondVelocity.vy - firstVelocity.vy
+  local normalSpeed = relativeX * normalX + relativeY * normalY
+  if normalSpeed < 0 then
+    local impulse = -(1 + rules.PHYSICS_RESTITUTION) * normalSpeed * 0.5
+    if not firstInvincible then
+      firstVelocity.vx = firstVelocity.vx - impulse * normalX
+      firstVelocity.vy = firstVelocity.vy - impulse * normalY
+    end
+    if not secondInvincible then
+      secondVelocity.vx = secondVelocity.vx + impulse * normalX
+      secondVelocity.vy = secondVelocity.vy + impulse * normalY
+    end
+  end
+
+  local collisionX = (firstStone.x + secondStone.x) * 0.5
+  local collisionY = (firstStone.y + secondStone.y) * 0.5
+  return true, collisionX, collisionY
+end
+
+function PhysicsEngine.simulateShotStep(context, stepSec)
+  if type(context) ~= "table" or type(context.stoneList) ~= "table" or type(context.obstacleList) ~= "table" then
+    return
+  end
+  if type(context.getStoneVelocity) ~= "function" then
+    return
+  end
+
+  local rules = getRules(context)
+  local aliveStoneList = {}
+  local minX = rules.STONE_RADIUS
+  local maxX = rules.BOARD_W - rules.STONE_RADIUS
+  local minY = rules.STONE_RADIUS
+  local maxY = rules.BOARD_H - rules.STONE_RADIUS
+  local damping = math.max(0, 1 - rules.PHYSICS_DAMPING_PER_SEC * stepSec)
+
+  for _, stone in ipairs(context.stoneList) do
+    local velocity = context.getStoneVelocity(stone.id)
+    if stone.alive ~= false then
+      stone.x = stone.x + velocity.vx * stepSec
+      stone.y = stone.y + velocity.vy * stepSec
+      aliveStoneList[#aliveStoneList + 1] = stone
+    else
+      velocity.vx = 0
+      velocity.vy = 0
+    end
+  end
+
+  for _, stone in ipairs(aliveStoneList) do
+    for _, obstacle in ipairs(context.obstacleList) do
+      local collided = PhysicsEngine.resolveObstacleCollision(context, stone, obstacle)
+      if collided and type(context.isShockwaveShotStone) == "function" and type(context.applyShockwaveFromPoint) == "function" and context.isShockwaveShotStone(stone.id) then
+        context.applyShockwaveFromPoint(stone.x, stone.y)
+      end
+    end
+  end
+
+  for firstIndex = 1, #aliveStoneList - 1 do
+    for secondIndex = firstIndex + 1, #aliveStoneList do
+      local firstStone = aliveStoneList[firstIndex]
+      local secondStone = aliveStoneList[secondIndex]
+      local collided = PhysicsEngine.resolveStoneCollision(context, firstStone, secondStone)
+      if collided and type(context.isShockwaveShotStone) == "function" and type(context.applyShockwaveFromPoint) == "function" then
+        if context.isShockwaveShotStone(firstStone.id) then
+          context.applyShockwaveFromPoint(firstStone.x, firstStone.y)
+        elseif context.isShockwaveShotStone(secondStone.id) then
+          context.applyShockwaveFromPoint(secondStone.x, secondStone.y)
+        end
+      end
+    end
+  end
+
+  for _, stone in ipairs(context.stoneList) do
+    local velocity = context.getStoneVelocity(stone.id)
+    if stone.alive ~= false then
+      if stone.x < minX or stone.x > maxX or stone.y < minY or stone.y > maxY then
+        if type(context.isShockwaveShotStone) == "function" and type(context.applyShockwaveFromPoint) == "function" and context.isShockwaveShotStone(stone.id) then
+          context.applyShockwaveFromPoint(stone.x, stone.y)
+        end
+        stone.alive = false
+        velocity.vx = 0
+        velocity.vy = 0
+      else
+        velocity.vx = velocity.vx * damping
+        velocity.vy = velocity.vy * damping
+        local speed = math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy)
+        if speed < rules.PHYSICS_STOP_SPEED then
+          velocity.vx = 0
+          velocity.vy = 0
+        end
+      end
+    end
+  end
+end
+
+function PhysicsEngine.hasAnyStoneInMotion(context)
+  if type(context) ~= "table" or type(context.stoneList) ~= "table" then
+    return false
+  end
+  if type(context.getStoneVelocity) ~= "function" then
+    return false
+  end
+
+  local rules = getRules(context)
+  for _, stone in ipairs(context.stoneList) do
+    if stone.alive ~= false then
+      local velocity = context.getStoneVelocity(stone.id)
+      local speed = math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy)
+      if speed >= rules.PHYSICS_STOP_SPEED then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+return PhysicsEngine

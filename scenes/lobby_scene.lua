@@ -239,7 +239,8 @@ end
 
 function LobbyScene:handleMenuClick(label)
   if label == "싱글플레이어" then
-    self:setStatus("싱글플레이어는 후속 단계에서 구현됩니다.", Constants.COLOR_TEXT_SUB)
+    self._app:goSingleDummy()
+    self:setStatus("싱글 더미 테스트 모드로 진입합니다.", Constants.COLOR_TEXT_SUB)
     return
   end
   if label == "방 생성" then
