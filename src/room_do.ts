@@ -33,6 +33,7 @@ import {
   ROCK_OBSTACLE_WIDTH
 } from "./rules";
 import { errorPayload, serializeEnvelope, type WsEnvelope } from "./protocol";
+import { applyTurnCardAbility } from "./abilities";
 
 const STORAGE_KEY = "room_state_v2";
 
@@ -1711,90 +1712,34 @@ export class RoomDO {
       return;
     }
 
-    const effectPayload: Record<string, unknown> = {};
-    if (cardUsePayload.cardId === "agile") {
-      this.room.match.playing.shotBudget = Math.max(this.room.match.playing.shotBudget, 2);
-      effectPayload.shotBudget = this.room.match.playing.shotBudget;
-    } else if (cardUsePayload.cardId === "reinforcement") {
-      if (!cardUsePayload.target) {
-        this.sendToToken(token, "error.generic", errorPayload("invalid_card_target"));
-        return;
-      }
-      if (!this.canPlaceStoneAt(cardUsePayload.target.x, cardUsePayload.target.y, MIN_PLACE_DISTANCE)) {
-        this.sendToToken(token, "error.generic", errorPayload("invalid_card_target"));
-        return;
-      }
-
-      const newStone: MatchPlayingStone = {
-        id: this.createPlayingEntityId(`p${session.playerIndex}_r`),
-        ownerPlayerIndex: session.playerIndex,
-        x: cardUsePayload.target.x,
-        y: cardUsePayload.target.y,
-        alive: true
-      };
-      this.room.match.playing.stones.push(newStone);
-      this.room.match.playing.lockedStoneIds.push(newStone.id);
-      effectPayload.spawnStone = {
-        id: newStone.id,
-        ownerPlayerIndex: newStone.ownerPlayerIndex,
-        x: newStone.x,
-        y: newStone.y,
-        alive: true
-      };
-      effectPayload.lockedStoneIds = [...this.room.match.playing.lockedStoneIds];
-    } else if (cardUsePayload.cardId === "rockfall") {
-      if (!cardUsePayload.target) {
-        this.sendToToken(token, "error.generic", errorPayload("invalid_card_target"));
-        return;
-      }
-      if (!this.canPlaceObstacleAt(cardUsePayload.target.x, cardUsePayload.target.y, ROCK_OBSTACLE_WIDTH, ROCK_OBSTACLE_HEIGHT)) {
-        this.sendToToken(token, "error.generic", errorPayload("invalid_card_target"));
-        return;
-      }
-
-      const newObstacle: MatchObstacle = {
-        id: this.createPlayingEntityId("rock"),
-        x: cardUsePayload.target.x,
-        y: cardUsePayload.target.y,
-        width: ROCK_OBSTACLE_WIDTH,
-        height: ROCK_OBSTACLE_HEIGHT
-      };
-      this.room.match.playing.obstacles.push(newObstacle);
-      effectPayload.obstacle = {
-        id: newObstacle.id,
-        x: newObstacle.x,
-        y: newObstacle.y,
-        width: newObstacle.width,
-        height: newObstacle.height
-      };
-    } else if (cardUsePayload.cardId === "invincible") {
-      this.room.match.playing.invincibleTurnByPlayer[session.playerIndex] = this.room.match.playing.turnIndex + 1;
-      effectPayload.invincibleTurnByPlayer = {
-        1: this.room.match.playing.invincibleTurnByPlayer[1],
-        2: this.room.match.playing.invincibleTurnByPlayer[2]
-      };
-    } else if (cardUsePayload.cardId === "shockwave") {
-      this.room.match.playing.shockwaveOwnerPlayerIndex = session.playerIndex;
-      effectPayload.shockwaveOwnerPlayerIndex = session.playerIndex;
-    } else {
-      this.sendToToken(token, "error.generic", errorPayload("card_not_implemented"));
+    const abilityResult = applyTurnCardAbility({
+      payload: cardUsePayload,
+      playerIndex: session.playerIndex,
+      playing: this.room.match.playing,
+      createPlayingEntityId: (prefix) => this.createPlayingEntityId(prefix),
+      canPlaceStoneAt: (x, y, minDistance) => this.canPlaceStoneAt(x, y, minDistance),
+      canPlaceObstacleAt: (x, y, width, height) => this.canPlaceObstacleAt(x, y, width, height)
+    });
+    if (!abilityResult.ok || !abilityResult.appliedCardId) {
+      this.sendToToken(token, "error.generic", errorPayload(abilityResult.errorCode ?? "card_not_implemented"));
       return;
     }
+    const effectPayload = abilityResult.effectPayload;
 
     this.room.match.playing.hasCardUsedThisTurn = true;
-    this.removePickedCardByRole(session.role, cardUsePayload.cardId);
+    this.removePickedCardByRole(session.role, abilityResult.appliedCardId);
 
     await this.saveState();
     this.broadcast("match.turn.cardCue", {
       turnIndex: this.room.match.playing.turnIndex,
       playerIndex: session.playerIndex,
-      cardId: cardUsePayload.cardId,
+      cardId: abilityResult.appliedCardId,
       target: cardUsePayload.target
     });
     this.broadcast("match.turn.cardApplied", {
       turnIndex: this.room.match.playing.turnIndex,
       playerIndex: session.playerIndex,
-      cardId: cardUsePayload.cardId,
+      cardId: abilityResult.appliedCardId,
       effect: effectPayload
     });
     this.broadcastRoomState();

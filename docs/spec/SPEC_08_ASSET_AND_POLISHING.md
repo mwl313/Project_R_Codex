@@ -14,6 +14,16 @@
 - 실제 사운드 파일은 assets/sounds 에 위치
 - 사운드 미존재 시에도 게임은 정상 동작해야 한다
 
+### 3.1 Runtime Contract (Implemented)
+- Client dispatches hook IDs from major HTTP/WS/match lifecycle events.
+- Sound lookup rule:
+  - `assets/sounds/<hookId>.ogg`
+  - `assets/sounds/<hookId>.wav`
+  - `assets/sounds/<hookId>.mp3`
+- Missing hook files are treated as no-op (never crash, no gameplay impact).
+- Hook playback is managed in one place:
+  - `managers/sound_manager.lua`
+
 ## 4. Future Polish Safety
 - 연출(FX)은 게임 판정과 분리한다
 - 네트워크 동기화와 무관한 연출은 클라이언트 전용으로 처리한다

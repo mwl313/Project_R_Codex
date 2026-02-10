@@ -30,11 +30,18 @@ export const HOST_PICK_COUNT = 1;
 export const GUEST_DEAL_COUNT = 3;
 export const GUEST_PICK_COUNT = 2;
 
+// Base shot input tuning (all cards use this baseline).
 export const MAX_SHOT_POWER = 900;
 export const POWER_PER_PIXEL = 4.0;
+
+// `rockfall` obstacle footprint/boundary allowance.
 export const ROCK_OBSTACLE_WIDTH = 100;
 export const ROCK_OBSTACLE_HEIGHT = 50;
 export const ROCK_OBSTACLE_MARGIN = 5;
+
+// `shockwave` tuning.
+// - actual radius = STONE_RADIUS * SHOCKWAVE_RANGE_MULTIPLIER
+// - SHOCKWAVE_STRENGTH is flat impulse (distance falloff disabled in current design)
 export const SHOCKWAVE_RANGE_MULTIPLIER = 4.0;
 export const SHOCKWAVE_STRENGTH = 200;
 

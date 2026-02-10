@@ -53,8 +53,19 @@ Date: 2026-02-09
 - Spawned stone cannot move in the same turn.
 
 ### 5.2 `shockwave`
-- On qualifying collision, apply radial push around collision boundary point.
-- Radius/strength are tunable constants.
+- Card enables shockwave mode for the current turn owner.
+- Shockwave source is the **shot stone center** (not boundary midpoint).
+- Trigger conditions:
+  - shot stone vs board boundary
+  - shot stone vs obstacle
+  - shot stone vs stone (ally/enemy)
+- Re-trigger is allowed on chained collisions in the same shot simulation.
+- Shockwave affects stones within radius, excluding:
+  - invincible stones
+  - the shot stone itself
+- Radius/strength are tunable constants:
+  - `SHOCKWAVE_RANGE_MULTIPLIER`
+  - `SHOCKWAVE_STRENGTH`
 
 ### 5.3 `invincible`
 - Friendly stones ignore displacement effects for configured turn count.

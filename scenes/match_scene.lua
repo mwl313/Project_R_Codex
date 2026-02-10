@@ -17,17 +17,10 @@ local Constants = require("constants")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
 local EffectManager = require("effects.effect_manager")
+local Abilities = require("abilities")
 
 local MatchScene = {}
 MatchScene.__index = MatchScene
-
-local CARD_LABEL_MAP = {
-  reinforcement = "신병",
-  shockwave = "충격파",
-  invincible = "무적",
-  rockfall = "낙석",
-  agile = "날렵함"
-}
 
 local function nowEpochMs()
   return os.time() * 1000
@@ -97,29 +90,6 @@ local function clamp(value, minValue, maxValue)
   return math.max(minValue, math.min(maxValue, value))
 end
 
-local function intersectsStoneAndObstacle(stoneX, stoneY, obstacle)
-  local halfW = (obstacle.width or Constants.ROCK_OBSTACLE_WIDTH) * 0.5
-  local halfH = (obstacle.height or Constants.ROCK_OBSTACLE_HEIGHT) * 0.5
-  local left = obstacle.x - halfW
-  local right = obstacle.x + halfW
-  local top = obstacle.y - halfH
-  local bottom = obstacle.y + halfH
-  local closestX = clamp(stoneX, left, right)
-  local closestY = clamp(stoneY, top, bottom)
-  local dx = stoneX - closestX
-  local dy = stoneY - closestY
-  return dx * dx + dy * dy < Constants.STONE_RADIUS * Constants.STONE_RADIUS
-end
-
-local function intersectsObstacleAndObstacle(firstObstacle, secondObstacle)
-  local firstHalfW = (firstObstacle.width or Constants.ROCK_OBSTACLE_WIDTH) * 0.5
-  local firstHalfH = (firstObstacle.height or Constants.ROCK_OBSTACLE_HEIGHT) * 0.5
-  local secondHalfW = (secondObstacle.width or Constants.ROCK_OBSTACLE_WIDTH) * 0.5
-  local secondHalfH = (secondObstacle.height or Constants.ROCK_OBSTACLE_HEIGHT) * 0.5
-  return math.abs(firstObstacle.x - secondObstacle.x) < (firstHalfW + secondHalfW)
-    and math.abs(firstObstacle.y - secondObstacle.y) < (firstHalfH + secondHalfH)
-end
-
 local function listToSet(valueList)
   local valueSet = {}
   for _, value in ipairs(valueList or {}) do
@@ -128,26 +98,8 @@ local function listToSet(valueList)
   return valueSet
 end
 
-local function readTurnIndexByPlayer(value, playerIndex)
-  if type(value) ~= "table" then
-    return nil
-  end
-  local numericKeyValue = value[playerIndex]
-  if type(numericKeyValue) == "number" then
-    return numericKeyValue
-  end
-  local stringKeyValue = value[tostring(playerIndex)]
-  if type(stringKeyValue) == "number" then
-    return stringKeyValue
-  end
-  return nil
-end
-
 local function normalizeInvincibleTurnByPlayer(value)
-  return {
-    [1] = readTurnIndexByPlayer(value, 1),
-    [2] = readTurnIndexByPlayer(value, 2)
-  }
+  return Abilities.normalizeInvincibleTurnByPlayer(value)
 end
 
 local function createDefaultRoomState()
@@ -210,7 +162,7 @@ local function removeString(valueList, target)
 end
 
 local function getCardLabel(cardId)
-  return CARD_LABEL_MAP[cardId] or tostring(cardId)
+  return Abilities.getCardLabel(cardId)
 end
 
 function MatchScene.new(app)
@@ -557,50 +509,15 @@ function MatchScene:getStoneVelocity(stoneId)
 end
 
 function MatchScene:isInvincibleOnCurrentTurn(playerIndex)
-  local invincibleTurnByPlayer = self._invincibleTurnByPlayer
-  if type(invincibleTurnByPlayer) ~= "table" then
-    return false
-  end
-  local protectedTurnIndex = invincibleTurnByPlayer[playerIndex]
-  if type(protectedTurnIndex) ~= "number" then
-    protectedTurnIndex = invincibleTurnByPlayer[tostring(playerIndex)]
-  end
-  return type(protectedTurnIndex) == "number" and protectedTurnIndex == self._playingTurnIndex
+  return Abilities.isInvincibleOnCurrentTurn(self, playerIndex)
 end
 
 function MatchScene:isShockwaveShotStone(stoneId)
-  if type(stoneId) ~= "string" then
-    return false
-  end
-  return self._shockwaveOwnerPlayerIndex ~= nil and self._shockwaveSourceStoneId == stoneId
+  return Abilities.isShockwaveShotStone(self, stoneId)
 end
 
 function MatchScene:applyShockwaveFromPoint(centerX, centerY)
-  local shockwaveRadius = Constants.STONE_RADIUS * Constants.SHOCKWAVE_RANGE_MULTIPLIER
-  if shockwaveRadius <= 0 then
-    return
-  end
-  if self._effectManager then
-    self._effectManager:addShockwavePulse(centerX, centerY, shockwaveRadius)
-  end
-
-  local impulseStrength = math.max(0, Constants.SHOCKWAVE_STRENGTH)
-  if impulseStrength <= 0 then
-    return
-  end
-
-  for _, stone in ipairs(self._playingStoneList) do
-    if stone.alive ~= false and stone.id ~= self._shockwaveSourceStoneId and (not self:isInvincibleOnCurrentTurn(stone.ownerPlayerIndex)) then
-      local dx = stone.x - centerX
-      local dy = stone.y - centerY
-      local distance = math.sqrt(dx * dx + dy * dy)
-      if distance > 0 and distance <= shockwaveRadius then
-        local velocity = self:getStoneVelocity(stone.id)
-        velocity.vx = velocity.vx + (dx / distance) * impulseStrength
-        velocity.vy = velocity.vy + (dy / distance) * impulseStrength
-      end
-    end
-  end
+  Abilities.applyShockwaveFromPoint(self, centerX, centerY)
 end
 
 function MatchScene:resetStoneVelocities()
@@ -778,27 +695,7 @@ function MatchScene:resolveStoneCollision(firstStone, secondStone)
 
   local firstVelocity = self:getStoneVelocity(firstStone.id)
   local secondVelocity = self:getStoneVelocity(secondStone.id)
-  if firstInvincible ~= secondInvincible then
-    local movingVelocity
-    local awayNormalX
-    local awayNormalY
-    if firstInvincible then
-      movingVelocity = secondVelocity
-      awayNormalX = normalX
-      awayNormalY = normalY
-    else
-      movingVelocity = firstVelocity
-      awayNormalX = -normalX
-      awayNormalY = -normalY
-    end
-
-    local towardSpeed = movingVelocity.vx * awayNormalX + movingVelocity.vy * awayNormalY
-    if towardSpeed < 0 then
-      local reflectScale = -(1 + Constants.PHYSICS_RESTITUTION) * towardSpeed
-      movingVelocity.vx = movingVelocity.vx + reflectScale * awayNormalX
-      movingVelocity.vy = movingVelocity.vy + reflectScale * awayNormalY
-    end
-
+  if Abilities.applyInvincibleCollisionResponse(firstInvincible, secondInvincible, normalX, normalY, firstVelocity, secondVelocity) then
     local collisionX = (firstStone.x + secondStone.x) * 0.5
     local collisionY = (firstStone.y + secondStone.y) * 0.5
     return true, collisionX, collisionY
@@ -1084,7 +981,7 @@ function MatchScene:canUseCardInTurn(cardId)
   if self._pendingCardTargetId then
     return false
   end
-  return cardId == "agile" or cardId == "reinforcement" or cardId == "rockfall" or cardId == "invincible" or cardId == "shockwave"
+  return Abilities.isSupportedTurnCard(cardId)
 end
 
 function MatchScene:rebuildPlayingCardButtons()
@@ -1118,11 +1015,7 @@ function MatchScene:requestTurnCardUse(cardId)
     self._pendingCardTargetId = cardId
     self._isAimDragging = false
     self._aimStoneId = nil
-    if cardId == "rockfall" then
-      self:setStatus("낙석 대상 선택: 보드 위를 클릭해 장애물을 배치하세요. ESC/우클릭 취소", Constants.COLOR_TEXT_SUB)
-    else
-      self:setStatus("신병 대상 선택: 보드 위를 클릭해 알을 배치하세요. ESC/우클릭 취소", Constants.COLOR_TEXT_SUB)
-    end
+    self:setStatus(Abilities.getPendingTargetStartStatus(cardId), Constants.COLOR_TEXT_SUB)
     return
   end
 
@@ -1145,72 +1038,11 @@ function MatchScene:cancelPendingCardTarget()
 end
 
 function MatchScene:canPlaceRockfallAtCanonical(canonicalX, canonicalY)
-  local width = Constants.ROCK_OBSTACLE_WIDTH
-  local height = Constants.ROCK_OBSTACLE_HEIGHT
-  local halfW = width * 0.5
-  local halfH = height * 0.5
-  local margin = Constants.ROCK_OBSTACLE_MARGIN
-
-  if canonicalX - halfW < margin or canonicalX + halfW > Constants.BOARD_W - margin then
-    return false, "장애물은 보드 경계에서 5px 안쪽에만 배치할 수 있습니다."
-  end
-  if canonicalY - halfH < margin or canonicalY + halfH > Constants.BOARD_H - margin then
-    return false, "장애물은 보드 경계에서 5px 안쪽에만 배치할 수 있습니다."
-  end
-
-  local previewObstacle = {
-    x = canonicalX,
-    y = canonicalY,
-    width = width,
-    height = height
-  }
-
-  for _, stone in ipairs(self._playingStoneList) do
-    if stone.alive ~= false and intersectsStoneAndObstacle(stone.x, stone.y, previewObstacle) then
-      return false, "장애물은 알과 겹칠 수 없습니다."
-    end
-  end
-
-  for _, obstacle in ipairs(self._obstacleList) do
-    if intersectsObstacleAndObstacle(previewObstacle, obstacle) then
-      return false, "기존 장애물과 겹칠 수 없습니다."
-    end
-  end
-
-  return true, nil
+  return Abilities.canPlaceRockfallAtCanonical(self, canonicalX, canonicalY)
 end
 
 function MatchScene:canPlaceReinforcementAtCanonical(canonicalX, canonicalY)
-  local minX = Constants.STONE_RADIUS
-  local maxX = Constants.BOARD_W - Constants.STONE_RADIUS
-  local minY = Constants.STONE_RADIUS
-  local maxY = Constants.BOARD_H - Constants.STONE_RADIUS
-  if canonicalX < minX or canonicalX > maxX or canonicalY < minY or canonicalY > maxY then
-    return false, "신병 알은 보드 안쪽 경계에서만 배치할 수 있습니다."
-  end
-
-  for _, stone in ipairs(self._playingStoneList) do
-    if stone.alive ~= false then
-      local dx = stone.x - canonicalX
-      local dy = stone.y - canonicalY
-      local distance = math.sqrt(dx * dx + dy * dy)
-      if distance < Constants.MIN_PLACE_DISTANCE then
-        return false, "기존 알과 너무 가깝습니다."
-      end
-    end
-  end
-
-  local previewStone = {
-    x = canonicalX,
-    y = canonicalY
-  }
-  for _, obstacle in ipairs(self._obstacleList) do
-    if intersectsStoneAndObstacle(previewStone.x, previewStone.y, obstacle) then
-      return false, "장애물과 겹치는 위치에는 배치할 수 없습니다."
-    end
-  end
-
-  return true, nil
+  return Abilities.canPlaceReinforcementAtCanonical(self, canonicalX, canonicalY)
 end
 
 function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
@@ -1226,11 +1058,7 @@ function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
 
   local boardLocalX, boardLocalY = self:toBoardLocal(worldX, worldY)
   if not boardLocalX then
-    if pendingCardId == "reinforcement" then
-      self:setStatus("보드 안을 클릭해 신병 위치를 선택하세요.", Constants.COLOR_DANGER)
-    else
-      self:setStatus("보드 안을 클릭해 낙석 위치를 선택하세요.", Constants.COLOR_DANGER)
-    end
+    self:setStatus(Abilities.getPendingTargetOutOfBoardStatus(pendingCardId), Constants.COLOR_DANGER)
     return true
   end
 
@@ -1256,11 +1084,7 @@ function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
   })
   self._pendingCardTargetId = nil
   self._isCardUsePending = true
-  if pendingCardId == "rockfall" then
-    self:setStatus("낙석 카드 사용 요청 전송...", Constants.COLOR_TEXT_SUB)
-  else
-    self:setStatus("신병 카드 사용 요청 전송...", Constants.COLOR_TEXT_SUB)
-  end
+  self:setStatus(Abilities.getPendingTargetRequestStatus(pendingCardId), Constants.COLOR_TEXT_SUB)
   return true
 end
 
@@ -1592,7 +1416,7 @@ function MatchScene:applyRoomState(payload)
     self:setStatus("카드 선택 단계입니다.", Constants.COLOR_TEXT_SUB)
   elseif payload.phase == Constants.PHASE_PLAYING then
     if self._pendingCardTargetId then
-      self:setStatus("낙석 대상 선택: 보드 위를 클릭해 장애물을 배치하세요. ESC/우클릭 취소", Constants.COLOR_TEXT_SUB)
+      self:setStatus(Abilities.getPendingTargetStartStatus(self._pendingCardTargetId), Constants.COLOR_TEXT_SUB)
     elseif self:isMyTurn() then
       self:setStatus("내 턴입니다. 알을 드래그해 발사하세요.", Constants.COLOR_TEXT_SUB)
     else
@@ -1768,7 +1592,7 @@ function MatchScene:drawPlayingCardPanel(mouseX, mouseY)
   if self._pendingCardTargetId then
     love.graphics.setFont(FontManager.getFont("small"))
     love.graphics.setColor(Constants.COLOR_TEXT_SUB)
-    local hintText = self._pendingCardTargetId == "reinforcement" and "신병 위치를 보드에서 클릭" or "낙석 위치를 보드에서 클릭"
+    local hintText = Abilities.getPendingTargetHint(self._pendingCardTargetId)
     love.graphics.printf(hintText, rect.x, rect.y + rect.h - 18, rect.w, "center")
   end
 end
@@ -1801,40 +1625,7 @@ function MatchScene:drawAimGuide(mouseX, mouseY)
 end
 
 function MatchScene:drawPendingCardPreview(mouseX, mouseY)
-  if self._pendingCardTargetId ~= "rockfall" and self._pendingCardTargetId ~= "reinforcement" then
-    return
-  end
-  if not self:isPlayingPhase() or not self:isMyTurn() then
-    return
-  end
-
-  local boardLocalX, boardLocalY = self:toBoardLocal(mouseX, mouseY)
-  if not boardLocalX then
-    return
-  end
-
-  local canonicalX, canonicalY = self:localToCanonical(boardLocalX, boardLocalY)
-  local canPlace = false
-  if self._pendingCardTargetId == "rockfall" then
-    canPlace = self:canPlaceRockfallAtCanonical(canonicalX, canonicalY)
-    local width = Constants.ROCK_OBSTACLE_WIDTH
-    local height = Constants.ROCK_OBSTACLE_HEIGHT
-    local color = canPlace and { 0.36, 0.90, 0.50, 0.35 } or { 0.90, 0.30, 0.30, 0.35 }
-    local borderColor = canPlace and { 0.36, 0.90, 0.50, 1.0 } or { 0.90, 0.30, 0.30, 1.0 }
-    love.graphics.setColor(color)
-    love.graphics.rectangle("fill", mouseX - width * 0.5, mouseY - height * 0.5, width, height, 6, 6)
-    love.graphics.setColor(borderColor)
-    love.graphics.rectangle("line", mouseX - width * 0.5, mouseY - height * 0.5, width, height, 6, 6)
-  else
-    canPlace = self:canPlaceReinforcementAtCanonical(canonicalX, canonicalY)
-    local radius = Constants.STONE_RADIUS
-    local color = canPlace and { 0.36, 0.90, 0.50, 0.35 } or { 0.90, 0.30, 0.30, 0.35 }
-    local borderColor = canPlace and { 0.36, 0.90, 0.50, 1.0 } or { 0.90, 0.30, 0.30, 1.0 }
-    love.graphics.setColor(color)
-    love.graphics.circle("fill", mouseX, mouseY, radius)
-    love.graphics.setColor(borderColor)
-    love.graphics.circle("line", mouseX, mouseY, radius)
-  end
+  Abilities.drawPendingCardPreview(self, mouseX, mouseY)
 end
 
 function MatchScene:drawCardSelectPanel(mouseX, mouseY)
@@ -2251,68 +2042,10 @@ function MatchScene:onWsEnvelope(envelope)
       if type(payload.cardId) == "string" then
         removeString(self._myPickedCardList, payload.cardId)
       end
-      if type(payload.effect) == "table" and type(payload.effect.shotBudget) == "number" then
-        self._playingShotBudget = payload.effect.shotBudget
-      end
-      if type(payload.effect) == "table" and type(payload.effect.lockedStoneIds) == "table" then
-        self._lockedStoneIdSet = listToSet(payload.effect.lockedStoneIds)
-      end
-      if type(payload.effect) == "table" and type(payload.effect.spawnStone) == "table" then
-        self._playingStoneList[#self._playingStoneList + 1] = {
-          id = payload.effect.spawnStone.id,
-          ownerPlayerIndex = payload.effect.spawnStone.ownerPlayerIndex,
-          x = payload.effect.spawnStone.x,
-          y = payload.effect.spawnStone.y,
-          alive = payload.effect.spawnStone.alive ~= false
-        }
-      end
-      if type(payload.effect) == "table" and type(payload.effect.obstacle) == "table" then
-        self._obstacleList[#self._obstacleList + 1] = {
-          id = payload.effect.obstacle.id,
-          x = payload.effect.obstacle.x,
-          y = payload.effect.obstacle.y,
-          width = payload.effect.obstacle.width or Constants.ROCK_OBSTACLE_WIDTH,
-          height = payload.effect.obstacle.height or Constants.ROCK_OBSTACLE_HEIGHT
-        }
-      end
-      if type(payload.effect) == "table" and type(payload.effect.invincibleTurnByPlayer) == "table" then
-        self._invincibleTurnByPlayer = normalizeInvincibleTurnByPlayer(payload.effect.invincibleTurnByPlayer)
-      end
-      if type(payload.effect) == "table" and (payload.effect.shockwaveOwnerPlayerIndex == 1 or payload.effect.shockwaveOwnerPlayerIndex == 2) then
-        self._shockwaveOwnerPlayerIndex = payload.effect.shockwaveOwnerPlayerIndex
-      end
+      Abilities.applyServerCardEffect(self, payload.effect)
       self:rebuildPlayingCardButtons()
     else
-      if type(payload.effect) == "table" and type(payload.effect.shotBudget) == "number" then
-        self._playingShotBudget = payload.effect.shotBudget
-      end
-      if type(payload.effect) == "table" and type(payload.effect.lockedStoneIds) == "table" then
-        self._lockedStoneIdSet = listToSet(payload.effect.lockedStoneIds)
-      end
-      if type(payload.effect) == "table" and type(payload.effect.spawnStone) == "table" then
-        self._playingStoneList[#self._playingStoneList + 1] = {
-          id = payload.effect.spawnStone.id,
-          ownerPlayerIndex = payload.effect.spawnStone.ownerPlayerIndex,
-          x = payload.effect.spawnStone.x,
-          y = payload.effect.spawnStone.y,
-          alive = payload.effect.spawnStone.alive ~= false
-        }
-      end
-      if type(payload.effect) == "table" and type(payload.effect.obstacle) == "table" then
-        self._obstacleList[#self._obstacleList + 1] = {
-          id = payload.effect.obstacle.id,
-          x = payload.effect.obstacle.x,
-          y = payload.effect.obstacle.y,
-          width = payload.effect.obstacle.width or Constants.ROCK_OBSTACLE_WIDTH,
-          height = payload.effect.obstacle.height or Constants.ROCK_OBSTACLE_HEIGHT
-        }
-      end
-      if type(payload.effect) == "table" and type(payload.effect.invincibleTurnByPlayer) == "table" then
-        self._invincibleTurnByPlayer = normalizeInvincibleTurnByPlayer(payload.effect.invincibleTurnByPlayer)
-      end
-      if type(payload.effect) == "table" and (payload.effect.shockwaveOwnerPlayerIndex == 1 or payload.effect.shockwaveOwnerPlayerIndex == 2) then
-        self._shockwaveOwnerPlayerIndex = payload.effect.shockwaveOwnerPlayerIndex
-      end
+      Abilities.applyServerCardEffect(self, payload.effect)
     end
     self:setStatus("카드 효과 적용됨: " .. tostring(getCardLabel(payload.cardId)), Constants.COLOR_TEXT_SUB)
     return

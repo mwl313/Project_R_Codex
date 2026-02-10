@@ -112,6 +112,14 @@ love .
 - `agile` (날렵함)
 - 동일 턴 추가 발사(2회) 지원
 
+### Phase 5 (Asset/Polish 일부)
+
+- 사운드 훅 시스템 추가
+- 중앙 관리: `managers/sound_manager.lua`
+- 주요 HTTP/WS/매치 이벤트에서 훅 ID 재생
+- 파일 규칙: `assets/sounds/<hookId>.(ogg|wav|mp3)`
+- 사운드 파일이 없어도 no-op으로 정상 진행(크래시 없음)
+
 ## 이펙트 구조
 
 - 공용 이펙트 매니저 추가: `effects/effect_manager.lua`

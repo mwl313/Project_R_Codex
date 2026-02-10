@@ -50,9 +50,14 @@ local Constants = {
   GUEST_PICK_COUNT = 2,
   MAX_SHOT_POWER = 900,
   POWER_PER_PIXEL = 4.0,
+  -- `rockfall` (낙석) 밸런스/배치 상수:
+  -- 장애물 기본 크기와 보드 경계 여유치.
   ROCK_OBSTACLE_WIDTH = 100,
   ROCK_OBSTACLE_HEIGHT = 50,
   ROCK_OBSTACLE_MARGIN = 5,
+  -- `shockwave` (충격파) 밸런스 상수:
+  -- 실제 반경 = STONE_RADIUS * SHOCKWAVE_RANGE_MULTIPLIER
+  -- 현재 설계는 거리 감쇠 없이 SHOCKWAVE_STRENGTH를 평탄 적용.
   SHOCKWAVE_RANGE_MULTIPLIER = 4.0,
   SHOCKWAVE_STRENGTH = 200,
   SHOT_SPEED_SCALE = 0.60,
@@ -62,7 +67,8 @@ local Constants = {
   PHYSICS_FIXED_STEP_SEC = 0.016,
   PHYSICS_MAX_SIM_SEC = 6.0,
 
-  FONT_KR_REGULAR_PATH = "assets/fonts/NotoSansKR-Regular.ttf",
+  -- 프로젝트 공용 UI 폰트(영문/한글 렌더링 공용).
+  FONT_KR_REGULAR_PATH = "assets/fonts/MulmaruMono.ttf",
   FONT_SIZE_TITLE = 34,
   FONT_SIZE_UI = 22,
   FONT_SIZE_SMALL = 17,

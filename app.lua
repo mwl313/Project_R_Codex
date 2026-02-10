@@ -25,6 +25,7 @@ local Json = require("utils.json")
 local FontManager = require("assets.font_manager")
 local SceneManager = require("managers.scene_manager")
 local SettingsManager = require("managers.settings_manager")
+local SoundManager = require("managers.sound_manager")
 local HttpClient = require("net.http_client")
 local WsClient = require("net.ws_client")
 
@@ -52,12 +53,54 @@ local function startsWith(value, prefix)
   return value:sub(1, #prefix) == prefix
 end
 
+local CLIENT_ENVELOPE_SOUND_HOOK_MAP = {
+  ["client.chat.send"] = "chat_send",
+  ["client.room.leave"] = "room_leave_request",
+  ["client.match.start"] = "match_start_request",
+  ["client.match.placement.submit"] = "placement_submit",
+  ["client.match.cards.pick"] = "card_pick_submit",
+  ["client.match.turn.cardUse"] = "card_use_request",
+  ["client.match.rematch.vote"] = "result_vote_submit",
+  ["client.match.surrender"] = "match_surrender_request",
+  ["client.match.turn.shot"] = "shot_request",
+  ["client.match.turn.snapshot"] = "snapshot_submit"
+}
+
+local SERVER_ENVELOPE_SOUND_HOOK_MAP = {
+  ["server.welcome"] = "ws_welcome",
+  ["room.joined"] = "room_joined",
+  ["room.left"] = "room_left",
+  ["room.closed"] = "room_closed",
+  ["chat.message"] = "chat_received",
+  ["chat.denied"] = "chat_denied",
+  ["match.turnOrder"] = "match_turn_order",
+  ["match.phaseChanged"] = "match_phase_changed",
+  ["match.placement.revealStart"] = "placement_reveal_start",
+  ["match.cards.dealt"] = "cards_dealt",
+  ["match.cards.locked"] = "cards_locked",
+  ["match.turn.cardCue"] = "card_cue",
+  ["match.turn.cardApplied"] = "card_applied",
+  ["match.turn.start"] = "turn_start",
+  ["match.turn.shotAccepted"] = "shot_accepted",
+  ["match.turn.snapshotRequested"] = "snapshot_requested",
+  ["match.turn.snapshotApplied"] = "snapshot_applied",
+  ["match.result"] = "match_result",
+  ["error.generic"] = "error_generic"
+}
+
+local NETWORK_EVENT_SOUND_HOOK_MAP = {
+  ws_open = "ws_open",
+  ws_close = "ws_close",
+  ws_error = "ws_error"
+}
+
 function App.new(renderScale)
   local instance = {
     _renderScale = renderScale,
     _httpClient = HttpClient.new(),
     _wsClient = WsClient.new(),
     _settingsManager = SettingsManager.new(),
+    _soundManager = SoundManager.new(),
     _sceneManager = nil,
     _pendingHttpMap = {},
     _session = {
@@ -82,6 +125,13 @@ function App.new(renderScale)
     instance:emitUiStatus(instance._pendingBootWarningText, Constants.COLOR_DANGER)
   end
   return instance
+end
+
+function App:playSoundHook(hookId)
+  if not self._soundManager then
+    return
+  end
+  self._soundManager:playHook(hookId)
 end
 
 function App:getNickname()
@@ -198,6 +248,7 @@ function App:buildWsUrl(pathOrAbsolute)
 end
 
 function App:createRoom()
+  self:playSoundHook("room_create_request")
   local requestId = self._httpClient:request("POST", self:buildHttpUrl("/room/create"), {
     nickname = self._nickname
   }, {
@@ -207,6 +258,7 @@ function App:createRoom()
 end
 
 function App:joinRoom(roomCode)
+  self:playSoundHook("room_join_request")
   local requestId = self._httpClient:request("POST", self:buildHttpUrl("/room/join"), {
     roomCode = roomCode,
     nickname = self._nickname
@@ -218,6 +270,7 @@ end
 
 function App:connectWebSocket()
   if not self._session.wsUrl then
+    self:playSoundHook("error_generic")
     self:emitUiStatus("WS URL이 없습니다.", Constants.COLOR_DANGER)
     return
   end
@@ -229,6 +282,10 @@ function App:sendWsEnvelope(envelopeType, payload)
     type = envelopeType,
     payload = payload or {}
   })
+  local hookId = CLIENT_ENVELOPE_SOUND_HOOK_MAP[envelopeType]
+  if hookId then
+    self:playSoundHook(hookId)
+  end
 end
 
 function App:sendChat(text)
@@ -261,12 +318,14 @@ function App:handleHttpResponse(event)
     if isDecoded and parsed then
       bodyTable = parsed
     else
+      self:playSoundHook("http_parse_error")
       self:emitUiStatus("응답 파싱 실패", Constants.COLOR_DANGER)
       return
     end
   end
 
   if not event.ok or not bodyTable.ok then
+    self:playSoundHook("http_error")
     local reason = bodyTable.error or event.error or ("http_status_" .. tostring(event.status))
     self:emitUiStatus("요청 실패: " .. tostring(reason), Constants.COLOR_DANGER)
     return
@@ -278,12 +337,22 @@ function App:handleHttpResponse(event)
   self._session.role = nil
 
   if requestMeta.kind == "createRoom" or requestMeta.kind == "joinRoom" then
+    if requestMeta.kind == "createRoom" then
+      self:playSoundHook("room_create_success")
+    else
+      self:playSoundHook("room_join_success")
+    end
     self:goWaitingRoom()
     self:connectWebSocket()
   end
 end
 
 function App:handleWsEnvelope(envelope)
+  local hookId = SERVER_ENVELOPE_SOUND_HOOK_MAP[envelope.type]
+  if hookId then
+    self:playSoundHook(hookId)
+  end
+
   if envelope.type == "server.welcome" then
     local payload = envelope.payload or {}
     self._session.role = payload.role
@@ -317,9 +386,14 @@ function App:pollNetworkEvents()
       if isDecoded and envelope then
         self:handleWsEnvelope(envelope)
       else
+        self:playSoundHook("ws_parse_error")
         self:emitUiStatus("WS 메시지 파싱 실패", Constants.COLOR_DANGER)
       end
     else
+      local hookId = NETWORK_EVENT_SOUND_HOOK_MAP[event.type]
+      if hookId then
+        self:playSoundHook(hookId)
+      end
       self._sceneManager:dispatch("onAppEvent", event)
     end
   end
@@ -380,6 +454,9 @@ function App:resize(screenW, screenH)
 end
 
 function App:shutdown()
+  if self._soundManager then
+    self._soundManager:stopAll()
+  end
   self._httpClient:shutdown()
   self._wsClient:shutdown()
 end
