@@ -16,6 +16,7 @@
 local Constants = require("constants")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
+local EffectManager = require("effects.effect_manager")
 
 local MatchScene = {}
 MatchScene.__index = MatchScene
@@ -127,6 +128,28 @@ local function listToSet(valueList)
   return valueSet
 end
 
+local function readTurnIndexByPlayer(value, playerIndex)
+  if type(value) ~= "table" then
+    return nil
+  end
+  local numericKeyValue = value[playerIndex]
+  if type(numericKeyValue) == "number" then
+    return numericKeyValue
+  end
+  local stringKeyValue = value[tostring(playerIndex)]
+  if type(stringKeyValue) == "number" then
+    return stringKeyValue
+  end
+  return nil
+end
+
+local function normalizeInvincibleTurnByPlayer(value)
+  return {
+    [1] = readTurnIndexByPlayer(value, 1),
+    [2] = readTurnIndexByPlayer(value, 2)
+  }
+end
+
 local function createDefaultRoomState()
   return {
     phase = Constants.PHASE_PLACEMENT_PRIVATE,
@@ -230,6 +253,7 @@ function MatchScene.new(app)
     _obstacleList = {},
     _invincibleTurnByPlayer = { [1] = nil, [2] = nil },
     _shockwaveOwnerPlayerIndex = nil,
+    _shockwaveSourceStoneId = nil,
     _isPlayingShotCommitted = false,
     _isPlayingAwaitingSnapshot = false,
     _isTurnShotPending = false,
@@ -253,6 +277,7 @@ function MatchScene.new(app)
     _opponentResultVote = nil
   }
   setmetatable(instance, MatchScene)
+  instance._effectManager = EffectManager.new()
 
   instance._submitButton = Button.new({
     x = Constants.BASE_WORLD_W - 260,
@@ -345,6 +370,7 @@ function MatchScene:enter(params)
   self._obstacleList = {}
   self._invincibleTurnByPlayer = { [1] = nil, [2] = nil }
   self._shockwaveOwnerPlayerIndex = nil
+  self._shockwaveSourceStoneId = nil
   self._isPlayingShotCommitted = false
   self._isPlayingAwaitingSnapshot = false
   self._isTurnShotPending = false
@@ -363,6 +389,9 @@ function MatchScene:enter(params)
   self._isResultVotePending = false
   self._myResultVote = nil
   self._opponentResultVote = nil
+  if self._effectManager then
+    self._effectManager:clear()
+  end
 
   if params and type(params.roomState) == "table" then
     self:applyRoomState(params.roomState)
@@ -528,8 +557,22 @@ function MatchScene:getStoneVelocity(stoneId)
 end
 
 function MatchScene:isInvincibleOnCurrentTurn(playerIndex)
-  local protectedTurnIndex = self._invincibleTurnByPlayer and self._invincibleTurnByPlayer[playerIndex] or nil
-  return protectedTurnIndex ~= nil and protectedTurnIndex == self._playingTurnIndex
+  local invincibleTurnByPlayer = self._invincibleTurnByPlayer
+  if type(invincibleTurnByPlayer) ~= "table" then
+    return false
+  end
+  local protectedTurnIndex = invincibleTurnByPlayer[playerIndex]
+  if type(protectedTurnIndex) ~= "number" then
+    protectedTurnIndex = invincibleTurnByPlayer[tostring(playerIndex)]
+  end
+  return type(protectedTurnIndex) == "number" and protectedTurnIndex == self._playingTurnIndex
+end
+
+function MatchScene:isShockwaveShotStone(stoneId)
+  if type(stoneId) ~= "string" then
+    return false
+  end
+  return self._shockwaveOwnerPlayerIndex ~= nil and self._shockwaveSourceStoneId == stoneId
 end
 
 function MatchScene:applyShockwaveFromPoint(centerX, centerY)
@@ -537,16 +580,24 @@ function MatchScene:applyShockwaveFromPoint(centerX, centerY)
   if shockwaveRadius <= 0 then
     return
   end
+  if self._effectManager then
+    self._effectManager:addShockwavePulse(centerX, centerY, shockwaveRadius)
+  end
+
+  local impulseStrength = math.max(0, Constants.SHOCKWAVE_STRENGTH)
+  if impulseStrength <= 0 then
+    return
+  end
+
   for _, stone in ipairs(self._playingStoneList) do
-    if stone.alive ~= false then
+    if stone.alive ~= false and stone.id ~= self._shockwaveSourceStoneId and (not self:isInvincibleOnCurrentTurn(stone.ownerPlayerIndex)) then
       local dx = stone.x - centerX
       local dy = stone.y - centerY
       local distance = math.sqrt(dx * dx + dy * dy)
       if distance > 0 and distance <= shockwaveRadius then
         local velocity = self:getStoneVelocity(stone.id)
-        local impulseScale = (1 - (distance / shockwaveRadius)) * Constants.SHOCKWAVE_STRENGTH
-        velocity.vx = velocity.vx + (dx / distance) * impulseScale
-        velocity.vy = velocity.vy + (dy / distance) * impulseScale
+        velocity.vx = velocity.vx + (dx / distance) * impulseStrength
+        velocity.vy = velocity.vy + (dy / distance) * impulseStrength
       end
     end
   end
@@ -574,7 +625,7 @@ function MatchScene:resolveObstacleCollision(stone, obstacle)
   local minDistanceSq = Constants.STONE_RADIUS * Constants.STONE_RADIUS
 
   if distanceSq >= minDistanceSq then
-    return
+    return false, nil, nil
   end
 
   local normalX, normalY
@@ -616,6 +667,7 @@ function MatchScene:resolveObstacleCollision(stone, obstacle)
     velocity.vx = velocity.vx + reflectScale * normalX
     velocity.vy = velocity.vy + reflectScale * normalY
   end
+  return true, closestX, closestY
 end
 
 function MatchScene:syncStoneVelocityMap()
@@ -677,6 +729,11 @@ function MatchScene:applyShotImpulse(shotPayload)
   local speed = math.max(0, shotPayload.power * Constants.SHOT_SPEED_SCALE)
   velocity.vx = shotPayload.dirX / directionLength * speed
   velocity.vy = shotPayload.dirY / directionLength * speed
+  if self._shockwaveOwnerPlayerIndex and stone.ownerPlayerIndex == self._shockwaveOwnerPlayerIndex then
+    self._shockwaveSourceStoneId = stone.id
+  else
+    self._shockwaveSourceStoneId = nil
+  end
   self:startShotSimulation()
 end
 
@@ -688,7 +745,7 @@ function MatchScene:resolveStoneCollision(firstStone, secondStone)
   local minDistanceSq = minDistance * minDistance
 
   if distanceSq >= minDistanceSq then
-    return
+    return false, nil, nil
   end
 
   local distance = math.sqrt(distanceSq)
@@ -721,30 +778,49 @@ function MatchScene:resolveStoneCollision(firstStone, secondStone)
 
   local firstVelocity = self:getStoneVelocity(firstStone.id)
   local secondVelocity = self:getStoneVelocity(secondStone.id)
+  if firstInvincible ~= secondInvincible then
+    local movingVelocity
+    local awayNormalX
+    local awayNormalY
+    if firstInvincible then
+      movingVelocity = secondVelocity
+      awayNormalX = normalX
+      awayNormalY = normalY
+    else
+      movingVelocity = firstVelocity
+      awayNormalX = -normalX
+      awayNormalY = -normalY
+    end
+
+    local towardSpeed = movingVelocity.vx * awayNormalX + movingVelocity.vy * awayNormalY
+    if towardSpeed < 0 then
+      local reflectScale = -(1 + Constants.PHYSICS_RESTITUTION) * towardSpeed
+      movingVelocity.vx = movingVelocity.vx + reflectScale * awayNormalX
+      movingVelocity.vy = movingVelocity.vy + reflectScale * awayNormalY
+    end
+
+    local collisionX = (firstStone.x + secondStone.x) * 0.5
+    local collisionY = (firstStone.y + secondStone.y) * 0.5
+    return true, collisionX, collisionY
+  end
+
   local relativeX = secondVelocity.vx - firstVelocity.vx
   local relativeY = secondVelocity.vy - firstVelocity.vy
   local normalSpeed = relativeX * normalX + relativeY * normalY
-  if normalSpeed >= 0 then
-    return
-  end
-
-  local impulse = -(1 + Constants.PHYSICS_RESTITUTION) * normalSpeed * 0.5
-  if not firstInvincible then
-    firstVelocity.vx = firstVelocity.vx - impulse * normalX
-    firstVelocity.vy = firstVelocity.vy - impulse * normalY
-  end
-  if not secondInvincible then
-    secondVelocity.vx = secondVelocity.vx + impulse * normalX
-    secondVelocity.vy = secondVelocity.vy + impulse * normalY
-  end
-
-  if self._shockwaveOwnerPlayerIndex then
-    if firstStone.ownerPlayerIndex == self._shockwaveOwnerPlayerIndex or secondStone.ownerPlayerIndex == self._shockwaveOwnerPlayerIndex then
-      local collisionX = (firstStone.x + secondStone.x) * 0.5
-      local collisionY = (firstStone.y + secondStone.y) * 0.5
-      self:applyShockwaveFromPoint(collisionX, collisionY)
+  if normalSpeed < 0 then
+    local impulse = -(1 + Constants.PHYSICS_RESTITUTION) * normalSpeed * 0.5
+    if not firstInvincible then
+      firstVelocity.vx = firstVelocity.vx - impulse * normalX
+      firstVelocity.vy = firstVelocity.vy - impulse * normalY
+    end
+    if not secondInvincible then
+      secondVelocity.vx = secondVelocity.vx + impulse * normalX
+      secondVelocity.vy = secondVelocity.vy + impulse * normalY
     end
   end
+  local collisionX = (firstStone.x + secondStone.x) * 0.5
+  local collisionY = (firstStone.y + secondStone.y) * 0.5
+  return true, collisionX, collisionY
 end
 
 function MatchScene:simulateShotStep(stepSec)
@@ -769,13 +845,23 @@ function MatchScene:simulateShotStep(stepSec)
 
   for _, stone in ipairs(aliveStoneList) do
     for _, obstacle in ipairs(self._obstacleList) do
-      self:resolveObstacleCollision(stone, obstacle)
+      local collided = self:resolveObstacleCollision(stone, obstacle)
+      if collided and self:isShockwaveShotStone(stone.id) then
+        self:applyShockwaveFromPoint(stone.x, stone.y)
+      end
     end
   end
 
   for firstIndex = 1, #aliveStoneList - 1 do
     for secondIndex = firstIndex + 1, #aliveStoneList do
-      self:resolveStoneCollision(aliveStoneList[firstIndex], aliveStoneList[secondIndex])
+      local firstStone = aliveStoneList[firstIndex]
+      local secondStone = aliveStoneList[secondIndex]
+      local collided = self:resolveStoneCollision(firstStone, secondStone)
+      if collided and self:isShockwaveShotStone(firstStone.id) then
+        self:applyShockwaveFromPoint(firstStone.x, firstStone.y)
+      elseif collided and self:isShockwaveShotStone(secondStone.id) then
+        self:applyShockwaveFromPoint(secondStone.x, secondStone.y)
+      end
     end
   end
 
@@ -783,6 +869,9 @@ function MatchScene:simulateShotStep(stepSec)
     local velocity = self:getStoneVelocity(stone.id)
     if stone.alive ~= false then
       if stone.x < minX or stone.x > maxX or stone.y < minY or stone.y > maxY then
+        if self:isShockwaveShotStone(stone.id) then
+          self:applyShockwaveFromPoint(stone.x, stone.y)
+        end
         stone.alive = false
         velocity.vx = 0
         velocity.vy = 0
@@ -1025,36 +1114,22 @@ function MatchScene:requestTurnCardUse(cardId)
     return
   end
 
-  if cardId == "rockfall" then
+  if cardId == "rockfall" or cardId == "reinforcement" then
     self._pendingCardTargetId = cardId
     self._isAimDragging = false
     self._aimStoneId = nil
-    self:setStatus("낙석 대상 선택: 보드 위를 클릭해 장애물을 배치하세요. ESC/우클릭 취소", Constants.COLOR_TEXT_SUB)
-    return
-  end
-
-  local cardTarget = nil
-  if cardId == "reinforcement" then
-    local mouseWorldX, mouseWorldY = self._app:getMouseWorldPosition()
-    local boardLocalX, boardLocalY = self:toBoardLocal(mouseWorldX, mouseWorldY)
-    if not boardLocalX then
-      self:setStatus("카드 대상은 보드 안에서 선택해야 합니다.", Constants.COLOR_DANGER)
-      return
+    if cardId == "rockfall" then
+      self:setStatus("낙석 대상 선택: 보드 위를 클릭해 장애물을 배치하세요. ESC/우클릭 취소", Constants.COLOR_TEXT_SUB)
+    else
+      self:setStatus("신병 대상 선택: 보드 위를 클릭해 알을 배치하세요. ESC/우클릭 취소", Constants.COLOR_TEXT_SUB)
     end
-    local canonicalX, canonicalY = self:localToCanonical(boardLocalX, boardLocalY)
-    cardTarget = {
-      x = canonicalX,
-      y = canonicalY
-    }
+    return
   end
 
   local payload = {
     turnIndex = self._playingTurnIndex,
     cardId = cardId
   }
-  if cardTarget then
-    payload.target = cardTarget
-  end
 
   self._app:sendWsEnvelope("client.match.turn.cardUse", payload)
   self._isCardUsePending = true
@@ -1105,10 +1180,44 @@ function MatchScene:canPlaceRockfallAtCanonical(canonicalX, canonicalY)
   return true, nil
 end
 
+function MatchScene:canPlaceReinforcementAtCanonical(canonicalX, canonicalY)
+  local minX = Constants.STONE_RADIUS
+  local maxX = Constants.BOARD_W - Constants.STONE_RADIUS
+  local minY = Constants.STONE_RADIUS
+  local maxY = Constants.BOARD_H - Constants.STONE_RADIUS
+  if canonicalX < minX or canonicalX > maxX or canonicalY < minY or canonicalY > maxY then
+    return false, "신병 알은 보드 안쪽 경계에서만 배치할 수 있습니다."
+  end
+
+  for _, stone in ipairs(self._playingStoneList) do
+    if stone.alive ~= false then
+      local dx = stone.x - canonicalX
+      local dy = stone.y - canonicalY
+      local distance = math.sqrt(dx * dx + dy * dy)
+      if distance < Constants.MIN_PLACE_DISTANCE then
+        return false, "기존 알과 너무 가깝습니다."
+      end
+    end
+  end
+
+  local previewStone = {
+    x = canonicalX,
+    y = canonicalY
+  }
+  for _, obstacle in ipairs(self._obstacleList) do
+    if intersectsStoneAndObstacle(previewStone.x, previewStone.y, obstacle) then
+      return false, "장애물과 겹치는 위치에는 배치할 수 없습니다."
+    end
+  end
+
+  return true, nil
+end
+
 function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
-  if self._pendingCardTargetId ~= "rockfall" then
+  if self._pendingCardTargetId ~= "rockfall" and self._pendingCardTargetId ~= "reinforcement" then
     return false
   end
+  local pendingCardId = self._pendingCardTargetId
   if not self:isMyTurn() or self._hasUsedCardThisTurn or self._playingShotUsed > 0 then
     self._pendingCardTargetId = nil
     self:setStatus("지금은 카드를 사용할 수 없습니다.", Constants.COLOR_DANGER)
@@ -1117,12 +1226,21 @@ function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
 
   local boardLocalX, boardLocalY = self:toBoardLocal(worldX, worldY)
   if not boardLocalX then
-    self:setStatus("보드 안을 클릭해 낙석 위치를 선택하세요.", Constants.COLOR_DANGER)
+    if pendingCardId == "reinforcement" then
+      self:setStatus("보드 안을 클릭해 신병 위치를 선택하세요.", Constants.COLOR_DANGER)
+    else
+      self:setStatus("보드 안을 클릭해 낙석 위치를 선택하세요.", Constants.COLOR_DANGER)
+    end
     return true
   end
 
   local canonicalX, canonicalY = self:localToCanonical(boardLocalX, boardLocalY)
-  local canPlace, reason = self:canPlaceRockfallAtCanonical(canonicalX, canonicalY)
+  local canPlace, reason
+  if pendingCardId == "rockfall" then
+    canPlace, reason = self:canPlaceRockfallAtCanonical(canonicalX, canonicalY)
+  else
+    canPlace, reason = self:canPlaceReinforcementAtCanonical(canonicalX, canonicalY)
+  end
   if not canPlace then
     self:setStatus(reason or "해당 위치에는 배치할 수 없습니다.", Constants.COLOR_DANGER)
     return true
@@ -1130,7 +1248,7 @@ function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
 
   self._app:sendWsEnvelope("client.match.turn.cardUse", {
     turnIndex = self._playingTurnIndex,
-    cardId = "rockfall",
+    cardId = pendingCardId,
     target = {
       x = canonicalX,
       y = canonicalY
@@ -1138,7 +1256,11 @@ function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
   })
   self._pendingCardTargetId = nil
   self._isCardUsePending = true
-  self:setStatus("낙석 카드 사용 요청 전송...", Constants.COLOR_TEXT_SUB)
+  if pendingCardId == "rockfall" then
+    self:setStatus("낙석 카드 사용 요청 전송...", Constants.COLOR_TEXT_SUB)
+  else
+    self:setStatus("신병 카드 사용 요청 전송...", Constants.COLOR_TEXT_SUB)
+  end
   return true
 end
 
@@ -1393,6 +1515,9 @@ function MatchScene:applyRoomState(payload)
     end
     if type(playing.shotUsed) == "number" then
       self._playingShotUsed = playing.shotUsed
+      if playing.shotUsed <= 0 then
+        self._shockwaveSourceStoneId = nil
+      end
     end
     if type(playing.hasCardUsedThisTurn) == "boolean" then
       self._hasUsedCardThisTurn = playing.hasCardUsedThisTurn
@@ -1410,14 +1535,7 @@ function MatchScene:applyRoomState(payload)
     else
       self._obstacleList = {}
     end
-    if type(playing.invincibleTurnByPlayer) == "table" then
-      self._invincibleTurnByPlayer = {
-        [1] = type(playing.invincibleTurnByPlayer[1]) == "number" and playing.invincibleTurnByPlayer[1] or nil,
-        [2] = type(playing.invincibleTurnByPlayer[2]) == "number" and playing.invincibleTurnByPlayer[2] or nil
-      }
-    else
-      self._invincibleTurnByPlayer = { [1] = nil, [2] = nil }
-    end
+    self._invincibleTurnByPlayer = normalizeInvincibleTurnByPlayer(playing.invincibleTurnByPlayer)
     if playing.shockwaveOwnerPlayerIndex == 1 or playing.shockwaveOwnerPlayerIndex == 2 then
       self._shockwaveOwnerPlayerIndex = playing.shockwaveOwnerPlayerIndex
     else
@@ -1452,9 +1570,13 @@ function MatchScene:applyRoomState(payload)
     self:stopShotSimulation()
     self:resetStoneVelocities()
     self._shockwaveOwnerPlayerIndex = nil
+    self._shockwaveSourceStoneId = nil
     self._lockedStoneIdSet = {}
     self._pendingCardTargetId = nil
     self._isSurrenderPending = false
+    if self._effectManager then
+      self._effectManager:clear()
+    end
   end
   if payload.phase ~= Constants.PHASE_RESULT then
     self._isResultVotePending = false
@@ -1490,6 +1612,9 @@ function MatchScene:applyRoomState(payload)
 end
 
 function MatchScene:update(dt)
+  if self._effectManager then
+    self._effectManager:update(dt)
+  end
   if self:isPlayingPhase() then
     self:updateShotSimulation(dt)
   end
@@ -1643,7 +1768,8 @@ function MatchScene:drawPlayingCardPanel(mouseX, mouseY)
   if self._pendingCardTargetId then
     love.graphics.setFont(FontManager.getFont("small"))
     love.graphics.setColor(Constants.COLOR_TEXT_SUB)
-    love.graphics.printf("낙석 위치를 보드에서 클릭", rect.x, rect.y + rect.h - 18, rect.w, "center")
+    local hintText = self._pendingCardTargetId == "reinforcement" and "신병 위치를 보드에서 클릭" or "낙석 위치를 보드에서 클릭"
+    love.graphics.printf(hintText, rect.x, rect.y + rect.h - 18, rect.w, "center")
   end
 end
 
@@ -1675,7 +1801,7 @@ function MatchScene:drawAimGuide(mouseX, mouseY)
 end
 
 function MatchScene:drawPendingCardPreview(mouseX, mouseY)
-  if self._pendingCardTargetId ~= "rockfall" then
+  if self._pendingCardTargetId ~= "rockfall" and self._pendingCardTargetId ~= "reinforcement" then
     return
   end
   if not self:isPlayingPhase() or not self:isMyTurn() then
@@ -1688,16 +1814,27 @@ function MatchScene:drawPendingCardPreview(mouseX, mouseY)
   end
 
   local canonicalX, canonicalY = self:localToCanonical(boardLocalX, boardLocalY)
-  local canPlace = self:canPlaceRockfallAtCanonical(canonicalX, canonicalY)
-  local width = Constants.ROCK_OBSTACLE_WIDTH
-  local height = Constants.ROCK_OBSTACLE_HEIGHT
-  local color = canPlace and { 0.36, 0.90, 0.50, 0.35 } or { 0.90, 0.30, 0.30, 0.35 }
-  local borderColor = canPlace and { 0.36, 0.90, 0.50, 1.0 } or { 0.90, 0.30, 0.30, 1.0 }
-
-  love.graphics.setColor(color)
-  love.graphics.rectangle("fill", mouseX - width * 0.5, mouseY - height * 0.5, width, height, 6, 6)
-  love.graphics.setColor(borderColor)
-  love.graphics.rectangle("line", mouseX - width * 0.5, mouseY - height * 0.5, width, height, 6, 6)
+  local canPlace = false
+  if self._pendingCardTargetId == "rockfall" then
+    canPlace = self:canPlaceRockfallAtCanonical(canonicalX, canonicalY)
+    local width = Constants.ROCK_OBSTACLE_WIDTH
+    local height = Constants.ROCK_OBSTACLE_HEIGHT
+    local color = canPlace and { 0.36, 0.90, 0.50, 0.35 } or { 0.90, 0.30, 0.30, 0.35 }
+    local borderColor = canPlace and { 0.36, 0.90, 0.50, 1.0 } or { 0.90, 0.30, 0.30, 1.0 }
+    love.graphics.setColor(color)
+    love.graphics.rectangle("fill", mouseX - width * 0.5, mouseY - height * 0.5, width, height, 6, 6)
+    love.graphics.setColor(borderColor)
+    love.graphics.rectangle("line", mouseX - width * 0.5, mouseY - height * 0.5, width, height, 6, 6)
+  else
+    canPlace = self:canPlaceReinforcementAtCanonical(canonicalX, canonicalY)
+    local radius = Constants.STONE_RADIUS
+    local color = canPlace and { 0.36, 0.90, 0.50, 0.35 } or { 0.90, 0.30, 0.30, 0.35 }
+    local borderColor = canPlace and { 0.36, 0.90, 0.50, 1.0 } or { 0.90, 0.30, 0.30, 1.0 }
+    love.graphics.setColor(color)
+    love.graphics.circle("fill", mouseX, mouseY, radius)
+    love.graphics.setColor(borderColor)
+    love.graphics.circle("line", mouseX, mouseY, radius)
+  end
 end
 
 function MatchScene:drawCardSelectPanel(mouseX, mouseY)
@@ -1849,6 +1986,11 @@ function MatchScene:draw()
 
   self:drawPendingCardPreview(mouseX, mouseY)
   self:drawAimGuide(mouseX, mouseY)
+  if self._effectManager then
+    self._effectManager:draw(self._boardX, self._boardY, function(canonicalX, canonicalY)
+      return self:canonicalToLocal(canonicalX, canonicalY)
+    end)
+  end
 
   if self:isPlacementPhase() then
     local canSubmit = (not self._isPlacementSubmitted) and (not self._isSubmitPending) and #self._myStoneList == Constants.STONE_COUNT_PER_PLAYER
@@ -2063,6 +2205,8 @@ function MatchScene:onWsEnvelope(envelope)
     else
       self._playingShotUsed = 0
     end
+    self._shockwaveSourceStoneId = nil
+    self._shockwaveOwnerPlayerIndex = nil
     if type(payload.hasCardUsedThisTurn) == "boolean" then
       self._hasUsedCardThisTurn = payload.hasCardUsedThisTurn
     else
@@ -2076,6 +2220,9 @@ function MatchScene:onWsEnvelope(envelope)
     self._isSurrenderPending = false
     self._isAimDragging = false
     self._aimStoneId = nil
+    if self._effectManager then
+      self._effectManager:clear()
+    end
     self._lastAutoSnapshotTurnIndex = nil
     self._shouldSendSnapshotAfterSim = false
     self:stopShotSimulation()
@@ -2129,10 +2276,7 @@ function MatchScene:onWsEnvelope(envelope)
         }
       end
       if type(payload.effect) == "table" and type(payload.effect.invincibleTurnByPlayer) == "table" then
-        self._invincibleTurnByPlayer = {
-          [1] = type(payload.effect.invincibleTurnByPlayer[1]) == "number" and payload.effect.invincibleTurnByPlayer[1] or nil,
-          [2] = type(payload.effect.invincibleTurnByPlayer[2]) == "number" and payload.effect.invincibleTurnByPlayer[2] or nil
-        }
+        self._invincibleTurnByPlayer = normalizeInvincibleTurnByPlayer(payload.effect.invincibleTurnByPlayer)
       end
       if type(payload.effect) == "table" and (payload.effect.shockwaveOwnerPlayerIndex == 1 or payload.effect.shockwaveOwnerPlayerIndex == 2) then
         self._shockwaveOwnerPlayerIndex = payload.effect.shockwaveOwnerPlayerIndex
@@ -2164,10 +2308,7 @@ function MatchScene:onWsEnvelope(envelope)
         }
       end
       if type(payload.effect) == "table" and type(payload.effect.invincibleTurnByPlayer) == "table" then
-        self._invincibleTurnByPlayer = {
-          [1] = type(payload.effect.invincibleTurnByPlayer[1]) == "number" and payload.effect.invincibleTurnByPlayer[1] or nil,
-          [2] = type(payload.effect.invincibleTurnByPlayer[2]) == "number" and payload.effect.invincibleTurnByPlayer[2] or nil
-        }
+        self._invincibleTurnByPlayer = normalizeInvincibleTurnByPlayer(payload.effect.invincibleTurnByPlayer)
       end
       if type(payload.effect) == "table" and (payload.effect.shockwaveOwnerPlayerIndex == 1 or payload.effect.shockwaveOwnerPlayerIndex == 2) then
         self._shockwaveOwnerPlayerIndex = payload.effect.shockwaveOwnerPlayerIndex
@@ -2232,6 +2373,10 @@ function MatchScene:onWsEnvelope(envelope)
     self:stopShotSimulation()
     self._isPlayingAwaitingSnapshot = false
     self._isPlayingShotCommitted = false
+    self._shockwaveSourceStoneId = nil
+    if self._effectManager then
+      self._effectManager:clear()
+    end
     self._isTurnShotPending = false
     self._isCardUsePending = false
     self._pendingCardTargetId = nil

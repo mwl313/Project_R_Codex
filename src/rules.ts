@@ -35,8 +35,8 @@ export const POWER_PER_PIXEL = 4.0;
 export const ROCK_OBSTACLE_WIDTH = 100;
 export const ROCK_OBSTACLE_HEIGHT = 50;
 export const ROCK_OBSTACLE_MARGIN = 5;
-export const SHOCKWAVE_RANGE_MULTIPLIER = 1.0;
-export const SHOCKWAVE_STRENGTH = 240;
+export const SHOCKWAVE_RANGE_MULTIPLIER = 4.0;
+export const SHOCKWAVE_STRENGTH = 200;
 
 export const CHAT_MAX_LENGTH = 120;
 export const CHAT_RATE_WINDOW_SEC = 10;
