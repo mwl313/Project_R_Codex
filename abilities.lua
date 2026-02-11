@@ -26,15 +26,16 @@
 
 local Constants = require("constants")
 local I18n = require("i18n.i18n")
+local CardRules = require("shared.card_rules")
 
 local Abilities = {}
 
 Abilities.TURN_CARD_SET = {
-  agile = true,
-  reinforcement = true,
-  rockfall = true,
-  invincible = true,
-  shockwave = true
+  agile = CardRules.isTurnCardEnabled("agile"),
+  reinforcement = CardRules.isTurnCardEnabled("reinforcement"),
+  rockfall = CardRules.isTurnCardEnabled("rockfall"),
+  invincible = CardRules.isTurnCardEnabled("invincible"),
+  shockwave = CardRules.isTurnCardEnabled("shockwave")
 }
 
 local function t(key, vars)
@@ -131,7 +132,8 @@ function Abilities.isShockwaveShotStone(scene, stoneId)
 end
 
 function Abilities.applyShockwaveFromPoint(scene, centerX, centerY)
-  local shockwaveRadius = Constants.STONE_RADIUS * Constants.SHOCKWAVE_RANGE_MULTIPLIER
+  local shockwaveRule = CardRules.getShockwaveRule()
+  local shockwaveRadius = Constants.STONE_RADIUS * math.max(0, shockwaveRule.radius_multiplier or 0)
   if shockwaveRadius <= 0 then
     return
   end
@@ -139,13 +141,15 @@ function Abilities.applyShockwaveFromPoint(scene, centerX, centerY)
     scene._effectManager:addShockwavePulse(centerX, centerY, shockwaveRadius)
   end
 
-  local impulseStrength = math.max(0, Constants.SHOCKWAVE_STRENGTH)
+  local impulseStrength = math.max(0, shockwaveRule.strength or 0)
   if impulseStrength <= 0 then
     return
   end
 
   for _, stone in ipairs(scene._playingStoneList) do
-    if stone.alive ~= false and stone.id ~= scene._shockwaveSourceStoneId and (not Abilities.isInvincibleOnCurrentTurn(scene, stone.ownerPlayerIndex)) then
+    local isSourceStoneBlocked = shockwaveRule.exclude_source_stone and stone.id == scene._shockwaveSourceStoneId
+    local isInvincibleBlocked = shockwaveRule.ignore_invincible_targets and Abilities.isInvincibleOnCurrentTurn(scene, stone.ownerPlayerIndex)
+    if stone.alive ~= false and (not isSourceStoneBlocked) and (not isInvincibleBlocked) then
       local dx = stone.x - centerX
       local dy = stone.y - centerY
       local distance = math.sqrt(dx * dx + dy * dy)
@@ -159,11 +163,12 @@ function Abilities.applyShockwaveFromPoint(scene, centerX, centerY)
 end
 
 function Abilities.canPlaceRockfallAtCanonical(scene, canonicalX, canonicalY)
-  local width = Constants.ROCK_OBSTACLE_WIDTH
-  local height = Constants.ROCK_OBSTACLE_HEIGHT
+  local rockfallRule = CardRules.getRockfallRule()
+  local width = math.max(1, rockfallRule.width or Constants.ROCK_OBSTACLE_WIDTH)
+  local height = math.max(1, rockfallRule.height or Constants.ROCK_OBSTACLE_HEIGHT)
   local halfW = width * 0.5
   local halfH = height * 0.5
-  local margin = Constants.ROCK_OBSTACLE_MARGIN
+  local margin = math.max(0, rockfallRule.margin or Constants.ROCK_OBSTACLE_MARGIN)
 
   if canonicalX - halfW < margin or canonicalX + halfW > Constants.BOARD_W - margin then
     return false, t("abilities.validate.rockfall_board_margin")
@@ -195,6 +200,8 @@ function Abilities.canPlaceRockfallAtCanonical(scene, canonicalX, canonicalY)
 end
 
 function Abilities.canPlaceReinforcementAtCanonical(scene, canonicalX, canonicalY)
+  local reinforcementRule = CardRules.getReinforcementRule()
+  local minPlaceDistance = math.max(1, reinforcementRule.min_place_distance or Constants.MIN_PLACE_DISTANCE)
   local minX = Constants.STONE_RADIUS
   local maxX = Constants.BOARD_W - Constants.STONE_RADIUS
   local minY = Constants.STONE_RADIUS
@@ -208,7 +215,7 @@ function Abilities.canPlaceReinforcementAtCanonical(scene, canonicalX, canonical
       local dx = stone.x - canonicalX
       local dy = stone.y - canonicalY
       local distance = math.sqrt(dx * dx + dy * dy)
-      if distance < Constants.MIN_PLACE_DISTANCE then
+      if distance < minPlaceDistance then
         return false, t("abilities.validate.reinforcement_too_close")
       end
     end
@@ -308,8 +315,9 @@ function Abilities.drawPendingCardPreview(scene, mouseX, mouseY)
   local canPlace = false
   if scene._pendingCardTargetId == "rockfall" then
     canPlace = Abilities.canPlaceRockfallAtCanonical(scene, canonicalX, canonicalY)
-    local width = Constants.ROCK_OBSTACLE_WIDTH
-    local height = Constants.ROCK_OBSTACLE_HEIGHT
+    local rockfallRule = CardRules.getRockfallRule()
+    local width = math.max(1, rockfallRule.width or Constants.ROCK_OBSTACLE_WIDTH)
+    local height = math.max(1, rockfallRule.height or Constants.ROCK_OBSTACLE_HEIGHT)
     local color = canPlace and { 0.36, 0.90, 0.50, 0.35 } or { 0.90, 0.30, 0.30, 0.35 }
     local borderColor = canPlace and { 0.36, 0.90, 0.50, 1.0 } or { 0.90, 0.30, 0.30, 1.0 }
     love.graphics.setColor(color)

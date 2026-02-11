@@ -21,64 +21,17 @@ local eventChannelName = select(2, ...)
 local commandChannel = love.thread.getChannel(commandChannelName)
 local eventChannel = love.thread.getChannel(eventChannelName)
 
-local hasLoveTimer, loveTimerModule = pcall(require, "love.timer")
-if not hasLoveTimer then
-  loveTimerModule = nil
-end
-
 local canUseSocket = false
 local httpModule
 local ltn12Module
-local socketModule
 
-do
-  local hasSocket, socketValue = pcall(require, "socket")
-  local hasHttp, httpValue = pcall(require, "socket.http")
-  local hasLtn12, ltn12Value = pcall(require, "ltn12")
-  if hasSocket then
-    socketModule = socketValue
-  end
-  if hasHttp and hasLtn12 then
-    canUseSocket = true
-    httpModule = httpValue
-    ltn12Module = ltn12Value
-  end
-end
-
-local function nowMs()
-  if loveTimerModule and loveTimerModule.getTime then
-    local isOk, value = pcall(loveTimerModule.getTime)
-    if isOk and type(value) == "number" then
-      return value * 1000
-    end
-  end
-  return os.clock() * 1000
-end
-
-local function sleepMs(durationMs)
-  local safeMs = tonumber(durationMs) or 0
-  if safeMs <= 0 then
-    return
-  end
-  local safeDurationSec = safeMs / 1000
-
-  if loveTimerModule and loveTimerModule.sleep then
-    local isOk = pcall(loveTimerModule.sleep, safeDurationSec)
-    if isOk then
-      return
-    end
-  end
-
-  if socketModule and socketModule.sleep then
-    local isOk = pcall(socketModule.sleep, safeDurationSec)
-    if isOk then
-      return
-    end
-  end
-
-  local targetMs = nowMs() + safeMs
-  while nowMs() < targetMs do
-  end
+local hasSocket, _ = pcall(require, "socket")
+local hasHttp, httpValue = pcall(require, "socket.http")
+local hasLtn12, ltn12Value = pcall(require, "ltn12")
+if hasSocket and hasHttp and hasLtn12 then
+  canUseSocket = true
+  httpModule = httpValue
+  ltn12Module = ltn12Value
 end
 
 local function pushEvent(eventTable)
@@ -134,24 +87,35 @@ local function executeRequest(command)
   }
 end
 
+local function handleCommand(commandRaw)
+  local isDecoded, command = pcall(Json.decode, commandRaw)
+  if not isDecoded or type(command) ~= "table" then
+    return true
+  end
+
+  if command.type == "shutdown" then
+    return false
+  end
+
+  if command.type == "request" then
+    local isSuccess, response = pcall(executeRequest, command)
+    if isSuccess then
+      pushEvent(response)
+    else
+      pushEvent(buildResultFromError(command.requestId, response))
+    end
+  end
+
+  return true
+end
+
 local isRunning = true
 while isRunning do
-  local commandRaw = commandChannel:pop()
-  if not commandRaw then
-    sleepMs(10)
-  else
-    local isDecoded, command = pcall(Json.decode, commandRaw)
-    if isDecoded and command then
-      if command.type == "shutdown" then
-        isRunning = false
-      elseif command.type == "request" then
-        local isSuccess, response = pcall(executeRequest, command)
-        if isSuccess then
-          pushEvent(response)
-        else
-          pushEvent(buildResultFromError(command.requestId, response))
-        end
-      end
+  local commandRaw = commandChannel:demand()
+  if commandRaw then
+    local shouldContinue = handleCommand(commandRaw)
+    if shouldContinue == false then
+      isRunning = false
     end
   end
 end

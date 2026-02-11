@@ -1,5 +1,5 @@
 import { RoomDO } from "./room_do";
-import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH } from "./rules";
+import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, RULES_VERSION } from "./rules";
 
 export { RoomDO };
 
@@ -59,7 +59,7 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return jsonResponse({ ok: true });
+      return jsonResponse({ ok: true, rulesVersion: RULES_VERSION });
     }
 
     if (request.method === "POST" && url.pathname === "/room/create") {
@@ -99,6 +99,7 @@ export default {
 
         return jsonResponse({
           ok: true,
+          rulesVersion: RULES_VERSION,
           roomCode,
           token: payload.token,
           wsUrl: `/ws?code=${roomCode}&token=${payload.token}`
@@ -143,6 +144,7 @@ export default {
 
       return jsonResponse({
         ok: true,
+        rulesVersion: RULES_VERSION,
         roomCode,
         token: payload.token,
         wsUrl: `/ws?code=${roomCode}&token=${payload.token}`

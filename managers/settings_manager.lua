@@ -37,10 +37,46 @@ local function trim(value)
   return (value:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+local function getUtfModule()
+  if love and love.utf8 then
+    return love.utf8
+  end
+  local isLoaded, moduleValue = pcall(require, "utf8")
+  if isLoaded and type(moduleValue) == "table" then
+    return moduleValue
+  end
+  return nil
+end
+
+local UTF_MODULE = getUtfModule()
+
+local function truncateUtf8(value, maxChars)
+  if type(value) ~= "string" then
+    return ""
+  end
+  local safeMax = tonumber(maxChars) or 0
+  if safeMax <= 0 then
+    return ""
+  end
+
+  if UTF_MODULE and type(UTF_MODULE.offset) == "function" then
+    local isOk, cutIndex = pcall(UTF_MODULE.offset, value, safeMax + 1)
+    if isOk and type(cutIndex) == "number" then
+      return string.sub(value, 1, cutIndex - 1)
+    end
+  end
+
+  if #value <= safeMax then
+    return value
+  end
+  return string.sub(value, 1, safeMax)
+end
+
 local function sanitizeNickname(value)
   local text = tostring(value or "")
   text = text:gsub("[\r\n]", " ")
   text = trim(text)
+  text = truncateUtf8(text, Constants.NICKNAME_MAX_LENGTH)
   if text == "" then
     return "Player"
   end

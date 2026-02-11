@@ -45,7 +45,8 @@ local LocaleKo = {
       ws_url_missing = "WS URL이 없습니다.",
       response_parse_failed = "응답 파싱 실패",
       request_failed = "요청 실패: {reason}",
-      ws_message_parse_failed = "WS 메시지 파싱 실패"
+      ws_message_parse_failed = "WS 메시지 파싱 실패",
+      rules_version_mismatch = "룰 버전 불일치: 클라이언트 {clientVersion} / 서버 {serverVersion}"
     },
     settings = {
       load_failed_default = "settings.ini 로드 실패, 기본값 사용: {error}",
@@ -269,6 +270,7 @@ local LocaleKo = {
       reason_draw = "무승부",
       reason_player_left = "상대 이탈",
       reason_surrender = "기권",
+      reason_snapshot_timeout = "호스트 스냅샷 타임아웃",
       vote_none = "없음",
       vote_rematch = "재대결",
       vote_lobby = "로비"

@@ -170,6 +170,7 @@ function LobbyScene:openNicknameOverlay()
     h = 44,
     placeholder = t("lobby.overlay.nickname.placeholder"),
     text = self._app:getNickname(),
+    maxChars = Constants.NICKNAME_MAX_LENGTH,
     onEnter = function()
       self:applyNicknameOverlay()
     end

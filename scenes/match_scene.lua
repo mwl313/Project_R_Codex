@@ -20,16 +20,13 @@ local Button = require("ui.button")
 local EffectManager = require("effects.effect_manager")
 local Abilities = require("abilities")
 local GameMechanics = require("game_mechanics")
+local TimeUtils = require("utils.time_utils")
 
 local MatchScene = {}
 MatchScene.__index = MatchScene
 
 local function t(key, vars)
   return I18n.t(key, vars)
-end
-
-local function nowEpochMs()
-  return os.time() * 1000
 end
 
 local function getCardSelectPanelRect(boardX, boardY)
@@ -1279,7 +1276,7 @@ function MatchScene:drawPlacementInfo()
   local timerText = ""
   local phaseEndsAtMs = self._roomState.timers and self._roomState.timers.phaseEndsAtMs or nil
   if phaseEndsAtMs and self._roomState.phase == Constants.PHASE_PLACEMENT_REVEAL then
-    local remainSec = math.max(0, math.ceil((phaseEndsAtMs - nowEpochMs()) / 1000))
+    local remainSec = TimeUtils.getRemainingSeconds(phaseEndsAtMs)
     timerText = t("match.info.reveal_remaining", {
       sec = remainSec
     })
@@ -1305,7 +1302,7 @@ end
 function MatchScene:drawPlayingInfo()
   local remainSec = 0
   if self._turnEndsAtMs then
-    remainSec = math.max(0, math.ceil((self._turnEndsAtMs - nowEpochMs()) / 1000))
+    remainSec = TimeUtils.getRemainingSeconds(self._turnEndsAtMs)
   end
 
   local turnOwnerText = self._activePlayerIndex == self:getMyPlayerIndex() and t("match.info.turn_owner_me") or t("match.info.turn_owner_other")
@@ -1431,7 +1428,7 @@ function MatchScene:drawCardSelectPanel(mouseX, mouseY)
 
   local remainSec = 0
   if self._cardSelectEndsAtMs then
-    remainSec = math.max(0, math.ceil((self._cardSelectEndsAtMs - nowEpochMs()) / 1000))
+    remainSec = TimeUtils.getRemainingSeconds(self._cardSelectEndsAtMs)
   end
 
   love.graphics.printf(
@@ -1481,7 +1478,8 @@ function MatchScene:drawResultPanel(mouseX, mouseY)
     stone_zero = t("match.result.reason_stone_zero"),
     draw = t("match.result.reason_draw"),
     player_left = t("match.result.reason_player_left"),
-    surrender = t("match.result.reason_surrender")
+    surrender = t("match.result.reason_surrender"),
+    snapshot_timeout = t("match.result.reason_snapshot_timeout")
   }
   local reasonLabel = reasonLabelMap[reason] or tostring(reason)
   local voteLabelMap = {

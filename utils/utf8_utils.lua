@@ -9,6 +9,7 @@
 
 외부에서 사용 가능한 함수:
 - Utf8Utils.removeLast(text)
+- Utf8Utils.truncateToLength(text, maxChars)
 
 주의:
 - utf8 모듈이 없는 환경에서도 절대 크래시하지 않아야 한다
@@ -36,6 +37,16 @@ local function removeLastWithFallback(textValue)
   return string.sub(textValue, 1, length - 1)
 end
 
+local function truncateWithFallback(textValue, maxChars)
+  if maxChars <= 0 then
+    return ""
+  end
+  if #textValue <= maxChars then
+    return textValue
+  end
+  return string.sub(textValue, 1, maxChars)
+end
+
 function Utf8Utils.removeLast(text)
   local textValue = type(text) == "string" and text or ""
   if textValue == "" then
@@ -51,6 +62,26 @@ function Utf8Utils.removeLast(text)
   end
 
   return removeLastWithFallback(textValue)
+end
+
+function Utf8Utils.truncateToLength(text, maxChars)
+  local textValue = type(text) == "string" and text or ""
+  local safeMax = tonumber(maxChars) or 0
+  if safeMax <= 0 then
+    return ""
+  end
+  if textValue == "" then
+    return ""
+  end
+
+  if utfModule and type(utfModule.offset) == "function" then
+    local isOk, offset = pcall(utfModule.offset, textValue, safeMax + 1)
+    if isOk and type(offset) == "number" then
+      return string.sub(textValue, 1, offset - 1)
+    end
+  end
+
+  return truncateWithFallback(textValue, safeMax)
 end
 
 return Utf8Utils

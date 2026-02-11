@@ -115,7 +115,8 @@ function App.new(renderScale)
       roomCode = nil,
       token = nil,
       wsUrl = nil,
-      role = nil
+      role = nil,
+      serverRulesVersion = nil
     },
     _nickname = "Player",
     _displayMode = Constants.DISPLAY_MODE_WINDOWED,
@@ -123,7 +124,8 @@ function App.new(renderScale)
     _fontWarningText = FontManager.getWarningMessage(),
     _worldMouseX = 0,
     _worldMouseY = 0,
-    _pendingBootWarningText = nil
+    _pendingBootWarningText = nil,
+    _lastRulesVersionWarningKey = nil
   }
   setmetatable(instance, App)
 
@@ -274,10 +276,29 @@ function App:buildHttpUrl(path)
 end
 
 function App:buildWsUrl(pathOrAbsolute)
-  if startsWith(pathOrAbsolute, "ws://") then
+  if startsWith(pathOrAbsolute, "ws://") or startsWith(pathOrAbsolute, "wss://") then
     return pathOrAbsolute
   end
   return Constants.SERVER_WS_BASE_URL .. pathOrAbsolute
+end
+
+function App:checkRulesVersion(serverVersion)
+  if type(serverVersion) ~= "number" then
+    return
+  end
+  self._session.serverRulesVersion = serverVersion
+  if serverVersion == Constants.RULES_VERSION then
+    return
+  end
+  local warningKey = tostring(serverVersion) .. ":" .. tostring(Constants.RULES_VERSION)
+  if self._lastRulesVersionWarningKey == warningKey then
+    return
+  end
+  self._lastRulesVersionWarningKey = warningKey
+  self:emitUiStatus(t("app.ui.rules_version_mismatch", {
+    clientVersion = tostring(Constants.RULES_VERSION),
+    serverVersion = tostring(serverVersion)
+  }), Constants.COLOR_DANGER)
 end
 
 function App:createRoom()
@@ -334,7 +355,8 @@ function App:leaveRoom()
     roomCode = nil,
     token = nil,
     wsUrl = nil,
-    role = nil
+    role = nil,
+    serverRulesVersion = nil
   }
 end
 
@@ -370,6 +392,7 @@ function App:handleHttpResponse(event)
   self._session.token = bodyTable.token
   self._session.wsUrl = bodyTable.wsUrl
   self._session.role = nil
+  self:checkRulesVersion(bodyTable.rulesVersion)
 
   if requestMeta.kind == "createRoom" or requestMeta.kind == "joinRoom" then
     if requestMeta.kind == "createRoom" then
@@ -391,13 +414,18 @@ function App:handleWsEnvelope(envelope)
   if envelope.type == "server.welcome" then
     local payload = envelope.payload or {}
     self._session.role = payload.role
+    self:checkRulesVersion(payload.rulesVersion)
+  elseif envelope.type == "room.state" then
+    local payload = envelope.payload or {}
+    self:checkRulesVersion(payload.rulesVersion)
   elseif envelope.type == "room.closed" then
     self._wsClient:disconnect()
     self._session = {
       roomCode = nil,
       token = nil,
       wsUrl = nil,
-      role = nil
+      role = nil,
+      serverRulesVersion = nil
     }
   end
   self._sceneManager:dispatch("onAppEvent", {

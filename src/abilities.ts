@@ -1,9 +1,5 @@
-import {
-  CARD_POOL,
-  MIN_PLACE_DISTANCE,
-  ROCK_OBSTACLE_HEIGHT,
-  ROCK_OBSTACLE_WIDTH
-} from "./rules";
+import { CARD_POOL } from "./rules";
+import { CARD_RULES, isTurnCardEnabled } from "./card_rules";
 
 export interface AbilityTargetPoint {
   x: number;
@@ -51,7 +47,7 @@ export interface AbilityApplyContext {
   playing: AbilityPlayingState;
   createPlayingEntityId: (prefix: string) => string;
   canPlaceStoneAt: (x: number, y: number, minDistance: number) => boolean;
-  canPlaceObstacleAt: (x: number, y: number, width: number, height: number) => boolean;
+  canPlaceObstacleAt: (x: number, y: number, width: number, height: number, margin: number) => boolean;
 }
 
 export interface AbilityApplyResult {
@@ -64,7 +60,7 @@ export interface AbilityApplyResult {
 const CARD_SET = new Set<string>(CARD_POOL as readonly string[]);
 
 export function isSupportedCardId(cardId: string): boolean {
-  return CARD_SET.has(cardId);
+  return CARD_SET.has(cardId) && isTurnCardEnabled(cardId);
 }
 
 export function applyTurnCardAbility(context: AbilityApplyContext): AbilityApplyResult {
@@ -81,8 +77,9 @@ export function applyTurnCardAbility(context: AbilityApplyContext): AbilityApply
   const playing = context.playing;
 
   if (cardId === "agile") {
-    // Agile: allow one extra shot this turn by extending shot budget to 2.
-    playing.shotBudget = Math.max(playing.shotBudget, 2);
+    // Agile: allow extra shot this turn by extending shot budget.
+    const shotBudget = Math.max(1, Math.floor(CARD_RULES.cards.agile.shot_budget));
+    playing.shotBudget = Math.max(playing.shotBudget, shotBudget);
     effectPayload.shotBudget = playing.shotBudget;
     return {
       ok: true,
@@ -93,6 +90,7 @@ export function applyTurnCardAbility(context: AbilityApplyContext): AbilityApply
 
   if (cardId === "reinforcement") {
     // Reinforcement: spawn one friendly stone at valid target, locked for this turn.
+    const reinforcementRule = CARD_RULES.cards.reinforcement;
     const target = context.payload.target;
     if (!target) {
       return {
@@ -101,7 +99,8 @@ export function applyTurnCardAbility(context: AbilityApplyContext): AbilityApply
         effectPayload: {}
       };
     }
-    if (!context.canPlaceStoneAt(target.x, target.y, MIN_PLACE_DISTANCE)) {
+    const minPlaceDistance = Math.max(1, reinforcementRule.min_place_distance);
+    if (!context.canPlaceStoneAt(target.x, target.y, minPlaceDistance)) {
       return {
         ok: false,
         errorCode: "invalid_card_target",
@@ -117,7 +116,9 @@ export function applyTurnCardAbility(context: AbilityApplyContext): AbilityApply
       alive: true
     };
     playing.stones.push(newStone);
-    playing.lockedStoneIds.push(newStone.id);
+    if (reinforcementRule.lock_spawned_stone_for_turn) {
+      playing.lockedStoneIds.push(newStone.id);
+    }
     effectPayload.spawnStone = {
       id: newStone.id,
       ownerPlayerIndex: newStone.ownerPlayerIndex,
@@ -135,6 +136,7 @@ export function applyTurnCardAbility(context: AbilityApplyContext): AbilityApply
 
   if (cardId === "rockfall") {
     // Rockfall: spawn one obstacle at valid target.
+    const rockfallRule = CARD_RULES.cards.rockfall;
     const target = context.payload.target;
     if (!target) {
       return {
@@ -143,7 +145,10 @@ export function applyTurnCardAbility(context: AbilityApplyContext): AbilityApply
         effectPayload: {}
       };
     }
-    if (!context.canPlaceObstacleAt(target.x, target.y, ROCK_OBSTACLE_WIDTH, ROCK_OBSTACLE_HEIGHT)) {
+    const obstacleWidth = Math.max(1, rockfallRule.width);
+    const obstacleHeight = Math.max(1, rockfallRule.height);
+    const obstacleMargin = Math.max(0, rockfallRule.margin);
+    if (!context.canPlaceObstacleAt(target.x, target.y, obstacleWidth, obstacleHeight, obstacleMargin)) {
       return {
         ok: false,
         errorCode: "invalid_card_target",
@@ -155,8 +160,8 @@ export function applyTurnCardAbility(context: AbilityApplyContext): AbilityApply
       id: context.createPlayingEntityId("rock"),
       x: target.x,
       y: target.y,
-      width: ROCK_OBSTACLE_WIDTH,
-      height: ROCK_OBSTACLE_HEIGHT
+      width: obstacleWidth,
+      height: obstacleHeight
     };
     playing.obstacles.push(newObstacle);
     effectPayload.obstacle = {
@@ -175,7 +180,8 @@ export function applyTurnCardAbility(context: AbilityApplyContext): AbilityApply
 
   if (cardId === "invincible") {
     // Invincible: protect friendly stones from displacement on next turn.
-    playing.invincibleTurnByPlayer[context.playerIndex] = playing.turnIndex + 1;
+    const turnOffset = Math.max(1, Math.floor(CARD_RULES.cards.invincible.protect_after_turn_offset));
+    playing.invincibleTurnByPlayer[context.playerIndex] = playing.turnIndex + turnOffset;
     effectPayload.invincibleTurnByPlayer = {
       1: playing.invincibleTurnByPlayer[1],
       2: playing.invincibleTurnByPlayer[2]
