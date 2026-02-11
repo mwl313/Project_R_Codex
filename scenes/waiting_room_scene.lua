@@ -149,7 +149,8 @@ end
 
 function WaitingRoomScene:leaveRoom()
   self._app:leaveRoom()
-  self._app:goLobby({
+  self._app:goMultiplayer({
+    backScene = "play",
     statusText = t("waiting_room.status.left_room"),
     statusColor = Constants.COLOR_TEXT_SUB
   })
@@ -383,7 +384,8 @@ function WaitingRoomScene:onWsEnvelope(envelope)
   end
 
   if envelope.type == "room.closed" then
-    self._app:goLobby({
+    self._app:goMultiplayer({
+      backScene = "play",
       statusText = t("waiting_room.status.room_closed", {
         reason = tostring(envelope.payload and envelope.payload.reason or "closed")
       }),

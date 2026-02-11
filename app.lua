@@ -42,6 +42,21 @@ local function createSceneFactoryTable()
     lobby = function(app)
       return require("scenes.lobby_scene").new(app)
     end,
+    play = function(app)
+      return require("scenes.play_scene").new(app)
+    end,
+    multiplayer = function(app)
+      return require("scenes.multiplayer_scene").new(app)
+    end,
+    guide = function(app)
+      return require("scenes.guide_scene").new(app)
+    end,
+    skin = function(app)
+      return require("scenes.skin_scene").new(app)
+    end,
+    credits = function(app)
+      return require("scenes.credits_scene").new(app)
+    end,
     roomSearch = function(app)
       return require("scenes.room_search_scene").new(app)
     end,
@@ -244,23 +259,47 @@ function App:updateMouseFromScreen(screenX, screenY)
 end
 
 function App:goLobby(params)
-  self._sceneManager:setScene("lobby", params)
+  self:goScene("lobby", params)
+end
+
+function App:goPlay(params)
+  self:goScene("play", params)
+end
+
+function App:goMultiplayer(params)
+  self:goScene("multiplayer", params)
+end
+
+function App:goGuide(params)
+  self:goScene("guide", params)
+end
+
+function App:goSkin(params)
+  self:goScene("skin", params)
+end
+
+function App:goCredits(params)
+  self:goScene("credits", params)
 end
 
 function App:goRoomSearch(params)
-  self._sceneManager:setScene("roomSearch", params)
+  self:goScene("roomSearch", params)
 end
 
 function App:goSingleDummy(params)
-  self._sceneManager:setScene("singleDummy", params)
+  self:goScene("singleDummy", params)
 end
 
 function App:goWaitingRoom(params)
-  self._sceneManager:setScene("waitingRoom", params)
+  self:goScene("waitingRoom", params)
 end
 
 function App:goMatch(params)
-  self._sceneManager:setScene("match", params)
+  self:goScene("match", params)
+end
+
+function App:goScene(sceneName, params)
+  self._sceneManager:setScene(sceneName, params)
 end
 
 function App:emitUiStatus(text, color)

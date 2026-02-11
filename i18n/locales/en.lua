@@ -23,6 +23,7 @@ local LocaleEn = {
     button = {
       save = "Save",
       cancel = "Cancel",
+      back = "Back",
       copy = "Copy",
       send = "Send",
       join = "Join",
@@ -32,7 +33,8 @@ local LocaleEn = {
       submit_placement = "Submit Placement",
       confirm_selection = "Confirm",
       surrender = "Surrender",
-      rematch = "Rematch"
+      rematch = "Rematch",
+      menu = "Menu"
     }
   },
   font = {
@@ -59,6 +61,7 @@ local LocaleEn = {
     title = "ProjectR Lobby",
     current_nickname = "Nickname: {nickname}",
     menu = {
+      play = "Play",
       single_player = "Single Player",
       create_room = "Create Room",
       search_room = "Find Room",
@@ -105,6 +108,37 @@ local LocaleEn = {
         save_path = "Save Path: {path}"
       }
     }
+  },
+  play = {
+    title = "Play",
+    subtitle = "Choose a mode",
+    menu = {
+      single_player = "Single Player",
+      multi_player = "Multiplayer"
+    }
+  },
+  multiplayer = {
+    title = "Multiplayer",
+    subtitle = "Choose create room or find room",
+    menu = {
+      create_room = "Create Room",
+      search_room = "Find Room"
+    },
+    status = {
+      creating_room = "Creating room..."
+    }
+  },
+  guide = {
+    title = "Guide"
+  },
+  skin = {
+    title = "Skin"
+  },
+  credits = {
+    title = "Credits"
+  },
+  stub = {
+    message = "Stub"
   },
   room_search = {
     title = "Find Room",
@@ -198,7 +232,7 @@ local LocaleEn = {
       confirm_selection = "Confirm Selection",
       surrender = "Surrender",
       rematch = "Rematch",
-      lobby = "Back to Lobby"
+      menu = "Back to Menu"
     },
     validate = {
       out_of_board = "Position is outside board bounds.",
@@ -223,7 +257,7 @@ local LocaleEn = {
       surrender_submit = "Sending surrender request...",
       cannot_vote_now = "Cannot vote on result right now.",
       vote_rematch_submit = "Sending rematch vote...",
-      vote_lobby_submit = "Sending lobby vote...",
+      vote_lobby_submit = "Sending menu vote...",
       aiming = "Aiming... release mouse to shoot, ESC/right-click to cancel",
       shot_cancelled = "Shot cancelled.",
       shot_stone_missing = "Cannot find selected stone for shot.",
@@ -273,7 +307,7 @@ local LocaleEn = {
       reason_snapshot_timeout = "Host snapshot timeout",
       vote_none = "None",
       vote_rematch = "Rematch",
-      vote_lobby = "Lobby"
+      vote_lobby = "Menu"
     },
     info = {
       placement_my_done = "Done",
@@ -302,7 +336,7 @@ local LocaleEn = {
   single_dummy = {
     title = "Single Dummy (Manual Test)",
     subtitle = "Shockwave(1): {shockwave} | Opponent Invincible(2): {invincible} | R: Reset | ESC: Lobby",
-    back_button = "Lobby",
+    back_button = "Back",
     status = {
       entered = "Dummy mode: drag to shoot / 1=shockwave / 2=opponent invincible / R=reset",
       exited = "Single dummy test ended",

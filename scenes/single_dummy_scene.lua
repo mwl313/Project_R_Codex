@@ -75,6 +75,7 @@ function SingleDummyScene.new(app)
     _boardY = boardY,
     _statusText = "",
     _statusColor = Constants.COLOR_TEXT_SUB,
+    _backScene = "lobby",
     _playingStoneList = {},
     _obstacleList = {},
     _stoneVelocityMap = {},
@@ -101,7 +102,7 @@ function SingleDummyScene.new(app)
     h = 40,
     label = t("single_dummy.back_button"),
     onClick = function()
-      instance._app:goLobby({
+      instance._app:goScene(instance._backScene, {
         statusText = t("single_dummy.status.exited"),
         statusColor = Constants.COLOR_TEXT_SUB
       })
@@ -134,7 +135,8 @@ function SingleDummyScene:resetDummyState()
   GameMechanics.resetStoneVelocities(self)
 end
 
-function SingleDummyScene:enter(_params)
+function SingleDummyScene:enter(params)
+  self._backScene = (params and params.backScene) or "lobby"
   self:resetDummyState()
   self:setStatus(t("single_dummy.status.entered"), Constants.COLOR_TEXT_SUB)
 end
@@ -391,7 +393,7 @@ end
 
 function SingleDummyScene:keypressed(key)
   if key == "escape" then
-    self._app:goLobby({
+    self._app:goScene(self._backScene, {
       statusText = t("single_dummy.status.exited"),
       statusColor = Constants.COLOR_TEXT_SUB
     })

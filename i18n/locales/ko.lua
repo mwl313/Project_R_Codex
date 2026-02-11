@@ -23,6 +23,7 @@ local LocaleKo = {
     button = {
       save = "저장",
       cancel = "취소",
+      back = "뒤로",
       copy = "복사",
       send = "전송",
       join = "참가",
@@ -32,7 +33,8 @@ local LocaleKo = {
       submit_placement = "배치 제출",
       confirm_selection = "선택 확정",
       surrender = "기권",
-      rematch = "재대결"
+      rematch = "재대결",
+      menu = "메뉴로"
     }
   },
   font = {
@@ -59,6 +61,7 @@ local LocaleKo = {
     title = "ProjectR Lobby",
     current_nickname = "현재 닉네임: {nickname}",
     menu = {
+      play = "플레이",
       single_player = "싱글플레이어",
       create_room = "방 생성",
       search_room = "방 찾기",
@@ -105,6 +108,37 @@ local LocaleKo = {
         save_path = "저장 경로: {path}"
       }
     }
+  },
+  play = {
+    title = "플레이",
+    subtitle = "모드를 선택하세요",
+    menu = {
+      single_player = "싱글플레이어",
+      multi_player = "멀티플레이어"
+    }
+  },
+  multiplayer = {
+    title = "멀티플레이어",
+    subtitle = "방 생성 또는 방 찾기를 선택하세요",
+    menu = {
+      create_room = "방 생성",
+      search_room = "방 찾기"
+    },
+    status = {
+      creating_room = "방 생성 요청 중..."
+    }
+  },
+  guide = {
+    title = "가이드"
+  },
+  skin = {
+    title = "스킨"
+  },
+  credits = {
+    title = "크레딧"
+  },
+  stub = {
+    message = "Stub"
   },
   room_search = {
     title = "방 찾기",
@@ -198,7 +232,7 @@ local LocaleKo = {
       confirm_selection = "선택 확정",
       surrender = "기권",
       rematch = "재대결",
-      lobby = "로비로"
+      menu = "메뉴로"
     },
     validate = {
       out_of_board = "보드 경계를 벗어났습니다.",
@@ -223,7 +257,7 @@ local LocaleKo = {
       surrender_submit = "기권 요청 전송...",
       cannot_vote_now = "지금은 결과 투표를 할 수 없습니다.",
       vote_rematch_submit = "재대결 투표 전송...",
-      vote_lobby_submit = "로비 복귀 투표 전송...",
+      vote_lobby_submit = "메뉴 복귀 투표 전송...",
       aiming = "조준 중... 마우스를 놓아 발사, ESC/우클릭으로 취소",
       shot_cancelled = "발사를 취소했습니다.",
       shot_stone_missing = "발사할 알을 찾지 못했습니다.",
@@ -273,7 +307,7 @@ local LocaleKo = {
       reason_snapshot_timeout = "호스트 스냅샷 타임아웃",
       vote_none = "없음",
       vote_rematch = "재대결",
-      vote_lobby = "로비"
+      vote_lobby = "메뉴"
     },
     info = {
       placement_my_done = "완료",
@@ -302,7 +336,7 @@ local LocaleKo = {
   single_dummy = {
     title = "Single Dummy (Manual Test)",
     subtitle = "충격파(1): {shockwave} | 상대 무적(2): {invincible} | R: 리셋 | ESC: 로비",
-    back_button = "로비로",
+    back_button = "뒤로",
     status = {
       entered = "더미 모드: 드래그 발사 / 1=충격파 / 2=상대 무적 / R=리셋",
       exited = "싱글 더미 테스트 종료",

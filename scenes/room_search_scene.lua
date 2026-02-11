@@ -4,7 +4,7 @@
 
 역할:
 - 방 코드 입력 및 참가 요청 처리
-- 로비 복귀 처리
+- 이전 씬 복귀 처리(뒤로 버튼)
 
 외부에서 사용 가능한 함수:
 - RoomSearchScene.new(app)
@@ -17,6 +17,7 @@ local Constants = require("constants")
 local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
+local BackButton = require("ui.back_button")
 local TextInput = require("ui.text_input")
 
 local RoomSearchScene = {}
@@ -52,6 +53,8 @@ function RoomSearchScene.new(app)
     _roomCodeInput = input,
     _statusText = "",
     _statusColor = Constants.COLOR_TEXT_SUB,
+    _backScene = "multiplayer",
+    _lastLanguage = app:getLanguage(),
     _pasteButton = nil,
     _joinButton = nil,
     _backButton = nil
@@ -72,23 +75,16 @@ function RoomSearchScene.new(app)
   instance._joinButton = Button.new({
     x = 380,
     y = 405,
-    w = 250,
+    w = 520,
     h = 48,
     label = t("common.button.join"),
     onClick = function()
       instance:requestJoin()
     end
   })
-  instance._backButton = Button.new({
-    x = 650,
-    y = 405,
-    w = 250,
-    h = 48,
-    label = t("common.button.back_to_lobby"),
-    onClick = function()
-      instance._app:goLobby()
-    end
-  })
+  instance._backButton = BackButton.new(t("common.button.back"), function()
+    instance._app:goScene(instance._backScene)
+  end)
 
   instance._roomCodeInput.onEnter = function()
     instance:requestJoin()
@@ -97,10 +93,20 @@ function RoomSearchScene.new(app)
   return instance
 end
 
+function RoomSearchScene:rebuildLocalizedUi()
+  self._lastLanguage = self._app:getLanguage()
+  self._roomCodeInput.placeholder = t("room_search.placeholder")
+  self._pasteButton.label = t("room_search.button.paste_clipboard")
+  self._joinButton.label = t("common.button.join")
+  self._backButton.label = t("common.button.back")
+end
+
 function RoomSearchScene:enter(params)
+  self._backScene = (params and params.backScene) or "multiplayer"
   self._statusText = params and params.statusText or ""
   self._statusColor = params and params.statusColor or Constants.COLOR_TEXT_SUB
   self._roomCodeInput:setFocus(true)
+  self:rebuildLocalizedUi()
 end
 
 function RoomSearchScene:setStatus(statusText, statusColor)
@@ -147,6 +153,9 @@ function RoomSearchScene:pasteRoomCodeFromClipboard()
 end
 
 function RoomSearchScene:update(_dt)
+  if self._lastLanguage ~= self._app:getLanguage() then
+    self:rebuildLocalizedUi()
+  end
 end
 
 function RoomSearchScene:draw()
@@ -160,10 +169,10 @@ function RoomSearchScene:draw()
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
   love.graphics.printf(t("room_search.subtitle"), 0, 220, Constants.BASE_WORLD_W, "center")
 
+  self._backButton:draw(mouseX, mouseY)
   self._roomCodeInput:draw()
   self._pasteButton:draw(mouseX, mouseY)
   self._joinButton:draw(mouseX, mouseY)
-  self._backButton:draw(mouseX, mouseY)
 
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(self._statusColor)
@@ -175,6 +184,10 @@ function RoomSearchScene:mousepressed(mouseX, mouseY, button)
     return
   end
 
+  if self._backButton:isHovered(mouseX, mouseY) then
+    self._backButton:onClick()
+    return
+  end
   if self._roomCodeInput:mousepressed(mouseX, mouseY, button) then
     return
   end
@@ -184,10 +197,6 @@ function RoomSearchScene:mousepressed(mouseX, mouseY, button)
   end
   if self._joinButton:isHovered(mouseX, mouseY) then
     self._joinButton:onClick()
-    return
-  end
-  if self._backButton:isHovered(mouseX, mouseY) then
-    self._backButton:onClick()
     return
   end
 
@@ -211,7 +220,7 @@ function RoomSearchScene:keypressed(key)
     return
   end
   if key == "escape" then
-    self._app:goLobby()
+    self._app:goScene(self._backScene)
   end
 end
 

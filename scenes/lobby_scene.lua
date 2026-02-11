@@ -4,7 +4,7 @@
 
 역할:
 - 로비 메뉴 표시 및 입력 처리
-- 방 생성/방 찾기 진입
+- 플레이/가이드/스킨/크레딧 메뉴 진입
 - 닉네임/환경설정 오버레이 처리
 
 외부에서 사용 가능한 함수:
@@ -47,9 +47,7 @@ end
 
 local function createMenuList(scene)
   local menuEntryList = {
-    { id = "single_player", label = t("lobby.menu.single_player") },
-    { id = "create_room", label = t("lobby.menu.create_room") },
-    { id = "search_room", label = t("lobby.menu.search_room") },
+    { id = "play", label = t("lobby.menu.play") },
     { id = "change_nickname", label = t("lobby.menu.change_nickname") },
     { id = "settings", label = t("lobby.menu.settings") },
     { id = "guide", label = t("lobby.menu.guide") },
@@ -339,18 +337,10 @@ function LobbyScene:applySettingsOverlay()
 end
 
 function LobbyScene:handleMenuClick(menuId)
-  if menuId == "single_player" then
-    self._app:goSingleDummy()
-    self:setStatus(t("lobby.status.enter_single_dummy"), Constants.COLOR_TEXT_SUB)
-    return
-  end
-  if menuId == "create_room" then
-    self._app:createRoom()
-    self:setStatus(t("lobby.status.creating_room"), Constants.COLOR_TEXT_SUB)
-    return
-  end
-  if menuId == "search_room" then
-    self._app:goRoomSearch()
+  if menuId == "play" then
+    self._app:goPlay({
+      backScene = "lobby"
+    })
     return
   end
   if menuId == "change_nickname" then
@@ -364,15 +354,21 @@ function LobbyScene:handleMenuClick(menuId)
     return
   end
   if menuId == "guide" then
-    self:setStatus(t("lobby.status.guide_todo"), Constants.COLOR_TEXT_SUB)
+    self._app:goGuide({
+      backScene = "lobby"
+    })
     return
   end
   if menuId == "skin" then
-    self:setStatus(t("lobby.status.skin_todo"), Constants.COLOR_TEXT_SUB)
+    self._app:goSkin({
+      backScene = "lobby"
+    })
     return
   end
   if menuId == "credits" then
-    self:setStatus(t("lobby.status.credits_text"), Constants.COLOR_TEXT_SUB)
+    self._app:goCredits({
+      backScene = "lobby"
+    })
     return
   end
   if menuId == "quit" then

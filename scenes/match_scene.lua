@@ -281,7 +281,7 @@ function MatchScene.new(app)
     y = 0,
     w = 190,
     h = 44,
-    label = t("match.button.lobby"),
+    label = t("match.button.menu"),
     color = Constants.COLOR_DANGER,
     hoverColor = { 0.80, 0.28, 0.30, 1.0 },
     onClick = function()
@@ -1961,7 +1961,8 @@ function MatchScene:onWsEnvelope(envelope)
   end
 
   if envelope.type == "room.closed" then
-    self._app:goLobby({
+    self._app:goMultiplayer({
+      backScene = "play",
       statusText = t("match.status.room_closed"),
       statusColor = Constants.COLOR_DANGER
     })
