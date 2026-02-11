@@ -11,8 +11,12 @@
 - Dropdown:setSelectedValue(value)
 - Dropdown:getSelectedValue()
 - Dropdown:getSelectedLabel()
+- Dropdown:isOpen()
+- Dropdown:collapse()
 - Dropdown:mousepressed(mouseX, mouseY, button)
-- Dropdown:draw(mouseX, mouseY)
+- Dropdown:draw(mouseX, mouseY, mode)
+- Dropdown.drawExpandedLayer(dropdownList, mouseX, mouseY)
+- Dropdown.handleExclusiveMousePressed(dropdownList, mouseX, mouseY, button)
 
 주의:
 - 입력 좌표는 world 좌표여야 한다
@@ -23,9 +27,15 @@ local FontManager = require("assets.font_manager")
 
 local Dropdown = {}
 Dropdown.__index = Dropdown
+local nextExpandedOrder = 0
 
 local function isPointInside(x, y, w, h, pointX, pointY)
   return pointX >= x and pointX <= x + w and pointY >= y and pointY <= y + h
+end
+
+local function bumpExpandedOrder(instance)
+  nextExpandedOrder = nextExpandedOrder + 1
+  instance._expandedOrder = nextExpandedOrder
 end
 
 function Dropdown.new(params)
@@ -38,6 +48,7 @@ function Dropdown.new(params)
     selectedValue = params.selectedValue,
     isEnabled = params.isEnabled ~= false,
     isExpanded = false,
+    _expandedOrder = 0,
     onChanged = params.onChanged
   }
   setmetatable(instance, Dropdown)
@@ -64,6 +75,18 @@ function Dropdown:getSelectedLabel()
   return ""
 end
 
+function Dropdown:isOpen()
+  return self.isExpanded
+end
+
+function Dropdown:getExpandedOrder()
+  return self._expandedOrder or 0
+end
+
+function Dropdown:collapse()
+  self.isExpanded = false
+end
+
 function Dropdown:getOptionIndexAt(mouseX, mouseY)
   if not self.isExpanded then
     return nil
@@ -84,6 +107,9 @@ function Dropdown:mousepressed(mouseX, mouseY, button)
 
   if isPointInside(self.x, self.y, self.w, self.h, mouseX, mouseY) then
     self.isExpanded = not self.isExpanded
+    if self.isExpanded then
+      bumpExpandedOrder(self)
+    end
     return true
   end
 
@@ -104,7 +130,7 @@ function Dropdown:mousepressed(mouseX, mouseY, button)
   return false
 end
 
-function Dropdown:draw(mouseX, mouseY)
+local function drawTrigger(self, mouseX, mouseY)
   local font = FontManager.getFont("ui")
   love.graphics.setFont(font)
 
@@ -124,9 +150,25 @@ function Dropdown:draw(mouseX, mouseY)
   love.graphics.setColor(Constants.COLOR_TEXT)
   love.graphics.printf(self:getSelectedLabel(), self.x + 14, textY, self.w - 42, "left")
   love.graphics.printf(self.isExpanded and "^" or "v", self.x + self.w - 28, textY, 16, "center")
+end
 
+local function drawExpandedList(self, mouseX, mouseY)
   if not self.isExpanded then
     return
+  end
+
+  local font = FontManager.getFont("ui")
+  love.graphics.setFont(font)
+
+  local optionCount = #self.optionList
+  if optionCount > 0 then
+    local listY = self.y + self.h
+    local listH = self.h * optionCount
+    -- Expanded list background is fully opaque for readability.
+    love.graphics.setColor(Constants.COLOR_PANEL)
+    love.graphics.rectangle("fill", self.x, listY, self.w, listH, 8, 8)
+    love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+    love.graphics.rectangle("line", self.x, listY, self.w, listH, 8, 8)
   end
 
   for index, option in ipairs(self.optionList) do
@@ -139,14 +181,72 @@ function Dropdown:draw(mouseX, mouseY)
     end
 
     love.graphics.setColor(optionColor)
-    love.graphics.rectangle("fill", self.x, optionY, self.w, self.h, 8, 8)
+    love.graphics.rectangle("fill", self.x, optionY, self.w, self.h)
     love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
-    love.graphics.rectangle("line", self.x, optionY, self.w, self.h, 8, 8)
+    love.graphics.rectangle("line", self.x, optionY, self.w, self.h)
 
     local optionTextY = optionY + (self.h - font:getHeight()) * 0.5
     love.graphics.setColor(Constants.COLOR_TEXT)
     love.graphics.printf(option.label, self.x + 14, optionTextY, self.w - 28, "left")
   end
+end
+
+function Dropdown:draw(mouseX, mouseY, mode)
+  if mode == "collapsed" then
+    drawTrigger(self, mouseX, mouseY)
+    return
+  end
+  if mode == "expanded" then
+    drawExpandedList(self, mouseX, mouseY)
+    return
+  end
+
+  drawTrigger(self, mouseX, mouseY)
+  drawExpandedList(self, mouseX, mouseY)
+end
+
+function Dropdown.drawExpandedLayer(dropdownList, mouseX, mouseY)
+  local expandedList = {}
+  for _, dropdown in ipairs(dropdownList) do
+    if dropdown:isOpen() then
+      expandedList[#expandedList + 1] = dropdown
+    end
+  end
+
+  table.sort(expandedList, function(a, b)
+    return a:getExpandedOrder() < b:getExpandedOrder()
+  end)
+
+  for _, dropdown in ipairs(expandedList) do
+    dropdown:draw(mouseX, mouseY, "expanded")
+  end
+end
+
+function Dropdown.handleExclusiveMousePressed(dropdownList, mouseX, mouseY, button)
+  local processList = {}
+  for _, dropdown in ipairs(dropdownList) do
+    processList[#processList + 1] = dropdown
+  end
+
+  table.sort(processList, function(a, b)
+    return a:getExpandedOrder() > b:getExpandedOrder()
+  end)
+
+  for _, dropdown in ipairs(processList) do
+    if dropdown:mousepressed(mouseX, mouseY, button) then
+      for _, other in ipairs(dropdownList) do
+        if other ~= dropdown then
+          other:collapse()
+        end
+      end
+      return dropdown
+    end
+  end
+
+  for _, dropdown in ipairs(dropdownList) do
+    dropdown:collapse()
+  end
+  return nil
 end
 
 return Dropdown

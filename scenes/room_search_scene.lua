@@ -14,12 +14,17 @@
 ]]
 
 local Constants = require("constants")
+local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
 local TextInput = require("ui.text_input")
 
 local RoomSearchScene = {}
 RoomSearchScene.__index = RoomSearchScene
+
+local function t(key, vars)
+  return I18n.t(key, vars)
+end
 
 local function sanitizeRoomCode(value)
   local upper = string.upper(value or "")
@@ -36,7 +41,7 @@ function RoomSearchScene.new(app)
     y = 280,
     w = 520,
     h = 48,
-    placeholder = "16자리 룸 코드를 입력하세요",
+    placeholder = t("room_search.placeholder"),
     onEnter = function()
       -- Scene instance에서 처리
     end
@@ -58,7 +63,7 @@ function RoomSearchScene.new(app)
     y = 340,
     w = 520,
     h = 48,
-    label = "클립보드에서 불어넣기",
+    label = t("room_search.button.paste_clipboard"),
     onClick = function()
       instance:pasteRoomCodeFromClipboard()
     end
@@ -69,7 +74,7 @@ function RoomSearchScene.new(app)
     y = 405,
     w = 250,
     h = 48,
-    label = "참가",
+    label = t("common.button.join"),
     onClick = function()
       instance:requestJoin()
     end
@@ -79,7 +84,7 @@ function RoomSearchScene.new(app)
     y = 405,
     w = 250,
     h = 48,
-    label = "로비로",
+    label = t("common.button.back_to_lobby"),
     onClick = function()
       instance._app:goLobby()
     end
@@ -107,22 +112,24 @@ function RoomSearchScene:requestJoin()
   local roomCode = sanitizeRoomCode(self._roomCodeInput:getText())
   self._roomCodeInput:setText(roomCode)
   if #roomCode ~= 16 then
-    self:setStatus("룸 코드는 16자리여야 합니다.", Constants.COLOR_DANGER)
+    self:setStatus(t("room_search.status.code_len_invalid"), Constants.COLOR_DANGER)
     return
   end
   self._app:joinRoom(roomCode)
-  self:setStatus("참가 요청 중...", Constants.COLOR_TEXT_SUB)
+  self:setStatus(t("room_search.status.joining"), Constants.COLOR_TEXT_SUB)
 end
 
 function RoomSearchScene:pasteRoomCodeFromClipboard()
   if not love.system or not love.system.getClipboardText then
-    self:setStatus("클립보드 기능을 사용할 수 없습니다.", Constants.COLOR_DANGER)
+    self:setStatus(t("room_search.status.clipboard_not_available"), Constants.COLOR_DANGER)
     return
   end
 
   local isOk, clipOrError = pcall(love.system.getClipboardText)
   if not isOk then
-    self:setStatus("클립보드 읽기 실패: " .. tostring(clipOrError), Constants.COLOR_DANGER)
+    self:setStatus(t("room_search.status.clipboard_read_failed", {
+      error = clipOrError
+    }), Constants.COLOR_DANGER)
     return
   end
 
@@ -130,13 +137,13 @@ function RoomSearchScene:pasteRoomCodeFromClipboard()
   clip = clip:gsub("\r\n", ""):gsub("\r", ""):gsub("\n", "")
   clip = sanitizeRoomCode(clip)
   if clip == "" then
-    self:setStatus("클립보드에 유효한 룸 코드가 없습니다.", Constants.COLOR_DANGER)
+    self:setStatus(t("room_search.status.clipboard_invalid_code"), Constants.COLOR_DANGER)
     return
   end
 
   self._roomCodeInput:setText(clip)
   self._roomCodeInput:setFocus(true)
-  self:setStatus("클립보드에서 룸 코드를 불어넣었습니다.", Constants.COLOR_TEXT_SUB)
+  self:setStatus(t("room_search.status.clipboard_pasted"), Constants.COLOR_TEXT_SUB)
 end
 
 function RoomSearchScene:update(_dt)
@@ -147,11 +154,11 @@ function RoomSearchScene:draw()
 
   love.graphics.setFont(FontManager.getFont("title"))
   love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf("방 찾기", 0, 170, Constants.BASE_WORLD_W, "center")
+  love.graphics.printf(t("room_search.title"), 0, 170, Constants.BASE_WORLD_W, "center")
 
   love.graphics.setFont(FontManager.getFont("ui"))
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
-  love.graphics.printf("로컬 서버 기준 룸 코드를 입력하세요", 0, 220, Constants.BASE_WORLD_W, "center")
+  love.graphics.printf(t("room_search.subtitle"), 0, 220, Constants.BASE_WORLD_W, "center")
 
   self._roomCodeInput:draw()
   self._pasteButton:draw(mouseX, mouseY)

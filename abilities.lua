@@ -25,16 +25,9 @@
 ]]
 
 local Constants = require("constants")
+local I18n = require("i18n.i18n")
 
 local Abilities = {}
-
-Abilities.CARD_LABEL_MAP = {
-  reinforcement = "신병",
-  shockwave = "충격파",
-  invincible = "무적",
-  rockfall = "낙석",
-  agile = "날렵함"
-}
 
 Abilities.TURN_CARD_SET = {
   agile = true,
@@ -43,6 +36,10 @@ Abilities.TURN_CARD_SET = {
   invincible = true,
   shockwave = true
 }
+
+local function t(key, vars)
+  return I18n.t(key, vars)
+end
 
 local function clamp(value, minValue, maxValue)
   return math.max(minValue, math.min(maxValue, value))
@@ -95,7 +92,12 @@ local function readTurnIndexByPlayer(value, playerIndex)
 end
 
 function Abilities.getCardLabel(cardId)
-  return Abilities.CARD_LABEL_MAP[cardId] or tostring(cardId)
+  local key = "abilities.card_label." .. tostring(cardId)
+  local localized = t(key)
+  if localized:sub(1, 10) == "[[missing:" then
+    return tostring(cardId)
+  end
+  return localized
 end
 
 function Abilities.isSupportedTurnCard(cardId)
@@ -164,10 +166,10 @@ function Abilities.canPlaceRockfallAtCanonical(scene, canonicalX, canonicalY)
   local margin = Constants.ROCK_OBSTACLE_MARGIN
 
   if canonicalX - halfW < margin or canonicalX + halfW > Constants.BOARD_W - margin then
-    return false, "장애물은 보드 경계에서 5px 안쪽에만 배치할 수 있습니다."
+    return false, t("abilities.validate.rockfall_board_margin")
   end
   if canonicalY - halfH < margin or canonicalY + halfH > Constants.BOARD_H - margin then
-    return false, "장애물은 보드 경계에서 5px 안쪽에만 배치할 수 있습니다."
+    return false, t("abilities.validate.rockfall_board_margin")
   end
 
   local previewObstacle = {
@@ -179,13 +181,13 @@ function Abilities.canPlaceRockfallAtCanonical(scene, canonicalX, canonicalY)
 
   for _, stone in ipairs(scene._playingStoneList) do
     if stone.alive ~= false and intersectsStoneAndObstacle(stone.x, stone.y, previewObstacle) then
-      return false, "장애물은 알과 겹칠 수 없습니다."
+      return false, t("abilities.validate.rockfall_overlap_stone")
     end
   end
 
   for _, obstacle in ipairs(scene._obstacleList) do
     if intersectsObstacleAndObstacle(previewObstacle, obstacle) then
-      return false, "기존 장애물과 겹칠 수 없습니다."
+      return false, t("abilities.validate.rockfall_overlap_obstacle")
     end
   end
 
@@ -198,7 +200,7 @@ function Abilities.canPlaceReinforcementAtCanonical(scene, canonicalX, canonical
   local minY = Constants.STONE_RADIUS
   local maxY = Constants.BOARD_H - Constants.STONE_RADIUS
   if canonicalX < minX or canonicalX > maxX or canonicalY < minY or canonicalY > maxY then
-    return false, "신병 알은 보드 안쪽 경계에서만 배치할 수 있습니다."
+    return false, t("abilities.validate.reinforcement_out_of_board")
   end
 
   for _, stone in ipairs(scene._playingStoneList) do
@@ -207,7 +209,7 @@ function Abilities.canPlaceReinforcementAtCanonical(scene, canonicalX, canonical
       local dy = stone.y - canonicalY
       local distance = math.sqrt(dx * dx + dy * dy)
       if distance < Constants.MIN_PLACE_DISTANCE then
-        return false, "기존 알과 너무 가깝습니다."
+        return false, t("abilities.validate.reinforcement_too_close")
       end
     end
   end
@@ -218,7 +220,7 @@ function Abilities.canPlaceReinforcementAtCanonical(scene, canonicalX, canonical
   }
   for _, obstacle in ipairs(scene._obstacleList) do
     if intersectsStoneAndObstacle(previewStone.x, previewStone.y, obstacle) then
-      return false, "장애물과 겹치는 위치에는 배치할 수 없습니다."
+      return false, t("abilities.validate.reinforcement_overlap_obstacle")
     end
   end
 
@@ -227,30 +229,30 @@ end
 
 function Abilities.getPendingTargetHint(cardId)
   if cardId == "reinforcement" then
-    return "신병 위치를 보드에서 클릭"
+    return t("abilities.hint.reinforcement_click")
   end
-  return "낙석 위치를 보드에서 클릭"
+  return t("abilities.hint.rockfall_click")
 end
 
 function Abilities.getPendingTargetStartStatus(cardId)
   if cardId == "reinforcement" then
-    return "신병 대상 선택: 보드 위를 클릭해 알을 배치하세요. ESC/우클릭 취소"
+    return t("abilities.hint.reinforcement_start")
   end
-  return "낙석 대상 선택: 보드 위를 클릭해 장애물을 배치하세요. ESC/우클릭 취소"
+  return t("abilities.hint.rockfall_start")
 end
 
 function Abilities.getPendingTargetOutOfBoardStatus(cardId)
   if cardId == "reinforcement" then
-    return "보드 안을 클릭해 신병 위치를 선택하세요."
+    return t("abilities.hint.reinforcement_out_of_board")
   end
-  return "보드 안을 클릭해 낙석 위치를 선택하세요."
+  return t("abilities.hint.rockfall_out_of_board")
 end
 
 function Abilities.getPendingTargetRequestStatus(cardId)
   if cardId == "reinforcement" then
-    return "신병 카드 사용 요청 전송..."
+    return t("abilities.hint.reinforcement_sending")
   end
-  return "낙석 카드 사용 요청 전송..."
+  return t("abilities.hint.rockfall_sending")
 end
 
 function Abilities.applyServerCardEffect(scene, effectPayload)

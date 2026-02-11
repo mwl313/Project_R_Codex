@@ -1,5 +1,5 @@
 # SPEC_04_GAME_RULES - Phase, Turn, Card, Result Rules
-Date: 2026-02-09
+Date: 2026-02-10
 
 ## Naming Convention
 - Authoritative naming/comment rule file: `docs/spec/naming_convention.md`.
@@ -69,16 +69,18 @@ Date: 2026-02-09
 
 ## 3. Turn End/Stabilization Rule
 - A turn ends when one of these happens:
-  - turn timer expires
-  - all movable stones stay below `STOP_SPEED_THRESHOLD` for `STOP_FRAMES_REQUIRED`
-- End-of-turn snapshot is then required from host.
+  - turn timer expires (server authoritative)
+  - shot budget is exhausted and server requests snapshot settlement
+- Client-side simulation stop heuristic uses `PHYSICS_STOP_SPEED` + fixed-step loop.
+- End-of-turn authoritative settlement is always via host snapshot request/submit flow.
 
 ## 4. Win/Loss/Draw Rules
 - Win: opponent has zero alive stones after authoritative settlement.
 - Draw conditions for MVP:
   - both players reach zero alive stones in same authoritative snapshot
-  - maximum turn count reached without win (`MAX_TURN_COUNT`)
-  - both players disconnected before winner can be determined
+- Non-draw terminal reasons:
+  - `player_left` (disconnect/leave during gameplay)
+  - `surrender`
 
 ## 5. Card Effect Definitions
 ### 5.0 Common card-use constraints
@@ -88,17 +90,38 @@ Date: 2026-02-09
 
 ### 5.1 `reinforcement` (신병)
 - Spawn one new friendly stone at chosen valid position.
+- Placement UX is cursor-follow preview + board click commit.
+- Placement validation:
+  - inside board bounds
+  - min-distance vs existing stones
+  - no overlap with obstacles
 - Spawned stone cannot move in the current turn.
 
 ### 5.2 `shockwave` (충격파)
-- On collision after movement, emit radial push around collision boundary point.
-- Radius and strength are constants.
+- Source is the shot stone center (not collision boundary midpoint).
+- Triggered only when the shot source stone collides with:
+  - board boundary
+  - obstacle
+  - stone (ally/enemy)
+- Chained collisions in one shot can trigger multiple pulses.
+- Shockwave excludes:
+  - shot source stone itself
+  - invincible stones
+- Radius/strength use tunable constants and flat impulse (no distance falloff).
 
 ### 5.3 `invincible` (무적)
-- For next 1 turn, all friendly stones ignore displacement from attacks.
+- For next 1 turn, friendly stones become immovable targets.
+- Collision response with non-invincible stones:
+  - invincible stone stays fixed
+  - moving stone reflects/bounces away (no full freeze)
 
 ### 5.4 `rockfall` (낙석)
 - Spawn one rock obstacle at chosen valid position.
+- Placement UX is cursor-follow preview + board click commit.
+- Placement validation:
+  - obstacle bounds respect margin (`ROCK_OBSTACLE_MARGIN`)
+  - no overlap with stones
+  - no overlap with existing obstacles
 
 ### 5.5 `agile` (날렵함)
 - Grants one extra shot in the same turn.
@@ -120,4 +143,12 @@ Date: 2026-02-09
   - `docs/spec/SPEC_05_STATE_MACHINE.md`
 - Card ability/use detail:
   - `docs/spec/SPEC_06_CARDS_ABILITIES.md`
+
+## 8. Change Log
+- 2026-02-10:
+  - Synced card behavior details to current implementation:
+    - reinforcement/rockfall cursor-preview placement flow
+    - shockwave center-origin + shot-source-only multi-trigger + flat impulse
+    - invincible reflection-style collision response
+  - Replaced outdated turn-stop wording with current snapshot-request flow.
 

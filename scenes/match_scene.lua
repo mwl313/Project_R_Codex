@@ -14,6 +14,7 @@
 ]]
 
 local Constants = require("constants")
+local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
 local EffectManager = require("effects.effect_manager")
@@ -22,6 +23,10 @@ local GameMechanics = require("game_mechanics")
 
 local MatchScene = {}
 MatchScene.__index = MatchScene
+
+local function t(key, vars)
+  return I18n.t(key, vars)
+end
 
 local function nowEpochMs()
   return os.time() * 1000
@@ -169,7 +174,7 @@ function MatchScene.new(app)
   local instance = {
     _app = app,
     _roomState = createDefaultRoomState(),
-    _statusText = "매치 상태 동기화 중...",
+    _statusText = t("match.status.syncing"),
     _statusColor = Constants.COLOR_TEXT_SUB,
     _boardX = boardX,
     _boardY = boardY,
@@ -233,7 +238,7 @@ function MatchScene.new(app)
     y = 666,
     w = 200,
     h = 42,
-    label = "배치 제출",
+    label = t("match.button.submit_placement"),
     onClick = function()
       instance:submitPlacement()
     end
@@ -244,7 +249,7 @@ function MatchScene.new(app)
     y = 0,
     w = 220,
     h = 42,
-    label = "선택 확정",
+    label = t("match.button.confirm_selection"),
     onClick = function()
       instance:submitCardPick()
     end
@@ -255,7 +260,7 @@ function MatchScene.new(app)
     y = 16,
     w = 220,
     h = 40,
-    label = "기권",
+    label = t("match.button.surrender"),
     color = Constants.COLOR_DANGER,
     hoverColor = { 0.80, 0.28, 0.30, 1.0 },
     onClick = function()
@@ -268,7 +273,7 @@ function MatchScene.new(app)
     y = 0,
     w = 190,
     h = 44,
-    label = "재대결",
+    label = t("match.button.rematch"),
     onClick = function()
       instance:requestResultVote("rematch")
     end
@@ -279,7 +284,7 @@ function MatchScene.new(app)
     y = 0,
     w = 190,
     h = 44,
-    label = "로비로",
+    label = t("match.button.lobby"),
     color = Constants.COLOR_DANGER,
     hoverColor = { 0.80, 0.28, 0.30, 1.0 },
     onClick = function()
@@ -433,16 +438,16 @@ function MatchScene:canPlaceAtCanonical(canonicalX, canonicalY)
   local minY = Constants.STONE_RADIUS
   local maxY = Constants.BOARD_H - Constants.STONE_RADIUS
   if canonicalX < minX or canonicalX > maxX or canonicalY < minY or canonicalY > maxY then
-    return false, "보드 경계를 벗어났습니다."
+    return false, t("match.validate.out_of_board")
   end
 
   local centerY = Constants.BOARD_H * 0.5
   local role = self:getMyRole()
   if role == "host" and canonicalY < centerY + Constants.NO_PLACE_BUFFER then
-    return false, "내 진영(하단 절반) 안에서만 배치할 수 있습니다."
+    return false, t("match.validate.must_place_own_zone")
   end
   if role == "guest" and canonicalY > centerY - Constants.NO_PLACE_BUFFER then
-    return false, "내 진영(하단 절반) 안에서만 배치할 수 있습니다."
+    return false, t("match.validate.must_place_own_zone")
   end
 
   for _, stone in ipairs(self._myStoneList) do
@@ -450,7 +455,7 @@ function MatchScene:canPlaceAtCanonical(canonicalX, canonicalY)
     local dy = stone.y - canonicalY
     local distance = math.sqrt(dx * dx + dy * dy)
     if distance < Constants.MIN_PLACE_DISTANCE then
-      return false, "기존 배치와 너무 가깝습니다."
+      return false, t("match.validate.too_close_existing")
     end
   end
 
@@ -566,11 +571,11 @@ function MatchScene:addPlacementByWorld(worldX, worldY)
     return
   end
   if self._isPlacementSubmitted or self._isSubmitPending then
-    self:setStatus("이미 배치를 제출했습니다.", Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("match.status.placement_already_submitted"), Constants.COLOR_TEXT_SUB)
     return
   end
   if #self._myStoneList >= Constants.STONE_COUNT_PER_PLAYER then
-    self:setStatus("배치 가능 개수(7개)를 모두 사용했습니다.", Constants.COLOR_DANGER)
+    self:setStatus(t("match.status.placement_count_full"), Constants.COLOR_DANGER)
     return
   end
 
@@ -593,7 +598,10 @@ function MatchScene:addPlacementByWorld(worldX, worldY)
     x = canonicalX,
     y = canonicalY
   }
-  self:setStatus(string.format("배치 진행: %d/%d", #self._myStoneList, Constants.STONE_COUNT_PER_PLAYER), Constants.COLOR_TEXT_SUB)
+  self:setStatus(t("match.status.placement_progress", {
+    count = #self._myStoneList,
+    max = Constants.STONE_COUNT_PER_PLAYER
+  }), Constants.COLOR_TEXT_SUB)
 end
 
 function MatchScene:submitPlacement()
@@ -604,7 +612,7 @@ function MatchScene:submitPlacement()
     return
   end
   if #self._myStoneList ~= Constants.STONE_COUNT_PER_PLAYER then
-    self:setStatus("7개를 모두 배치해야 제출할 수 있습니다.", Constants.COLOR_DANGER)
+    self:setStatus(t("match.status.placement_need_all"), Constants.COLOR_DANGER)
     return
   end
 
@@ -612,7 +620,7 @@ function MatchScene:submitPlacement()
     stones = cloneStoneList(self._myStoneList)
   })
   self._isSubmitPending = true
-  self:setStatus("배치 제출 완료, 상대를 기다리는 중...", Constants.COLOR_TEXT_SUB)
+  self:setStatus(t("match.status.placement_submitted_waiting"), Constants.COLOR_TEXT_SUB)
 end
 
 function MatchScene:rebuildCardOptionButtons()
@@ -658,7 +666,9 @@ function MatchScene:toggleCardSelection(cardId)
   end
 
   if #self._selectedCardList >= self._myPickCount then
-    self:setStatus(string.format("최대 %d장까지만 선택할 수 있습니다.", self._myPickCount), Constants.COLOR_DANGER)
+    self:setStatus(t("match.status.card_pick_max", {
+      count = self._myPickCount
+    }), Constants.COLOR_DANGER)
     return
   end
 
@@ -674,7 +684,9 @@ function MatchScene:submitCardPick()
   end
 
   if #self._selectedCardList ~= self._myPickCount then
-    self:setStatus(string.format("%d장을 선택 후 확정하세요.", self._myPickCount), Constants.COLOR_DANGER)
+    self:setStatus(t("match.status.card_pick_need_exact", {
+      count = self._myPickCount
+    }), Constants.COLOR_DANGER)
     return
   end
 
@@ -682,7 +694,7 @@ function MatchScene:submitCardPick()
     picks = cloneStringList(self._selectedCardList)
   })
   self._isCardPickPending = true
-  self:setStatus("카드 선택 확정 요청 전송...", Constants.COLOR_TEXT_SUB)
+  self:setStatus(t("match.status.card_pick_submit"), Constants.COLOR_TEXT_SUB)
 end
 
 function MatchScene:getPlayingCardPanelRect()
@@ -752,7 +764,7 @@ end
 
 function MatchScene:requestTurnCardUse(cardId)
   if not self:canUseCardInTurn(cardId) then
-    self:setStatus("지금은 카드를 사용할 수 없습니다.", Constants.COLOR_DANGER)
+    self:setStatus(t("match.status.cannot_use_card_now"), Constants.COLOR_DANGER)
     return
   end
 
@@ -771,7 +783,7 @@ function MatchScene:requestTurnCardUse(cardId)
 
   self._app:sendWsEnvelope("client.match.turn.cardUse", payload)
   self._isCardUsePending = true
-  self:setStatus("카드 사용 요청 전송...", Constants.COLOR_TEXT_SUB)
+  self:setStatus(t("match.status.card_use_submit"), Constants.COLOR_TEXT_SUB)
 end
 
 function MatchScene:cancelPendingCardTarget()
@@ -779,7 +791,7 @@ function MatchScene:cancelPendingCardTarget()
     return
   end
   self._pendingCardTargetId = nil
-  self:setStatus("카드 대상 선택을 취소했습니다.", Constants.COLOR_TEXT_SUB)
+  self:setStatus(t("match.status.card_target_cancel"), Constants.COLOR_TEXT_SUB)
 end
 
 function MatchScene:canPlaceRockfallAtCanonical(canonicalX, canonicalY)
@@ -797,7 +809,7 @@ function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
   local pendingCardId = self._pendingCardTargetId
   if not self:isMyTurn() or self._hasUsedCardThisTurn or self._playingShotUsed > 0 then
     self._pendingCardTargetId = nil
-    self:setStatus("지금은 카드를 사용할 수 없습니다.", Constants.COLOR_DANGER)
+    self:setStatus(t("match.status.cannot_use_card_now"), Constants.COLOR_DANGER)
     return true
   end
 
@@ -815,7 +827,7 @@ function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
     canPlace, reason = self:canPlaceReinforcementAtCanonical(canonicalX, canonicalY)
   end
   if not canPlace then
-    self:setStatus(reason or "해당 위치에는 배치할 수 없습니다.", Constants.COLOR_DANGER)
+    self:setStatus(reason or t("match.status.card_target_cannot_place"), Constants.COLOR_DANGER)
     return true
   end
 
@@ -835,7 +847,7 @@ end
 
 function MatchScene:requestSurrender()
   if not self:isPlayingPhase() then
-    self:setStatus("지금은 기권할 수 없습니다.", Constants.COLOR_DANGER)
+    self:setStatus(t("match.status.cannot_surrender_now"), Constants.COLOR_DANGER)
     return
   end
   if self._isSurrenderPending then
@@ -846,12 +858,12 @@ function MatchScene:requestSurrender()
   self._aimStoneId = nil
   self._app:sendWsEnvelope("client.match.surrender", {})
   self._isSurrenderPending = true
-  self:setStatus("기권 요청 전송...", Constants.COLOR_DANGER)
+  self:setStatus(t("match.status.surrender_submit"), Constants.COLOR_DANGER)
 end
 
 function MatchScene:requestResultVote(action)
   if self._roomState.phase ~= Constants.PHASE_RESULT then
-    self:setStatus("지금은 결과 투표를 할 수 없습니다.", Constants.COLOR_DANGER)
+    self:setStatus(t("match.status.cannot_vote_now"), Constants.COLOR_DANGER)
     return
   end
   if action ~= "rematch" and action ~= "to_lobby" then
@@ -866,9 +878,9 @@ function MatchScene:requestResultVote(action)
   })
   self._isResultVotePending = true
   if action == "rematch" then
-    self:setStatus("재대결 투표 전송...", Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("match.status.vote_rematch_submit"), Constants.COLOR_TEXT_SUB)
   else
-    self:setStatus("로비 복귀 투표 전송...", Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("match.status.vote_lobby_submit"), Constants.COLOR_TEXT_SUB)
   end
 end
 
@@ -884,7 +896,7 @@ function MatchScene:beginAimDrag(worldX, worldY)
 
   self._isAimDragging = true
   self._aimStoneId = stone.id
-  self:setStatus("조준 중... 마우스를 놓아 발사, ESC/우클릭으로 취소", Constants.COLOR_TEXT_SUB)
+  self:setStatus(t("match.status.aiming"), Constants.COLOR_TEXT_SUB)
 end
 
 function MatchScene:cancelAimDrag()
@@ -893,7 +905,7 @@ function MatchScene:cancelAimDrag()
   end
   self._isAimDragging = false
   self._aimStoneId = nil
-  self:setStatus("발사를 취소했습니다.", Constants.COLOR_TEXT_SUB)
+  self:setStatus(t("match.status.shot_cancelled"), Constants.COLOR_TEXT_SUB)
 end
 
 function MatchScene:commitAimDrag(worldX, worldY)
@@ -909,7 +921,7 @@ function MatchScene:commitAimDrag(worldX, worldY)
   self._isAimDragging = false
   self._aimStoneId = nil
   if not stone then
-    self:setStatus("발사할 알을 찾지 못했습니다.", Constants.COLOR_DANGER)
+    self:setStatus(t("match.status.shot_stone_missing"), Constants.COLOR_DANGER)
     return
   end
 
@@ -920,7 +932,7 @@ function MatchScene:commitAimDrag(worldX, worldY)
   local dirLocalY = stoneLocalY - mouseLocalY
   local dragLength = math.sqrt(dirLocalX * dirLocalX + dirLocalY * dirLocalY)
   if dragLength < 1 then
-    self:setStatus("드래그 거리가 너무 짧습니다.", Constants.COLOR_DANGER)
+    self:setStatus(t("match.status.shot_drag_too_short"), Constants.COLOR_DANGER)
     return
   end
 
@@ -932,7 +944,7 @@ function MatchScene:commitAimDrag(worldX, worldY)
 
   local canonicalLen = math.sqrt(dirCanonicalX * dirCanonicalX + dirCanonicalY * dirCanonicalY)
   if canonicalLen <= 0 then
-    self:setStatus("발사 방향 계산 실패", Constants.COLOR_DANGER)
+    self:setStatus(t("match.status.shot_dir_calc_failed"), Constants.COLOR_DANGER)
     return
   end
 
@@ -945,7 +957,7 @@ function MatchScene:commitAimDrag(worldX, worldY)
     power = power
   })
   self._isTurnShotPending = true
-  self:setStatus("발사 요청 전송...", Constants.COLOR_TEXT_SUB)
+  self:setStatus(t("match.status.shot_submit"), Constants.COLOR_TEXT_SUB)
 end
 
 function MatchScene:sendHostSnapshotIfNeeded(turnIndex, reason)
@@ -969,14 +981,16 @@ function MatchScene:sendHostSnapshotIfNeeded(turnIndex, reason)
     turnIndex = turnIndex,
     stones = clonePlayingStoneList(self._playingStoneList)
   })
-  self:setStatus("턴 스냅샷 제출 (" .. tostring(reason or "auto") .. ")", Constants.COLOR_TEXT_SUB)
+  self:setStatus(t("match.status.snapshot_submit", {
+    reason = tostring(reason or t("match.status.snapshot_reason_auto"))
+  }), Constants.COLOR_TEXT_SUB)
 end
 
 function MatchScene:applyRoomState(payload)
   if payload.phase == Constants.PHASE_WAITING then
     self._app:goWaitingRoom({
       roomState = payload,
-      statusText = "재대결 대기 상태로 복귀했습니다.",
+      statusText = t("match.status.back_to_waiting_after_result"),
       statusColor = Constants.COLOR_TEXT_SUB
     })
     return
@@ -1154,29 +1168,31 @@ function MatchScene:applyRoomState(payload)
   end
 
   if payload.phase == Constants.PHASE_PLACEMENT_PRIVATE then
-    self:setStatus("배치 단계: 클릭으로 7개를 배치한 뒤 제출하세요.", Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("match.status.placement_phase_guide"), Constants.COLOR_TEXT_SUB)
   elseif payload.phase == Constants.PHASE_PLACEMENT_REVEAL then
-    self:setStatus("배치 공개 중...", Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("match.status.reveal_phase"), Constants.COLOR_TEXT_SUB)
   elseif payload.phase == Constants.PHASE_CARD_SELECT then
-    self:setStatus("카드 선택 단계입니다.", Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("match.status.card_select_phase"), Constants.COLOR_TEXT_SUB)
   elseif payload.phase == Constants.PHASE_PLAYING then
     if self._pendingCardTargetId then
       self:setStatus(Abilities.getPendingTargetStartStatus(self._pendingCardTargetId), Constants.COLOR_TEXT_SUB)
     elseif self:isMyTurn() then
-      self:setStatus("내 턴입니다. 알을 드래그해 발사하세요.", Constants.COLOR_TEXT_SUB)
+      self:setStatus(t("match.status.my_turn_guide"), Constants.COLOR_TEXT_SUB)
     else
-      self:setStatus("상대 턴 진행 중...", Constants.COLOR_TEXT_SUB)
+      self:setStatus(t("match.status.opponent_turn_guide"), Constants.COLOR_TEXT_SUB)
     end
     if self._isPlayingAwaitingSnapshot then
       self:sendHostSnapshotIfNeeded(self._playingTurnIndex, "state_sync")
     end
   elseif payload.phase == Constants.PHASE_RESULT then
     local myVoteLabelMap = {
-      rematch = "재대결",
-      to_lobby = "로비"
+      rematch = t("match.result.vote_rematch"),
+      to_lobby = t("match.result.vote_lobby")
     }
-    local myVoteLabel = self._myResultVote and (myVoteLabelMap[self._myResultVote] or tostring(self._myResultVote)) or "없음"
-    self:setStatus("결과 단계: 후속 동작 투표 (내 투표: " .. myVoteLabel .. ")", Constants.COLOR_DANGER)
+    local myVoteLabel = self._myResultVote and (myVoteLabelMap[self._myResultVote] or tostring(self._myResultVote)) or t("match.result.vote_none")
+    self:setStatus(t("match.status.result_vote_status", {
+      vote = myVoteLabel
+    }), Constants.COLOR_DANGER)
   end
 end
 
@@ -1258,19 +1274,27 @@ end
 
 function MatchScene:drawPlacementInfo()
   local placement = self._roomState.match and self._roomState.match.placement or nil
-  local mySubmitted = placement and placement.mySubmitted and "완료" or "진행중"
-  local opponentSubmitted = placement and placement.opponentSubmitted and "완료" or "대기중"
+  local mySubmitted = placement and placement.mySubmitted and t("match.info.placement_my_done") or t("match.info.placement_my_doing")
+  local opponentSubmitted = placement and placement.opponentSubmitted and t("match.info.placement_opponent_done") or t("match.info.placement_opponent_waiting")
   local timerText = ""
   local phaseEndsAtMs = self._roomState.timers and self._roomState.timers.phaseEndsAtMs or nil
   if phaseEndsAtMs and self._roomState.phase == Constants.PHASE_PLACEMENT_REVEAL then
     local remainSec = math.max(0, math.ceil((phaseEndsAtMs - nowEpochMs()) / 1000))
-    timerText = string.format(" / 공개 남은 시간: %ds", remainSec)
+    timerText = t("match.info.reveal_remaining", {
+      sec = remainSec
+    })
   end
 
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
   love.graphics.printf(
-    string.format("내 배치: %s (%d/%d) | 상대 배치: %s%s", mySubmitted, #self._myStoneList, Constants.STONE_COUNT_PER_PLAYER, opponentSubmitted, timerText),
+    t("match.info.placement_line", {
+      myState = mySubmitted,
+      count = #self._myStoneList,
+      max = Constants.STONE_COUNT_PER_PLAYER,
+      opponentState = opponentSubmitted,
+      timerText = timerText
+    }),
     0,
     636,
     Constants.BASE_WORLD_W,
@@ -1284,27 +1308,35 @@ function MatchScene:drawPlayingInfo()
     remainSec = math.max(0, math.ceil((self._turnEndsAtMs - nowEpochMs()) / 1000))
   end
 
-  local turnOwnerText = self._activePlayerIndex == self:getMyPlayerIndex() and "내 턴" or "상대 턴"
-  local stateText = "조준 가능"
+  local turnOwnerText = self._activePlayerIndex == self:getMyPlayerIndex() and t("match.info.turn_owner_me") or t("match.info.turn_owner_other")
+  local stateText = t("match.info.state_aim")
   if self._isPlayingAwaitingSnapshot then
-    stateText = "스냅샷 대기"
+    stateText = t("match.info.state_wait_snapshot")
   elseif self._pendingCardTargetId then
-    stateText = "카드 대상 선택 중"
+    stateText = t("match.info.state_pick_card_target")
   elseif self._isCardUsePending then
-    stateText = "카드 요청 전송 중"
+    stateText = t("match.info.state_card_pending")
   elseif self._isPlayingShotCommitted then
-    stateText = "발사 완료"
+    stateText = t("match.info.state_shot_done")
     if self._isShotSimulating then
-      stateText = "물리 시뮬레이션 중"
+      stateText = t("match.info.state_simulating")
     end
   elseif self._isTurnShotPending then
-    stateText = "발사 요청 전송 중"
+    stateText = t("match.info.state_shot_pending")
   end
 
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
   love.graphics.printf(
-    string.format("턴 %d | %s | 남은 시간: %ds | 샷 %d/%d | 카드사용:%s | 상태: %s", self._playingTurnIndex, turnOwnerText, remainSec, self._playingShotUsed, self._playingShotBudget, self._hasUsedCardThisTurn and "Y" or "N", stateText),
+    t("match.info.turn_line", {
+      turnIndex = self._playingTurnIndex,
+      turnOwner = turnOwnerText,
+      remainSec = remainSec,
+      shotUsed = self._playingShotUsed,
+      shotBudget = self._playingShotBudget,
+      hasCardUsed = self._hasUsedCardThisTurn and t("common.yes") or t("common.no"),
+      stateText = stateText
+    }),
     0,
     636,
     Constants.BASE_WORLD_W,
@@ -1325,7 +1357,7 @@ function MatchScene:drawPlayingCardPanel(mouseX, mouseY)
 
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf("TURN 카드", rect.x, rect.y + 8, rect.w, "center")
+  love.graphics.printf(t("match.turn_card_title"), rect.x, rect.y + 8, rect.w, "center")
 
   for _, entry in ipairs(self._playingCardButtonList) do
     local canUse = self:canUseCardInTurn(entry.cardId)
@@ -1366,7 +1398,9 @@ function MatchScene:drawAimGuide(mouseX, mouseY)
 
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf(string.format("Power %.0f", power), stoneWorldX - 50, stoneWorldY - 30, 100, "center")
+  love.graphics.printf(t("match.power_label", {
+    power = string.format("%.0f", power)
+  }), stoneWorldX - 50, stoneWorldY - 30, 100, "center")
 end
 
 function MatchScene:drawPendingCardPreview(mouseX, mouseY)
@@ -1390,7 +1424,7 @@ function MatchScene:drawCardSelectPanel(mouseX, mouseY)
 
   love.graphics.setFont(FontManager.getFont("ui"))
   love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf("카드 선택", panelX, panelY + 22, panelW, "center")
+  love.graphics.printf(t("match.card_select_title"), panelX, panelY + 22, panelW, "center")
 
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
@@ -1401,7 +1435,11 @@ function MatchScene:drawCardSelectPanel(mouseX, mouseY)
   end
 
   love.graphics.printf(
-    string.format("선택 수: %d장 / 선택됨: %d장 / 남은 시간: %ds", self._myPickCount, #self._selectedCardList, remainSec),
+    t("match.info.card_select_line", {
+      pickCount = self._myPickCount,
+      selectedCount = #self._selectedCardList,
+      remainSec = remainSec
+    }),
     panelX,
     panelY + 56,
     panelW,
@@ -1418,8 +1456,8 @@ function MatchScene:drawCardSelectPanel(mouseX, mouseY)
   self._cardConfirmButton.isEnabled = (not self._isMyCardLocked) and (not self._isCardPickPending) and (#self._selectedCardList == self._myPickCount)
   self._cardConfirmButton:draw(mouseX, mouseY)
 
-  local lockText = self._isMyCardLocked and "내 선택 확정 완료" or "내 선택 대기중"
-  local opponentText = self._isOpponentCardLocked and "상대 확정 완료" or "상대 선택 중"
+  local lockText = self._isMyCardLocked and t("match.info.lock_done") or t("match.info.lock_wait")
+  local opponentText = self._isOpponentCardLocked and t("match.info.opponent_done") or t("match.info.opponent_selecting")
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
   love.graphics.printf(lockText .. " | " .. opponentText, panelX, panelY + panelH - 40, panelW, "center")
 end
@@ -1428,30 +1466,30 @@ function MatchScene:drawResultPanel(mouseX, mouseY)
   local rect = self:getResultPanelRect()
   local payload = self._roomState.result or {}
   local winnerPlayerIndex = payload.winnerPlayerIndex
-  local reason = payload.reason or "unknown"
+  local reason = payload.reason or t("common.unknown")
 
-  local resultTitle = "무승부"
+  local resultTitle = t("match.result.title_draw")
   if winnerPlayerIndex == self:getMyPlayerIndex() then
-    resultTitle = "승리"
+    resultTitle = t("match.result.title_win")
   elseif winnerPlayerIndex == nil then
-    resultTitle = "무승부"
+    resultTitle = t("match.result.title_draw")
   else
-    resultTitle = "패배"
+    resultTitle = t("match.result.title_lose")
   end
 
   local reasonLabelMap = {
-    stone_zero = "상대 알 전멸",
-    draw = "무승부",
-    player_left = "상대 이탈",
-    surrender = "기권"
+    stone_zero = t("match.result.reason_stone_zero"),
+    draw = t("match.result.reason_draw"),
+    player_left = t("match.result.reason_player_left"),
+    surrender = t("match.result.reason_surrender")
   }
   local reasonLabel = reasonLabelMap[reason] or tostring(reason)
   local voteLabelMap = {
-    rematch = "재대결",
-    to_lobby = "로비"
+    rematch = t("match.result.vote_rematch"),
+    to_lobby = t("match.result.vote_lobby")
   }
-  local myVoteText = self._myResultVote and (voteLabelMap[self._myResultVote] or tostring(self._myResultVote)) or "없음"
-  local opponentVoteText = self._opponentResultVote and (voteLabelMap[self._opponentResultVote] or tostring(self._opponentResultVote)) or "없음"
+  local myVoteText = self._myResultVote and (voteLabelMap[self._myResultVote] or tostring(self._myResultVote)) or t("match.result.vote_none")
+  local opponentVoteText = self._opponentResultVote and (voteLabelMap[self._opponentResultVote] or tostring(self._opponentResultVote)) or t("match.result.vote_none")
 
   love.graphics.setColor(Constants.COLOR_OVERLAY_DIM)
   love.graphics.rectangle("fill", self._boardX, self._boardY, Constants.BOARD_W, Constants.BOARD_H, 8, 8)
@@ -1463,12 +1501,19 @@ function MatchScene:drawResultPanel(mouseX, mouseY)
 
   love.graphics.setFont(FontManager.getFont("title"))
   love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf("RESULT - " .. resultTitle, rect.x, rect.y + 18, rect.w, "center")
+  love.graphics.printf(t("match.result.title", {
+    title = resultTitle
+  }), rect.x, rect.y + 18, rect.w, "center")
 
   love.graphics.setFont(FontManager.getFont("ui"))
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
-  love.graphics.printf("사유: " .. reasonLabel, rect.x, rect.y + 76, rect.w, "center")
-  love.graphics.printf("내 투표: " .. myVoteText .. " | 상대 투표: " .. opponentVoteText, rect.x, rect.y + 112, rect.w, "center")
+  love.graphics.printf(t("match.result.reason", {
+    reason = reasonLabel
+  }), rect.x, rect.y + 76, rect.w, "center")
+  love.graphics.printf(t("match.result.vote", {
+    myVote = myVoteText,
+    opponentVote = opponentVoteText
+  }), rect.x, rect.y + 112, rect.w, "center")
 
   local buttonY = rect.y + rect.h - 82
   self._resultRematchButton.x = rect.x + 30
@@ -1490,11 +1535,13 @@ function MatchScene:draw()
 
   love.graphics.setFont(FontManager.getFont("title"))
   love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf("Match Phase", 0, 16, Constants.BASE_WORLD_W, "center")
+  love.graphics.printf(t("match.title"), 0, 16, Constants.BASE_WORLD_W, "center")
 
   love.graphics.setFont(FontManager.getFont("ui"))
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
-  love.graphics.printf("현재 Phase: " .. tostring(self._roomState.phase), 0, 48, Constants.BASE_WORLD_W, "center")
+  love.graphics.printf(t("match.phase_label", {
+    phase = tostring(self._roomState.phase)
+  }), 0, 48, Constants.BASE_WORLD_W, "center")
 
   self:drawBoardFrame()
 
@@ -1659,13 +1706,18 @@ function MatchScene:onWsEnvelope(envelope)
 
   if envelope.type == "match.turnOrder" then
     local payload = envelope.payload or {}
-    self:setStatus("턴 순서 결정됨: 선공 P" .. tostring(payload.firstPlayerIndex or "?"), Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("match.status.turn_order", {
+      playerIndex = tostring(payload.firstPlayerIndex or "?")
+    }), Constants.COLOR_TEXT_SUB)
     return
   end
 
   if envelope.type == "match.phaseChanged" then
     local payload = envelope.payload or {}
-    self:setStatus(string.format("Phase 변경: %s -> %s", tostring(payload.from), tostring(payload.to)), Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("match.status.phase_changed", {
+      from = tostring(payload.from),
+      to = tostring(payload.to)
+    }), Constants.COLOR_TEXT_SUB)
     return
   end
 
@@ -1679,7 +1731,7 @@ function MatchScene:onWsEnvelope(envelope)
         guest = cloneStoneList(guestStones)
       }
     end
-    self:setStatus("배치 공개가 시작되었습니다.", Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("match.status.reveal_started"), Constants.COLOR_TEXT_SUB)
     return
   end
 
@@ -1695,7 +1747,7 @@ function MatchScene:onWsEnvelope(envelope)
     if type(payload.selectEndsAtMs) == "number" then
       self._cardSelectEndsAtMs = payload.selectEndsAtMs
     end
-    self:setStatus("카드가 분배되었습니다. 선택 후 확정하세요.", Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("match.status.cards_dealt"), Constants.COLOR_TEXT_SUB)
     return
   end
 
@@ -1710,10 +1762,10 @@ function MatchScene:onWsEnvelope(envelope)
         self._selectedCardList = cloneStringList(payload.pickedCards)
         self:rebuildPlayingCardButtons()
       end
-      self:setStatus("내 카드 선택이 확정되었습니다.", Constants.COLOR_TEXT_SUB)
+      self:setStatus(t("match.status.my_cards_locked"), Constants.COLOR_TEXT_SUB)
     else
       self._isOpponentCardLocked = true
-      self:setStatus("상대가 카드 선택을 확정했습니다.", Constants.COLOR_TEXT_SUB)
+      self:setStatus(t("match.status.opponent_cards_locked"), Constants.COLOR_TEXT_SUB)
     end
     return
   end
@@ -1765,16 +1817,19 @@ function MatchScene:onWsEnvelope(envelope)
     self:resetStoneVelocities()
     self:rebuildPlayingCardButtons()
     if self:isMyTurn() then
-      self:setStatus("내 턴 시작. 드래그해서 발사하세요.", Constants.COLOR_TEXT_SUB)
+      self:setStatus(t("match.status.my_turn_start"), Constants.COLOR_TEXT_SUB)
     else
-      self:setStatus("상대 턴 시작", Constants.COLOR_TEXT_SUB)
+      self:setStatus(t("match.status.opponent_turn_start"), Constants.COLOR_TEXT_SUB)
     end
     return
   end
 
   if envelope.type == "match.turn.cardCue" then
     local payload = envelope.payload or {}
-    self:setStatus("카드 사용 연출: P" .. tostring(payload.playerIndex or "?") .. " / " .. tostring(getCardLabel(payload.cardId)), Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("match.status.card_cue", {
+      playerIndex = tostring(payload.playerIndex or "?"),
+      cardLabel = tostring(getCardLabel(payload.cardId))
+    }), Constants.COLOR_TEXT_SUB)
     return
   end
 
@@ -1792,7 +1847,9 @@ function MatchScene:onWsEnvelope(envelope)
     else
       Abilities.applyServerCardEffect(self, payload.effect)
     end
-    self:setStatus("카드 효과 적용됨: " .. tostring(getCardLabel(payload.cardId)), Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("match.status.card_applied", {
+      cardLabel = tostring(getCardLabel(payload.cardId))
+    }), Constants.COLOR_TEXT_SUB)
     return
   end
 
@@ -1815,9 +1872,9 @@ function MatchScene:onWsEnvelope(envelope)
     self._isAimDragging = false
     self._aimStoneId = nil
     if self._playingShotUsed >= self._playingShotBudget then
-      self:setStatus("발사 수락, 스냅샷 대기 중...", Constants.COLOR_TEXT_SUB)
+      self:setStatus(t("match.status.shot_accepted_wait_snapshot"), Constants.COLOR_TEXT_SUB)
     else
-      self:setStatus("발사 수락, 추가 발사 가능", Constants.COLOR_TEXT_SUB)
+      self:setStatus(t("match.status.shot_accepted_extra"), Constants.COLOR_TEXT_SUB)
     end
     return
   end
@@ -1833,7 +1890,7 @@ function MatchScene:onWsEnvelope(envelope)
     self._isCardUsePending = false
     self._isAimDragging = false
     self._aimStoneId = nil
-    self:setStatus("서버가 턴 스냅샷을 요청했습니다.", Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("match.status.snapshot_requested"), Constants.COLOR_TEXT_SUB)
     self:sendHostSnapshotIfNeeded(payload.turnIndex, payload.reason)
     return
   end
@@ -1858,7 +1915,7 @@ function MatchScene:onWsEnvelope(envelope)
     self._isTurnShotPending = false
     self._isCardUsePending = false
     self._pendingCardTargetId = nil
-    self:setStatus("턴 스냅샷 적용 완료", Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("match.status.snapshot_applied"), Constants.COLOR_TEXT_SUB)
     return
   end
 
@@ -1867,7 +1924,9 @@ function MatchScene:onWsEnvelope(envelope)
     self._isSurrenderPending = false
     self._pendingCardTargetId = nil
     self._isResultVotePending = false
-    self:setStatus("결과: winner P" .. tostring(payload.winnerPlayerIndex or "?"), Constants.COLOR_DANGER)
+    self:setStatus(t("match.status.result_winner", {
+      winner = tostring(payload.winnerPlayerIndex or "?")
+    }), Constants.COLOR_DANGER)
     return
   end
 
@@ -1897,13 +1956,15 @@ function MatchScene:onWsEnvelope(envelope)
       self:stopShotSimulation()
       self:resetStoneVelocities()
     end
-    self:setStatus("서버 오류: " .. tostring(payload.code or "unknown"), Constants.COLOR_DANGER)
+    self:setStatus(t("match.status.server_error", {
+      code = tostring(payload.code or t("common.unknown"))
+    }), Constants.COLOR_DANGER)
     return
   end
 
   if envelope.type == "room.closed" then
     self._app:goLobby({
-      statusText = "방이 종료되었습니다.",
+      statusText = t("match.status.room_closed"),
       statusColor = Constants.COLOR_DANGER
     })
   end
@@ -1921,12 +1982,16 @@ function MatchScene:onAppEvent(event)
   end
 
   if event.type == "ws_close" then
-    self:setStatus("WS 연결 종료: " .. tostring(event.reason), Constants.COLOR_DANGER)
+    self:setStatus(t("match.status.ws_close", {
+      reason = tostring(event.reason)
+    }), Constants.COLOR_DANGER)
     return
   end
 
   if event.type == "ws_error" then
-    self:setStatus("WS 오류: " .. tostring(event.message), Constants.COLOR_DANGER)
+    self:setStatus(t("match.status.ws_error", {
+      message = tostring(event.message)
+    }), Constants.COLOR_DANGER)
   end
 end
 

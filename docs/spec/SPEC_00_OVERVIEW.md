@@ -1,5 +1,5 @@
 # SPEC_00_OVERVIEW - ProjectR MVP Guardrails
-Date: 2026-02-09
+Date: 2026-02-10
 
 ## 1. Goal
 - Build a fully playable 2-player MVP flow:
@@ -25,6 +25,9 @@ Date: 2026-02-09
 ## 3. MVP Scope
 - Lobby keeps existing menu and adds `싱글플레이어` button (placeholder only).
 - Settings and nickname change are overlays (not scenes), each with panel size = 70% of current scaled screen.
+- Settings overlay uses row layout:
+  - `[항목 설명] [변경 가능한 드롭다운]`
+  - order: `디스플레이 모드` -> `언어 설정`
 - Nickname and settings persist to `settings.ini` under identity `project_r`.
 - Fixed world coordinate system: `1280x720`; input must use screen-to-world transform.
 - Room code: 16 characters, server generated.
@@ -32,6 +35,7 @@ Date: 2026-02-09
 - Players always see "my side at bottom"; one player is rendered/input-flipped vertically.
 - Chat is available in waiting room and during game, with server-side spam limiting.
 - Card use is capped at one per turn and resolved before shot step.
+- UI text is localized via i18n (`ko` default, `en` secondary fallback).
 
 ## 4. Out of Scope for This MVP
 - Single-player gameplay implementation.
@@ -54,3 +58,8 @@ Date: 2026-02-09
 ## 6. Deliverable Rule for This Turn
 - Phase 0 only: finalize `SPEC_*.md`.
 - Implementation starts only after explicit user approval.
+
+## 7. Change Log
+- 2026-02-10:
+  - Added settings overlay row-order contract (`display -> language`).
+  - Added i18n scope (`ko` default + `en` fallback).

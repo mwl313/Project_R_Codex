@@ -22,6 +22,7 @@
 
 local Constants = require("constants")
 local Json = require("utils.json")
+local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
 local SceneManager = require("managers.scene_manager")
 local SettingsManager = require("managers.settings_manager")
@@ -31,6 +32,10 @@ local WsClient = require("net.ws_client")
 
 local App = {}
 App.__index = App
+
+local function t(key, vars)
+  return I18n.t(key, vars)
+end
 
 local function createSceneFactoryTable()
   return {
@@ -114,6 +119,7 @@ function App.new(renderScale)
     },
     _nickname = "Player",
     _displayMode = Constants.DISPLAY_MODE_WINDOWED,
+    _language = "ko",
     _fontWarningText = FontManager.getWarningMessage(),
     _worldMouseX = 0,
     _worldMouseY = 0,
@@ -122,6 +128,7 @@ function App.new(renderScale)
   setmetatable(instance, App)
 
   instance:loadPersistentSettings()
+  instance._fontWarningText = FontManager.getWarningMessage()
   instance._sceneManager = SceneManager.new(createSceneFactoryTable(), instance)
   instance._sceneManager:setScene("lobby")
   if instance._pendingBootWarningText then
@@ -153,6 +160,14 @@ function App:getDisplayMode()
   return self._displayMode
 end
 
+function App:getLanguage()
+  return self._language
+end
+
+function App:setLanguage(language)
+  self._language = I18n.setLanguage(language)
+end
+
 function App:getSettingsDebugPath()
   return self._settingsManager:getSettingsDebugPath()
 end
@@ -162,23 +177,29 @@ function App:loadPersistentSettings()
   local normalizedSettings = self._settingsManager:normalizeSettings(loadedSettings)
 
   self._nickname = normalizedSettings.nickname
+  self._language = I18n.setLanguage(normalizedSettings.language)
   local appliedDisplayMode, applyError = self._settingsManager:applyDisplayMode(normalizedSettings.displayMode)
   self._displayMode = appliedDisplayMode
   self:resize(love.graphics.getDimensions())
 
   if loadError then
-    self._pendingBootWarningText = "settings.ini 로드 실패, 기본값 사용: " .. tostring(loadError)
+    self._pendingBootWarningText = t("app.settings.load_failed_default", {
+      error = loadError
+    })
     return
   end
   if applyError then
-    self._pendingBootWarningText = "디스플레이 적용 실패, 창모드 사용: " .. tostring(applyError)
+    self._pendingBootWarningText = t("app.settings.apply_failed_windowed", {
+      error = applyError
+    })
   end
 end
 
 function App:savePersistentSettings(patchSettings)
   local mergedSettings = self._settingsManager:normalizeSettings({
     nickname = patchSettings and patchSettings.nickname or self._nickname,
-    displayMode = patchSettings and patchSettings.displayMode or self._displayMode
+    displayMode = patchSettings and patchSettings.displayMode or self._displayMode,
+    language = patchSettings and patchSettings.language or self._language
   })
 
   local applyWarning = nil
@@ -191,14 +212,19 @@ function App:savePersistentSettings(patchSettings)
   end
 
   self._nickname = mergedSettings.nickname
+  self._language = I18n.setLanguage(mergedSettings.language)
 
   local isSaved, saveError = self._settingsManager:saveSettings(mergedSettings)
   if not isSaved then
-    return false, "settings.ini 저장 실패: " .. tostring(saveError)
+    return false, t("app.settings.save_failed", {
+      error = saveError
+    })
   end
 
   if applyWarning then
-    return true, "디스플레이 모드 적용 경고: " .. tostring(applyWarning)
+    return true, t("app.settings.apply_warning", {
+      error = applyWarning
+    })
   end
   return true, nil
 end
@@ -278,7 +304,7 @@ end
 function App:connectWebSocket()
   if not self._session.wsUrl then
     self:playSoundHook("error_generic")
-    self:emitUiStatus("WS URL이 없습니다.", Constants.COLOR_DANGER)
+    self:emitUiStatus(t("app.ui.ws_url_missing"), Constants.COLOR_DANGER)
     return
   end
   self._wsClient:connect(self:buildWsUrl(self._session.wsUrl))
@@ -326,7 +352,7 @@ function App:handleHttpResponse(event)
       bodyTable = parsed
     else
       self:playSoundHook("http_parse_error")
-      self:emitUiStatus("응답 파싱 실패", Constants.COLOR_DANGER)
+      self:emitUiStatus(t("app.ui.response_parse_failed"), Constants.COLOR_DANGER)
       return
     end
   end
@@ -334,7 +360,9 @@ function App:handleHttpResponse(event)
   if not event.ok or not bodyTable.ok then
     self:playSoundHook("http_error")
     local reason = bodyTable.error or event.error or ("http_status_" .. tostring(event.status))
-    self:emitUiStatus("요청 실패: " .. tostring(reason), Constants.COLOR_DANGER)
+    self:emitUiStatus(t("app.ui.request_failed", {
+      reason = reason
+    }), Constants.COLOR_DANGER)
     return
   end
 
@@ -394,7 +422,7 @@ function App:pollNetworkEvents()
         self:handleWsEnvelope(envelope)
       else
         self:playSoundHook("ws_parse_error")
-        self:emitUiStatus("WS 메시지 파싱 실패", Constants.COLOR_DANGER)
+        self:emitUiStatus(t("app.ui.ws_message_parse_failed"), Constants.COLOR_DANGER)
       end
     else
       local hookId = NETWORK_EVENT_SOUND_HOOK_MAP[event.type]

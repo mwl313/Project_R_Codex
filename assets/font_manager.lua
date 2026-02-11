@@ -17,10 +17,11 @@
 ]]
 
 local Constants = require("constants")
+local I18n = require("i18n.i18n")
 
 local FontManager = {
   _fontMap = {},
-  _warningMessage = nil,
+  _warningData = nil,
   _isLoaded = false
 }
 
@@ -39,12 +40,7 @@ local function loadPresetFont(fontPath, size)
   end
 
   local fallbackFont = createFallbackFont(size)
-  local errorMessage = string.format(
-    "폰트 로딩 실패(%s): %s. 기본 폰트로 폴백합니다.",
-    tostring(fontPath),
-    tostring(fontOrError)
-  )
-  return fallbackFont, errorMessage
+  return fallbackFont, tostring(fontOrError)
 end
 
 function FontManager.loadFonts()
@@ -65,10 +61,13 @@ function FontManager.loadFonts()
 
   local firstError = titleError or uiError or smallError
   if firstError then
-    FontManager._warningMessage = firstError
-    print("[FontManager] " .. firstError)
+    FontManager._warningData = {
+      path = tostring(fontPath),
+      error = tostring(firstError)
+    }
+    print("[FontManager] " .. FontManager.getWarningMessage())
   else
-    FontManager._warningMessage = nil
+    FontManager._warningData = nil
   end
 
   FontManager._isLoaded = true
@@ -86,7 +85,13 @@ function FontManager.getFont(presetName)
 end
 
 function FontManager.getWarningMessage()
-  return FontManager._warningMessage
+  if not FontManager._warningData then
+    return nil
+  end
+  return I18n.t("font.warning.load_failed", {
+    path = FontManager._warningData.path,
+    error = FontManager._warningData.error
+  })
 end
 
 return FontManager

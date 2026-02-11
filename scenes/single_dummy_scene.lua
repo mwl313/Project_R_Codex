@@ -14,6 +14,7 @@
 ]]
 
 local Constants = require("constants")
+local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
 local EffectManager = require("effects.effect_manager")
@@ -22,6 +23,10 @@ local GameMechanics = require("game_mechanics")
 
 local SingleDummyScene = {}
 SingleDummyScene.__index = SingleDummyScene
+
+local function t(key, vars)
+  return I18n.t(key, vars)
+end
 
 local function createDummyStoneList()
   local stoneList = {}
@@ -94,10 +99,10 @@ function SingleDummyScene.new(app)
     y = 16,
     w = 160,
     h = 40,
-    label = "로비로",
+    label = t("single_dummy.back_button"),
     onClick = function()
       instance._app:goLobby({
-        statusText = "싱글 더미 테스트 종료",
+        statusText = t("single_dummy.status.exited"),
         statusColor = Constants.COLOR_TEXT_SUB
       })
     end
@@ -131,7 +136,7 @@ end
 
 function SingleDummyScene:enter(_params)
   self:resetDummyState()
-  self:setStatus("더미 모드: 드래그 발사 / 1=충격파 / 2=상대 무적 / R=리셋", Constants.COLOR_TEXT_SUB)
+  self:setStatus(t("single_dummy.status.entered"), Constants.COLOR_TEXT_SUB)
 end
 
 function SingleDummyScene:getPlayingStoneById(stoneId)
@@ -237,7 +242,7 @@ function SingleDummyScene:commitAimDrag(worldX, worldY)
   local dirY = stone.y - mouseLocalY
   local dragLength = math.sqrt(dirX * dirX + dirY * dirY)
   if dragLength < 1 then
-    self:setStatus("드래그 거리가 너무 짧습니다.", Constants.COLOR_DANGER)
+    self:setStatus(t("single_dummy.status.drag_too_short"), Constants.COLOR_DANGER)
     return
   end
 
@@ -322,21 +327,26 @@ function SingleDummyScene:drawAimGuide(mouseX, mouseY)
   love.graphics.setLineWidth(1)
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf(string.format("Power %.0f", power), stoneWorldX - 50, stoneWorldY - 30, 100, "center")
+  love.graphics.printf(t("match.power_label", {
+    power = string.format("%.0f", power)
+  }), stoneWorldX - 50, stoneWorldY - 30, 100, "center")
 end
 
 function SingleDummyScene:draw()
   local mouseX, mouseY = self._app:getMouseWorldPosition()
-  local shockwaveText = self._isShockwaveEnabled and "ON" or "OFF"
-  local invincibleText = self._isOpponentInvincible and "ON" or "OFF"
+  local shockwaveText = self._isShockwaveEnabled and t("common.on") or t("common.off")
+  local invincibleText = self._isOpponentInvincible and t("common.on") or t("common.off")
 
   love.graphics.setFont(FontManager.getFont("title"))
   love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf("Single Dummy (Manual Test)", 0, 18, Constants.BASE_WORLD_W, "center")
+  love.graphics.printf(t("single_dummy.title"), 0, 18, Constants.BASE_WORLD_W, "center")
 
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
-  love.graphics.printf("충격파(1): " .. shockwaveText .. " | 상대 무적(2): " .. invincibleText .. " | R: 리셋 | ESC: 로비", 0, 52, Constants.BASE_WORLD_W, "center")
+  love.graphics.printf(t("single_dummy.subtitle", {
+    shockwave = shockwaveText,
+    invincible = invincibleText
+  }), 0, 52, Constants.BASE_WORLD_W, "center")
 
   self:drawBoard()
   self:drawObstacles()
@@ -382,19 +392,21 @@ end
 function SingleDummyScene:keypressed(key)
   if key == "escape" then
     self._app:goLobby({
-      statusText = "싱글 더미 테스트 종료",
+      statusText = t("single_dummy.status.exited"),
       statusColor = Constants.COLOR_TEXT_SUB
     })
     return
   end
   if key == "r" then
     self:resetDummyState()
-    self:setStatus("더미 상태를 초기화했습니다.", Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("single_dummy.status.reset_done"), Constants.COLOR_TEXT_SUB)
     return
   end
   if key == "1" then
     self._isShockwaveEnabled = not self._isShockwaveEnabled
-    self:setStatus("충격파 토글: " .. (self._isShockwaveEnabled and "ON" or "OFF"), Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("single_dummy.status.shockwave_toggle", {
+      value = self._isShockwaveEnabled and t("common.on") or t("common.off")
+    }), Constants.COLOR_TEXT_SUB)
     return
   end
   if key == "2" then
@@ -404,7 +416,9 @@ function SingleDummyScene:keypressed(key)
     else
       self._invincibleTurnByPlayer[2] = nil
     end
-    self:setStatus("상대 무적 토글: " .. (self._isOpponentInvincible and "ON" or "OFF"), Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("single_dummy.status.invincible_toggle", {
+      value = self._isOpponentInvincible and t("common.on") or t("common.off")
+    }), Constants.COLOR_TEXT_SUB)
   end
 end
 

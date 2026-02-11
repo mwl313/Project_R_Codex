@@ -1,8 +1,7 @@
 # SPEC_03_PROTOCOL - HTTP/WS Message Contract
-Date: 2026-02-09
+Date: 2026-02-10
 
 > NOTE: Message `type` strings are code-facing identifiers. Do not translate or rename them.
-
 
 ## Naming Convention
 - Authoritative naming/comment rule file: `docs/spec/naming_convention.md`.
@@ -13,7 +12,7 @@ Date: 2026-02-09
 - Response: `{ "ok": true }`
 
 ### 1.2 `POST /room/create`
-- Request: `{ "nickname": string }` (nickname optional for initial compatibility)
+- Request: `{ "nickname": string }` (nickname optional for compatibility)
 - Success:
 ```json
 {
@@ -25,7 +24,7 @@ Date: 2026-02-09
 ```
 - Room code generation:
   - length: `16`
-  - charset constant excludes ambiguous chars: `O, 0, I, 1`
+  - charset excludes ambiguous chars: `O, 0, I, 1`
 
 ### 1.3 `POST /room/join`
 - Request:
@@ -36,7 +35,7 @@ Date: 2026-02-09
   - `invalid_room_code`
   - `room_not_found`
   - `room_full`
-  - `already_started` (optional policy)
+  - `already_started` (policy dependent)
 
 ## 2. WebSocket Endpoint
 - URL: `GET /ws?code={roomCode}&token={token}`
@@ -71,20 +70,23 @@ Date: 2026-02-09
 - `match.turn.cardCue`
 - `match.turn.cardApplied`
 - `match.turn.start`
+- `match.turn.shotAccepted`
+- `match.turn.snapshotRequested`
 - `match.turn.snapshotApplied`
 - `match.result`
+- `error.generic`
 
 ## 5. Client -> Server Commands (Required)
 - `client.chat.send`
 - `client.room.leave`
+- `client.match.start`
 - `client.match.placement.submit`
 - `client.match.cards.pick`
 - `client.match.turn.cardUse`
 - `client.match.turn.shot`
 - `client.match.turn.snapshot`
 - `client.match.rematch.vote`
-- Optional for game-time exits:
-  - `client.match.surrender`
+- `client.match.surrender`
 
 ## 6. Payload Rules
 ### 6.1 `client.match.placement.submit`
@@ -98,7 +100,7 @@ Date: 2026-02-09
 ```
 - Validation:
   - phase must be `PLACEMENT_PRIVATE`
-  - canonical zone + no-place strip
+  - canonical zone + center no-place strip
   - minimum distance
   - exact count (`STONE_COUNT_PER_PLAYER`)
 
@@ -111,12 +113,28 @@ Date: 2026-02-09
   - no duplicates
   - timeout -> auto-pick from front
 
-### 6.3 `client.match.turn.shot`
+### 6.3 `client.match.turn.cardUse`
 - Payload:
 ```json
 {
   "turnIndex": 3,
-  "shotIndex": 1,
+  "cardId": "rockfall",
+  "target": { "x": 300, "y": 500 }
+}
+```
+- `target` is optional by card type.
+- Validation:
+  - phase `PLAYING`
+  - correct turn owner
+  - per-turn card-use count <= 1
+  - request timing is pre-shot (`CARD_ACTION` stage)
+  - card belongs to requester
+
+### 6.4 `client.match.turn.shot`
+- Payload:
+```json
+{
+  "turnIndex": 3,
   "stoneId": "s2",
   "dirX": -0.7,
   "dirY": -0.3,
@@ -126,32 +144,10 @@ Date: 2026-02-09
 - Validation:
   - phase `PLAYING`
   - correct turn owner
-  - must be after optional `CARD_ACTION` step
   - turn not timed out
-  - shot index allowed by current turn shot budget
-  - power range valid
-
-### 6.4 `client.match.turn.cardUse`
-- Purpose:
-  - request one card use in current turn before shot commit.
-- Payload (example):
-```json
-{
-  "turnIndex": 3,
-  "cardId": "agile",
-  "target": { "x": 300, "y": 500 }
-}
-```
-- Validation:
-  - phase `PLAYING`
-  - correct turn owner
-  - card belongs to requester
-  - per-turn card-use count <= 1
-  - request timing is pre-shot (`CARD_ACTION` stage)
-- On success (recommended authoritative flow):
-  - server emits `match.turn.cardCue` to both clients
-  - server finalizes effect and emits `match.turn.cardApplied`
-  - turn proceeds to `AIM/SHOT` with updated state
+  - shot budget not exceeded
+  - stone ownership / locked-stone constraints
+  - `power` range and normalized direction validity
 
 ### 6.5 `client.match.turn.snapshot` (host only)
 - Payload:
@@ -159,22 +155,25 @@ Date: 2026-02-09
 {
   "turnIndex": 3,
   "stones": [
-    { "id": "s2", "x": 120, "y": 488, "vx": 0, "vy": 0, "alive": true }
-  ],
-  "obstacles": [],
-  "stateFlags": {}
+    {
+      "id": "p1_s1",
+      "ownerPlayerIndex": 1,
+      "x": 120,
+      "y": 488,
+      "alive": true
+    }
+  ]
 }
 ```
 - Validation:
   - sender must be host
-  - current turn index match
-  - payload numeric bounds sanity check
+  - current turn index must match
+  - snapshot must be requested state
 - On success:
-  - server normalizes and broadcasts authoritative turn snapshot.
+  - server normalizes and broadcasts authoritative snapshot
+  - server starts next turn or finalizes `RESULT`
 
 ### 6.6 `client.match.rematch.vote` (result only)
-- Purpose:
-  - vote post-result action (`rematch` or `to_lobby`).
 - Payload:
 ```json
 {
@@ -183,13 +182,24 @@ Date: 2026-02-09
 ```
 - Validation:
   - phase must be `RESULT`
-  - action must be one of: `rematch`, `to_lobby`
+  - action must be `rematch` or `to_lobby`
 - Resolution:
-  - any `to_lobby` vote => server closes room and both clients return to lobby
+  - any `to_lobby` vote => room closes and both clients return to lobby
   - both players vote `rematch` => server transitions `RESULT -> WAITING`
-  - vote progress is reflected via `room.state.result.myVote/opponentVote`
 
-## 7. Error Events
+## 7. `room.state` Runtime Contract (Summary)
+- `phase` is server-authoritative.
+- `timers.phaseEndsAtMs` and `timers.turnEndsAtMs` are authoritative timer fields.
+- `match` subtree includes:
+  - placement submission/reveal state
+  - card deal/pick/lock state
+  - playing turn state (`shotBudget`, `shotUsed`, `hasCardUsedThisTurn`, `obstacles`, `invincibleTurnByPlayer`, `shockwaveOwnerPlayerIndex`)
+- `result` subtree includes:
+  - `reason`
+  - `winnerPlayerIndex`
+  - vote mirrors (`hostVote`, `guestVote`)
+
+## 8. Error Events
 - `error.generic`:
 ```json
 { "code": "string", "message": "optional" }
@@ -199,14 +209,20 @@ Date: 2026-02-09
   - `not_in_phase`
   - `not_your_turn`
   - `host_only`
-  - `rate_limited`
   - `timeout`
+  - `turn_mismatch`
   - `invalid_placement`
+  - `invalid_card_pick`
+  - `card_already_used`
+  - `card_use_window_closed`
+  - `invalid_shot_stone`
+  - `shot_budget_exceeded`
+  - `snapshot_not_requested`
 
-## 8. Chat Contract
+## 9. Chat Contract
 - Server-side limiter only (authoritative).
-- Defaults in constants:
+- Defaults:
   - window `10s`
-  - max `6` (generous baseline, tunable)
-  - burst `2` (tunable)
+  - max `6`
+  - burst `2`
   - max length `120`
