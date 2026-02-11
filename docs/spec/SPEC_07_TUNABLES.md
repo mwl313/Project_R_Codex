@@ -1,15 +1,22 @@
 # SPEC_07_TUNABLES - Central Constants and Persistence Keys
-Date: 2026-02-10
+Date: 2026-02-11
 
 ## Naming Convention
 - Authoritative naming/comment rule file: `docs/spec/naming_convention.md`.
 - Lua constant modules using this table must follow that document.
 
 ## 1. Constant Files
-- Server constants: `src/rules.ts`
-- Client constants: `constants.lua`
+- SSOT data sources:
+  - `shared/gameplay_rules.json` (phase/board/physics/chat/common gameplay tunables)
+  - `shared/card_rules.json` (card-specific tunables/enable flags)
+- Runtime adapters:
+  - Server common rules loader: `src/rules.ts`
+  - Server card rules loader: `src/card_rules.ts`
+  - Client common rules loader: `constants.lua`
+  - Client card rules loader: `shared/card_rules.lua`
 - Rule:
-  - no gameplay number literals outside constants/rules modules, except explicitly documented temporary hardcoded values.
+  - gameplay 숫자 상수는 JSON SSOT에서 관리하고, 코드에서는 로더/검증/폴백만 담당한다.
+  - 임시 하드코딩 값은 허용하지 않는다(예외 필요 시 change log에 근거 기록).
 
 ## 2. World / Display / Overlay
 - `BASE_WORLD_W = 1280`
@@ -68,14 +75,21 @@ Date: 2026-02-10
 - Turn card constraints:
   - card use max 1 per turn
   - use stage: pre-shot (`CARD_ACTION`)
-- Shockwave:
-  - `SHOCKWAVE_RANGE_MULTIPLIER = 4.0`
-  - `SHOCKWAVE_STRENGTH = 200`
-  - distance falloff: disabled
-- Agile/Invincible (current implementation detail):
-  - agile sets `shotBudget` to at least `2`
-  - invincible protects friendly stones on `currentTurn + 1`
-  - note: these two are currently applied by server ability logic and not yet split to dedicated tunable constants.
+- Card-specific JSON source:
+  - `shared/card_rules.json`
+- Card tunables currently centralized in JSON:
+  - `reinforcement.min_place_distance`
+  - `reinforcement.lock_spawned_stone_for_turn`
+  - `shockwave.radius_multiplier`
+  - `shockwave.strength`
+  - `shockwave.exclude_source_stone`
+  - `shockwave.ignore_invincible_targets`
+  - `invincible.protect_after_turn_offset`
+  - `rockfall.width`, `rockfall.height`, `rockfall.margin`
+  - `agile.shot_budget`
+- Behavior logic separation:
+  - JSON controls numeric constraints/toggles.
+  - Ability action flow remains in `abilities.lua` and `src/abilities.ts`.
 
 ## 8. Chat Anti-Spam
 - `CHAT_MAX_LENGTH = 120`
@@ -129,10 +143,16 @@ fullscreen_mode=windowed
   - `docs/spec/SPEC_06_CARDS_ABILITIES.md`
 - Localization:
   - `docs/spec/SPEC_09_LOCALIZATION_AND_TEXT.md`
+- SSOT rule files guide:
+  - `shared/gameplay_rules.README.md`
+  - `shared/card_rules.README.md`
 
 ## 12. Change Log
 - 2026-02-10:
   - Replaced outdated physics constants with actual implementation constants.
   - Added language persistence key and allowed values.
   - Updated font path to `assets/fonts/MulmaruMono.ttf`.
-  - Clarified agile/invincible current hardcoded application detail.
+- 2026-02-11:
+  - Updated constant ownership to JSON SSOT model (`gameplay_rules.json`, `card_rules.json`).
+  - Added server/client rule-loader modules and card-rule adapter references.
+  - Removed outdated note about agile/invincible hardcoded tunables.

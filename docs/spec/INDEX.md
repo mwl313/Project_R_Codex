@@ -17,6 +17,7 @@
 - `docs/spec/SPEC_07_TUNABLES.md`
 - `docs/spec/SPEC_08_ASSET_AND_POLISHING.md`
 - `docs/spec/SPEC_09_LOCALIZATION_AND_TEXT.md`
+- `docs/spec/SPEC_10_SHARED_RULES_WORKFLOW.md`
 
 ## Naming
 - `docs/spec/naming_convention.md`

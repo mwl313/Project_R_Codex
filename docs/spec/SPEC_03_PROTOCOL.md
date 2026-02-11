@@ -1,5 +1,5 @@
 # SPEC_03_PROTOCOL - HTTP/WS Message Contract
-Date: 2026-02-10
+Date: 2026-02-11
 
 > NOTE: Message `type` strings are code-facing identifiers. Do not translate or rename them.
 
@@ -9,7 +9,13 @@ Date: 2026-02-10
 
 ## 1. HTTP Endpoints (Worker)
 ### 1.1 `GET /health`
-- Response: `{ "ok": true }`
+- Response:
+```json
+{
+  "ok": true,
+  "rulesVersion": 1
+}
+```
 
 ### 1.2 `POST /room/create`
 - Request: `{ "nickname": string }` (nickname optional for compatibility)
@@ -17,6 +23,7 @@ Date: 2026-02-10
 ```json
 {
   "ok": true,
+  "rulesVersion": 1,
   "roomCode": "16-char",
   "token": "opaque-token",
   "wsUrl": "/ws?code=...&token=..."
@@ -36,6 +43,11 @@ Date: 2026-02-10
   - `room_not_found`
   - `room_full`
   - `already_started` (policy dependent)
+- Success payload also includes:
+  - `rulesVersion`
+  - `roomCode`
+  - `token`
+  - `wsUrl`
 
 ## 2. WebSocket Endpoint
 - URL: `GET /ws?code={roomCode}&token={token}`
@@ -188,6 +200,8 @@ Date: 2026-02-10
   - both players vote `rematch` => server transitions `RESULT -> WAITING`
 
 ## 7. `room.state` Runtime Contract (Summary)
+- Top-level payload includes:
+  - `rulesVersion` (server gameplay rules version)
 - `phase` is server-authoritative.
 - `timers.phaseEndsAtMs` and `timers.turnEndsAtMs` are authoritative timer fields.
 - `match` subtree includes:
@@ -198,6 +212,15 @@ Date: 2026-02-10
   - `reason`
   - `winnerPlayerIndex`
   - vote mirrors (`hostVote`, `guestVote`)
+  - convenience mirrors (`myVote`, `opponentVote`)
+
+## 7.1 `server.welcome` Runtime Contract
+- `server.welcome` must include:
+  - `rulesVersion`
+  - `roomCode`
+  - `role`
+  - `playerIndex`
+- Client validates `rulesVersion` against local constants and surfaces user-facing warning if mismatched.
 
 ## 8. Error Events
 - `error.generic`:
@@ -226,3 +249,9 @@ Date: 2026-02-10
   - max `6`
   - burst `2`
   - max length `120`
+
+## 10. Change Log
+- 2026-02-11:
+  - Added `rulesVersion` contract for `/health`, `/room/create`, `/room/join`.
+  - Added `server.welcome` `rulesVersion` requirement and runtime mismatch-warning policy.
+  - Clarified `room.state.result` includes both host/guest vote mirrors and my/opponent convenience mirrors.

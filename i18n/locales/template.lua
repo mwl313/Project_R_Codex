@@ -1,15 +1,16 @@
 --[[
-파일명: en.lua
-모듈명: LocaleEn
+파일명: template.lua
+모듈명: LocaleTemplate
 
 역할:
-- 영어 UI 문자열 리소스를 제공한다.
+- 신규 언어 로케일 파일을 만들 때 복사해서 시작하는 템플릿이다.
+- 키 구조는 ko/en과 동일하게 유지해야 한다.
 
 외부에서 사용 가능한 함수:
-- LocaleEn 테이블 참조
+- LocaleTemplate 테이블 참조
 ]]
 
-local LocaleEn = {
+local LocaleTemplate = {
   common = {
     on = "ON",
     off = "OFF",
@@ -314,4 +315,4 @@ local LocaleEn = {
   }
 }
 
-return LocaleEn
+return LocaleTemplate

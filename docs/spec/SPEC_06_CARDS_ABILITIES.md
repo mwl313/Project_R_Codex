@@ -1,5 +1,5 @@
 # SPEC_06_CARDS_ABILITIES - Card Abilities and Use Contract
-Date: 2026-02-10
+Date: 2026-02-11
 
 ## Naming Convention
 - Authoritative naming/comment rule file: `docs/spec/naming_convention.md`.
@@ -16,6 +16,16 @@ Date: 2026-02-10
 - `invincible` (무적)
 - `rockfall` (낙석)
 - `agile` (날렵함)
+
+## 2.1 Data Ownership (Implemented)
+- Card numeric constraints/toggles are centralized in:
+  - `shared/card_rules.json`
+- Runtime loaders:
+  - server: `src/card_rules.ts`
+  - client: `shared/card_rules.lua`
+- Behavior ownership:
+  - card action logic stays in `src/abilities.ts` and `abilities.lua`
+  - JSON changes should not require protocol field rename.
 
 ## 3. Card Use Common Rules
 ### 3.1 Per-turn card use limit
@@ -68,8 +78,8 @@ Date: 2026-02-10
   - invincible stones
   - the shot stone itself
 - Radius/strength are tunable constants:
-  - `SHOCKWAVE_RANGE_MULTIPLIER`
-  - `SHOCKWAVE_STRENGTH`
+  - `shockwave.radius_multiplier`
+  - `shockwave.strength`
 
 ### 5.3 `invincible`
 - Friendly stones become immovable for configured turn count.
@@ -176,3 +186,6 @@ Date: 2026-02-10
   - Added reinforcement/rockfall target-mode UX details.
   - Clarified invincible collision response as reflection-style bounce.
   - Added language persistence verification item.
+- 2026-02-11:
+  - Added card data ownership split (`card_rules.json` vs ability logic code).
+  - Updated shockwave tunable naming to card-rule JSON keys.
