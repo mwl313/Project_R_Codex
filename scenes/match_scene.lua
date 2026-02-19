@@ -120,6 +120,9 @@ local function createDefaultRoomState()
         myDealtCards = {},
         myPickedCards = {},
         myPickCount = 0,
+        myDealtCount = 0,
+        opponentDealtCount = 0,
+        totalPoolCount = 0,
         myLocked = false,
         opponentLocked = false,
         selectEndsAtMs = nil
@@ -189,6 +192,9 @@ function MatchScene.new(app)
     _myPickedCardList = {},
     _selectedCardList = {},
     _myPickCount = 0,
+    _myDealtCardCount = 0,
+    _opponentDealtCardCount = 0,
+    _cardPoolCount = 0,
     _isMyCardLocked = false,
     _isOpponentCardLocked = false,
     _isCardPickPending = false,
@@ -308,6 +314,9 @@ function MatchScene:enter(params)
   self._myPickedCardList = {}
   self._selectedCardList = {}
   self._myPickCount = 0
+  self._myDealtCardCount = 0
+  self._opponentDealtCardCount = 0
+  self._cardPoolCount = 0
   self._isMyCardLocked = false
   self._isOpponentCardLocked = false
   self._isCardPickPending = false
@@ -631,17 +640,32 @@ function MatchScene:rebuildCardOptionButtons()
 end
 
 function MatchScene:getOpponentDealtCardCount()
-  local myDealCount = #self._myDealtCardList
-  if myDealCount > 0 then
-    return math.max(0, 5 - myDealCount)
+  if type(self._opponentDealtCardCount) == "number" and self._opponentDealtCardCount >= 0 then
+    return self._opponentDealtCardCount
   end
-  if self._myPickCount == 1 then
+
+  local myDealCount = #self._myDealtCardList
+  local totalPoolCount = tonumber(self._cardPoolCount) or 0
+  if totalPoolCount > 0 then
+    return math.max(0, math.floor(totalPoolCount) - myDealCount)
+  end
+
+  if myDealCount == 2 then
     return 3
   end
-  if self._myPickCount == 2 then
+  if myDealCount == 3 then
     return 2
   end
-  return 0
+  return math.max(0, myDealCount)
+end
+
+function MatchScene:getCardPoolCount()
+  if type(self._cardPoolCount) == "number" and self._cardPoolCount > 0 then
+    return self._cardPoolCount
+  end
+  local myDealCount = #self._myDealtCardList
+  local opponentDealCount = self:getOpponentDealtCardCount()
+  return math.max(myDealCount + opponentDealCount, 0)
 end
 
 function MatchScene:syncCardAnimatorSelection()
@@ -695,7 +719,7 @@ function MatchScene:ensureCardAnimator()
     boardW = Constants.BOARD_W,
     boardH = Constants.BOARD_H
   })
-  self._cardAnimator:begin(myCardDisplayList, self._myPickCount, opponentDealCount)
+  self._cardAnimator:begin(myCardDisplayList, self._myPickCount, opponentDealCount, self:getCardPoolCount())
   self:syncCardAnimatorSelection()
   self:syncCardAnimatorLockState()
 end
@@ -1094,6 +1118,17 @@ function MatchScene:applyRoomState(payload)
     if type(cardSelect.myPickCount) == "number" then
       self._myPickCount = cardSelect.myPickCount
     end
+    if type(cardSelect.myDealtCount) == "number" then
+      self._myDealtCardCount = math.max(0, math.floor(cardSelect.myDealtCount))
+    else
+      self._myDealtCardCount = #self._myDealtCardList
+    end
+    if type(cardSelect.opponentDealtCount) == "number" then
+      self._opponentDealtCardCount = math.max(0, math.floor(cardSelect.opponentDealtCount))
+    end
+    if type(cardSelect.totalPoolCount) == "number" then
+      self._cardPoolCount = math.max(0, math.floor(cardSelect.totalPoolCount))
+    end
     if type(cardSelect.myLocked) == "boolean" then
       self._isMyCardLocked = cardSelect.myLocked
       if self._isMyCardLocked then
@@ -1121,6 +1156,13 @@ function MatchScene:applyRoomState(payload)
       while #self._selectedCardList > self._myPickCount do
         table.remove(self._selectedCardList)
       end
+    end
+
+    if self._myDealtCardCount <= 0 then
+      self._myDealtCardCount = #self._myDealtCardList
+    end
+    if self._opponentDealtCardCount <= 0 and self._cardPoolCount > 0 then
+      self._opponentDealtCardCount = math.max(0, self._cardPoolCount - self._myDealtCardCount)
     end
 
     self:rebuildCardOptionButtons()
@@ -1507,8 +1549,8 @@ function MatchScene:drawCardSelectPanel(mouseX, mouseY)
 
   local messagePanelW = math.min(panelW - 70, 460)
   local messagePanelH = 88
-  local messagePanelX = panelX + (panelW - messagePanelW) * 0.5
-  local messagePanelY = panelY + 16
+  local messagePanelX = (Constants.BASE_WORLD_W - messagePanelW) * 0.5
+  local messagePanelY = (Constants.BASE_WORLD_H - messagePanelH) * 0.5
   UIDraw.drawPanel({
     x = messagePanelX,
     y = messagePanelY,
@@ -1532,20 +1574,15 @@ function MatchScene:drawCardSelectPanel(mouseX, mouseY)
 
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
-  love.graphics.printf(t("match.card_select_selected", {
-    selectedCount = #self._selectedCardList,
-    pickCount = self._myPickCount
-  }), messagePanelX + 12, messagePanelY + 50, messagePanelW - 24, "left")
-  love.graphics.printf(t("match.info.card_select_line", {
-    pickCount = self._myPickCount,
-    selectedCount = #self._selectedCardList,
+  love.graphics.printf(t("match.info.card_select_remaining_only", {
     remainSec = remainSec
-  }), messagePanelX + 12, messagePanelY + 50, messagePanelW - 24, "right")
+  }), messagePanelX + 12, messagePanelY + 50, messagePanelW - 24, "center")
 
   local shouldShowConfirm = cardStage == "SELECT" or cardStage == "WAIT_LOCK"
   if shouldShowConfirm then
-    self._cardConfirmButton.x = self._boardX + Constants.BOARD_W - self._cardConfirmButton.w - 20
-    self._cardConfirmButton.y = self._boardY + Constants.BOARD_H - self._cardConfirmButton.h - 16
+    local targetX = self._boardX + Constants.BOARD_W + 20
+    self._cardConfirmButton.x = math.min(Constants.BASE_WORLD_W - self._cardConfirmButton.w - 16, targetX)
+    self._cardConfirmButton.y = (Constants.BASE_WORLD_H - self._cardConfirmButton.h) * 0.5
     self._cardConfirmButton.isEnabled = (not self._isMyCardLocked)
       and (not self._isCardPickPending)
       and (#self._selectedCardList == self._myPickCount)
@@ -1554,10 +1591,6 @@ function MatchScene:drawCardSelectPanel(mouseX, mouseY)
     self._cardConfirmButton:draw(mouseX, mouseY)
   end
 
-  local lockText = self._isMyCardLocked and t("match.info.lock_done") or t("match.info.lock_wait")
-  local opponentText = self._isOpponentCardLocked and t("match.info.opponent_done") or t("match.info.opponent_selecting")
-  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
-  love.graphics.printf(lockText .. " | " .. opponentText, panelX, panelY + panelH - 72, panelW, "center")
 end
 
 function MatchScene:drawResultPanel(mouseX, mouseY)
@@ -1854,7 +1887,17 @@ function MatchScene:onWsEnvelope(envelope)
     end
     if type(payload.dealtCards) == "table" then
       self._myDealtCardList = cloneStringList(payload.dealtCards)
+      self._myDealtCardCount = #self._myDealtCardList
       self:rebuildCardOptionButtons()
+    end
+    if type(payload.myDealtCount) == "number" then
+      self._myDealtCardCount = math.max(0, math.floor(payload.myDealtCount))
+    end
+    if type(payload.opponentDealtCount) == "number" then
+      self._opponentDealtCardCount = math.max(0, math.floor(payload.opponentDealtCount))
+    end
+    if type(payload.totalPoolCount) == "number" then
+      self._cardPoolCount = math.max(0, math.floor(payload.totalPoolCount))
     end
     if type(payload.selectEndsAtMs) == "number" then
       self._cardSelectEndsAtMs = payload.selectEndsAtMs

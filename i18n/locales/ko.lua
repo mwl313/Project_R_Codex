@@ -364,6 +364,7 @@ local LocaleKo = {
       state_shot_pending = "발사 요청 전송 중",
       turn_line = "턴 {turnIndex} | {turnOwner} | 남은 시간: {remainSec}s | 샷 {shotUsed}/{shotBudget} | 카드사용:{hasCardUsed} | 상태: {stateText}",
       card_select_line = "선택 수: {pickCount}장 / 선택됨: {selectedCount}장 / 남은 시간: {remainSec}s",
+      card_select_remaining_only = "남은 시간: {remainSec}s",
       lock_done = "내 선택 확정 완료",
       lock_wait = "내 선택 대기중",
       opponent_done = "상대 확정 완료",

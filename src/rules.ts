@@ -1,4 +1,5 @@
 import sharedRulesJson from "../shared/gameplay_rules.json";
+import { CARD_POOL as CARD_POOL_FROM_CARD_RULES } from "./card_rules";
 
 interface SharedRules {
   RULES_VERSION: number;
@@ -162,8 +163,8 @@ export const CARD_PICK_SEC = SHARED_RULES.CARD_PICK_SEC;
 export const TURN_TIME_LIMIT_SEC = SHARED_RULES.TURN_TIME_LIMIT_SEC;
 export const SNAPSHOT_TIMEOUT_SEC = SHARED_RULES.SNAPSHOT_TIMEOUT_SEC;
 
-export const CARD_POOL = ["reinforcement", "shockwave", "invincible", "rockfall", "agile"] as const;
-export type CardId = (typeof CARD_POOL)[number];
+export const CARD_POOL = [...CARD_POOL_FROM_CARD_RULES];
+export type CardId = string;
 export const HOST_DEAL_COUNT = SHARED_RULES.HOST_DEAL_COUNT;
 export const HOST_PICK_COUNT = SHARED_RULES.HOST_PICK_COUNT;
 export const GUEST_DEAL_COUNT = SHARED_RULES.GUEST_DEAL_COUNT;

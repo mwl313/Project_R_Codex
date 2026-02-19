@@ -9,7 +9,7 @@
 
 외부에서 사용 가능한 함수:
 - CardAnimator.new(params)
-- animator:begin(myCards, requiredPickCount, opponentCardCount)
+- animator:begin(myCards, requiredPickCount, opponentCardCount, totalPoolCount)
 - animator:update(dt)
 - animator:draw()
 - animator:isOverlayVisible()
@@ -75,6 +75,49 @@ local function fanX(index, count, centerX, spacing)
   return leftX + (index - 1) * spacing
 end
 
+local function randomInt(minValue, maxValue)
+  if love and love.math and love.math.random then
+    return love.math.random(minValue, maxValue)
+  end
+  return math.random(minValue, maxValue)
+end
+
+local function randomBetween(minValue, maxValue)
+  local span = maxValue - minValue
+  if span <= 0 then
+    return minValue
+  end
+  local randomValue
+  if love and love.math and love.math.random then
+    randomValue = love.math.random()
+  else
+    randomValue = math.random()
+  end
+  return minValue + randomValue * span
+end
+
+local function shuffleList(valueList)
+  for index = #valueList, 2, -1 do
+    local swapIndex = randomInt(1, index)
+    valueList[index], valueList[swapIndex] = valueList[swapIndex], valueList[index]
+  end
+end
+
+local function pickSegmentedPosition(slotIndex, slotCount, minValue, maxValue)
+  local span = maxValue - minValue
+  if span <= 0 then
+    return minValue
+  end
+  if slotCount <= 1 then
+    return minValue + span * 0.5 + randomBetween(-span * 0.08, span * 0.08)
+  end
+
+  local segment = span / slotCount
+  local center = minValue + segment * (slotIndex - 0.5)
+  local jitter = segment * 0.34
+  return clamp(center + randomBetween(-jitter, jitter), minValue, maxValue)
+end
+
 function CardAnimator.new(params)
   local boardX = params.boardX or 0
   local boardY = params.boardY or 0
@@ -104,7 +147,7 @@ function CardAnimator.new(params)
     _flipStaggerSec = Constants.CARD_FLIP_STAGGER_SEC or 0.08,
     _cleanupSec = Constants.CARD_CLEANUP_SEC or 0.62,
 
-    _deckTotalCount = 5,
+    _deckTotalCount = 0,
     _requiredPickCount = 0,
     _myCardList = {},
     _opponentCardList = {},
@@ -119,7 +162,8 @@ function CardAnimator.new(params)
     _isVisible = false,
     _cleanupInitialized = false,
     _cleanupMoveList = {},
-    _cleanupFadeList = {}
+    _cleanupFadeList = {},
+    _deckEnterSourceList = {}
   }
   return setmetatable(instance, CardAnimator)
 end
@@ -188,7 +232,69 @@ function CardAnimator:_buildHandTargets()
   end
 end
 
-function CardAnimator:begin(myCards, requiredPickCount, opponentCardCount)
+function CardAnimator:_buildDeckEnterSourceList()
+  self._deckEnterSourceList = {}
+  local screenW = Constants.BASE_WORLD_W
+  local screenH = Constants.BASE_WORLD_H
+  local marginX = self._cardW + 120
+  local marginY = self._cardH + 120
+
+  local deckCount = math.max(0, self._deckTotalCount)
+  if deckCount <= 0 then
+    return
+  end
+
+  local sideCounts = { 0, 0, 0, 0 }
+  local baseCount = math.floor(deckCount / 4)
+  local remainCount = deckCount - baseCount * 4
+  for side = 1, 4 do
+    sideCounts[side] = baseCount
+  end
+
+  local remainSides = { 1, 2, 3, 4 }
+  shuffleList(remainSides)
+  for index = 1, remainCount do
+    sideCounts[remainSides[index]] = sideCounts[remainSides[index]] + 1
+  end
+
+  local sideOrder = {}
+  for side = 1, 4 do
+    for _ = 1, sideCounts[side] do
+      sideOrder[#sideOrder + 1] = side
+    end
+  end
+  shuffleList(sideOrder)
+
+  local sideUseCount = { 0, 0, 0, 0 }
+  for index = 1, deckCount do
+    local side = sideOrder[index]
+    sideUseCount[side] = sideUseCount[side] + 1
+    local sideSlotIndex = sideUseCount[side]
+    local sideSlotCount = math.max(1, sideCounts[side])
+
+    local sourceX = 0
+    local sourceY = 0
+    if side == 1 then
+      sourceX = -marginX
+      sourceY = pickSegmentedPosition(sideSlotIndex, sideSlotCount, -marginY, screenH + marginY)
+    elseif side == 2 then
+      sourceX = screenW + marginX
+      sourceY = pickSegmentedPosition(sideSlotIndex, sideSlotCount, -marginY, screenH + marginY)
+    elseif side == 3 then
+      sourceX = pickSegmentedPosition(sideSlotIndex, sideSlotCount, -marginX, screenW + marginX)
+      sourceY = -marginY
+    else
+      sourceX = pickSegmentedPosition(sideSlotIndex, sideSlotCount, -marginX, screenW + marginX)
+      sourceY = screenH + marginY
+    end
+    self._deckEnterSourceList[index] = {
+      x = sourceX,
+      y = sourceY
+    }
+  end
+end
+
+function CardAnimator:begin(myCards, requiredPickCount, opponentCardCount, totalPoolCount)
   self._requiredPickCount = tonumber(requiredPickCount) or 0
   self._selectedSet = {}
   self._isMyLocked = false
@@ -228,7 +334,12 @@ function CardAnimator:begin(myCards, requiredPickCount, opponentCardCount)
     }
   end
 
+  local defaultDeckCount = #self._myCardList + #self._opponentCardList
+  local resolvedDeckCount = math.max(defaultDeckCount, math.floor(tonumber(totalPoolCount) or 0))
+  self._deckTotalCount = resolvedDeckCount
+
   self:_buildHandTargets()
+  self:_buildDeckEnterSourceList()
   self._isVisible = true
   self:_enterStage(STAGE.DECK_ENTER)
 end
@@ -474,26 +585,41 @@ end
 function CardAnimator:_drawDeckEnter()
   local centerX = self._boardX + self._boardW * 0.5
   local centerY = self._boardY + self._boardH * 0.5
-  for index = 1, self._deckTotalCount do
-    local delay = (index - 1) * 0.06
-    local progress = clamp((self._stageElapsedSec - delay) / math.max(0.06, self._deckEnterSec - delay * 0.5), 0, 1)
-    local eased = easeOutCubic(progress)
-    CardView.drawCard({
-      x = lerp(self._boardX - 130 - index * 18, centerX + (index - 3) * 1.8, eased),
-      y = lerp(centerY - 18 + index * 6, centerY + (index - 3) * 1.2, eased),
-      w = self._cardW,
-      h = self._cardH,
-      label = "",
-      backLabel = "?",
-      isFaceUp = false,
-      scale = 1.0,
-      alpha = 1.0,
-      flipScaleX = 1.0,
-      borderThickness = self._borderThickness,
-      glowAlpha = self._glowAlpha,
-      isHovered = false,
-      isSelected = false
-    })
+  local deckCount = math.max(0, self._deckTotalCount)
+  if deckCount <= 0 then
+    return
+  end
+
+  local perCardDelay = clamp(self._deckEnterSec / math.max(deckCount + 1, 2), 0.03, 0.12)
+  local moveDuration = math.max(0.10, self._deckEnterSec - math.max(0, deckCount - 1) * perCardDelay)
+  for index = 1, deckCount do
+    local delay = (index - 1) * perCardDelay
+    if self._stageElapsedSec >= delay then
+      local progress = clamp((self._stageElapsedSec - delay) / moveDuration, 0, 1)
+      local eased = easeOutCubic(progress)
+      local source = self._deckEnterSourceList[index] or {
+        x = -self._cardW - 120,
+        y = centerY
+      }
+      local stackOffsetX = (index - 1) * 1.8 - (deckCount - 1) * 0.9
+      local stackOffsetY = (index - 1) * 1.2 - (deckCount - 1) * 0.6
+      CardView.drawCard({
+        x = lerp(source.x, centerX + stackOffsetX, eased),
+        y = lerp(source.y, centerY + stackOffsetY, eased),
+        w = self._cardW,
+        h = self._cardH,
+        label = "",
+        backLabel = "?",
+        isFaceUp = false,
+        scale = 1.0,
+        alpha = 1.0,
+        flipScaleX = 1.0,
+        borderThickness = self._borderThickness,
+        glowAlpha = self._glowAlpha,
+        isHovered = false,
+        isSelected = false
+      })
+    end
   end
 end
 
@@ -606,8 +732,8 @@ function CardAnimator:_drawCleanup()
       drawY = lerp(card.fromY, stackY, phaseProgress)
     else
       local phaseProgress = easeInOutQuad((progress - splitPoint) / (1 - splitPoint))
-      drawX = lerp(stackX, self._boardX + self._boardW + 200, phaseProgress)
-      drawY = lerp(stackY, centerY - 20, phaseProgress)
+      drawX = lerp(stackX, Constants.BASE_WORLD_W + self._cardW + 240, phaseProgress)
+      drawY = lerp(stackY, centerY - 36, phaseProgress)
     end
 
     CardView.drawCard({

@@ -364,6 +364,7 @@ local LocaleEn = {
       state_shot_pending = "Sending shot request",
       turn_line = "Turn {turnIndex} | {turnOwner} | Remaining: {remainSec}s | Shot {shotUsed}/{shotBudget} | Card used:{hasCardUsed} | State: {stateText}",
       card_select_line = "Need {pickCount} card(s) / Selected {selectedCount} / Remaining {remainSec}s",
+      card_select_remaining_only = "Remaining: {remainSec}s",
       lock_done = "My selection locked",
       lock_wait = "Waiting to lock my selection",
       opponent_done = "Opponent locked",

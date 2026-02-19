@@ -492,7 +492,8 @@ export class RoomDO {
   }
 
   private getDealCountByRole(role: Role): number {
-    return this.isFirstTurnRole(role) ? HOST_DEAL_COUNT : GUEST_DEAL_COUNT;
+    const requestedCount = this.isFirstTurnRole(role) ? HOST_DEAL_COUNT : GUEST_DEAL_COUNT;
+    return Math.max(0, Math.floor(requestedCount));
   }
 
   private getDealtCardsByRole(role: Role): string[] {
@@ -524,7 +525,21 @@ export class RoomDO {
   }
 
   private getPickCountByRole(role: Role): number {
-    return this.isFirstTurnRole(role) ? HOST_PICK_COUNT : GUEST_PICK_COUNT;
+    const requestedCount = this.isFirstTurnRole(role) ? HOST_PICK_COUNT : GUEST_PICK_COUNT;
+    const safeRequestedCount = Math.max(0, Math.floor(requestedCount));
+    const dealtCards = this.getDealtCardsByRole(role);
+    if (dealtCards.length > 0) {
+      return Math.min(safeRequestedCount, dealtCards.length);
+    }
+    return Math.min(safeRequestedCount, this.getDealCountByRole(role));
+  }
+
+  private getTotalCardPoolCount(): number {
+    return CARD_POOL.length;
+  }
+
+  private getOpponentDealtCountByRole(role: Role): number {
+    return this.getDealtCardsByRole(role === "host" ? "guest" : "host").length;
   }
 
   private getResultVoteByRole(role: Role): ResultVoteChoice | null {
@@ -681,6 +696,9 @@ export class RoomDO {
           myDealtCards: [...this.getDealtCardsByRole(role)],
           myPickedCards: [...this.getPickedCardsByRole(role)],
           myPickCount: this.getPickCountByRole(role),
+          myDealtCount: this.getDealtCardsByRole(role).length,
+          opponentDealtCount: this.getOpponentDealtCountByRole(role),
+          totalPoolCount: this.getTotalCardPoolCount(),
           myLocked: this.isLockedByRole(role),
           opponentLocked: this.isLockedByRole(role === "host" ? "guest" : "host"),
           hostLocked: this.room.match.cardSelect.hostLocked,
@@ -952,6 +970,9 @@ export class RoomDO {
       this.sendToSocket(socket, "match.cards.dealt", {
         dealtCards: [...this.getDealtCardsByRole(role)],
         pickCount: this.getPickCountByRole(role),
+        myDealtCount: this.getDealtCardsByRole(role).length,
+        opponentDealtCount: this.getOpponentDealtCountByRole(role),
+        totalPoolCount: this.getTotalCardPoolCount(),
         selectEndsAtMs: this.room.match.cardSelect.selectEndsAtMs
       });
     }
@@ -1834,8 +1855,15 @@ export class RoomDO {
 
     const firstPlayerRole = this.getRoleByPlayerIndex(this.room.match.firstPlayerIndex ?? 1);
     const secondPlayerRole: Role = firstPlayerRole === "host" ? "guest" : "host";
-    const firstDealCount = this.getDealCountByRole(firstPlayerRole);
-    const secondDealCount = this.getDealCountByRole(secondPlayerRole);
+    let firstDealCount = this.getDealCountByRole(firstPlayerRole);
+    let secondDealCount = this.getDealCountByRole(secondPlayerRole);
+    const totalPoolCount = this.getTotalCardPoolCount();
+    if (firstDealCount + secondDealCount > totalPoolCount) {
+      secondDealCount = Math.max(0, totalPoolCount - firstDealCount);
+      if (firstDealCount + secondDealCount > totalPoolCount) {
+        firstDealCount = Math.max(0, totalPoolCount - secondDealCount);
+      }
+    }
 
     const shuffledPool = shuffleCards([...CARD_POOL]);
     const firstDealCards = shuffledPool.slice(0, firstDealCount);
@@ -1859,6 +1887,9 @@ export class RoomDO {
       this.sendToToken(token, "match.cards.dealt", {
         dealtCards: [...this.getDealtCardsByRole(session.role)],
         pickCount: this.getPickCountByRole(session.role),
+        myDealtCount: this.getDealtCardsByRole(session.role).length,
+        opponentDealtCount: this.getOpponentDealtCountByRole(session.role),
+        totalPoolCount: this.getTotalCardPoolCount(),
         selectEndsAtMs
       });
     }
