@@ -161,6 +161,7 @@ function WaitingRoomScene:sendChat()
 end
 
 function WaitingRoomScene:leaveRoom()
+  self._roomState.guestReady = false
   self._app:leaveRoom()
   self._app:goMultiplayer({
     backScene = "play",
@@ -177,6 +178,9 @@ function WaitingRoomScene:canRequestMatchStart()
   if self._roomState.phase ~= Constants.PHASE_WAITING then
     return false
   end
+  if self._roomState.guestReady ~= true then
+    return false
+  end
   return self._roomState.host and self._roomState.host.connected and self._roomState.guest and self._roomState.guest.connected
 end
 
@@ -191,7 +195,7 @@ function WaitingRoomScene:canRequestGuestReady()
   if self._roomState.guestReady == true then
     return false
   end
-  return self._roomState.host and self._roomState.host.connected and self._roomState.guest and self._roomState.guest.connected
+  return true
 end
 
 function WaitingRoomScene:isGuestReady()
@@ -425,9 +429,13 @@ function WaitingRoomScene:onWsEnvelope(envelope)
   end
 
   if envelope.type == "room.left" then
+    local payload = envelope.payload or {}
+    if payload.playerIndex == 2 then
+      self._roomState.guestReady = false
+    end
     self:addChatLine(t("waiting_room.system.player_left", {
-      playerIndex = tostring(envelope.payload.playerIndex),
-      reason = tostring(envelope.payload.reason)
+      playerIndex = tostring(payload.playerIndex),
+      reason = tostring(payload.reason)
     }))
     return
   end
@@ -513,6 +521,7 @@ function WaitingRoomScene:onAppEvent(event)
     return
   end
   if event.type == "ws_close" then
+    self._roomState.guestReady = false
     self:setStatus(t("waiting_room.status.ws_close", {
       reason = tostring(event.reason)
     }), Constants.COLOR_DANGER)

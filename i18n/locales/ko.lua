@@ -172,7 +172,7 @@ local LocaleKo = {
     offline = "offline",
     chat_placeholder = "채팅 입력 (Enter 전송)",
     button = {
-      ready = "준비완료",
+      ready = "준비하기",
       waiting = "대기중"
     },
     status = {

@@ -46,6 +46,7 @@ function WsClient.new()
 end
 
 function WsClient:connect(url)
+  self._eventChannel:clear()
   self._commandChannel:push(Json.encode({
     type = "connect",
     url = url
@@ -60,6 +61,7 @@ function WsClient:sendEnvelope(envelopeTable)
 end
 
 function WsClient:disconnect()
+  self._eventChannel:clear()
   self._commandChannel:push(Json.encode({
     type = "disconnect"
   }))

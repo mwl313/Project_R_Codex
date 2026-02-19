@@ -455,6 +455,7 @@ function App:handleHttpResponse(event)
 end
 
 function App:handleWsEnvelope(envelope)
+  local shouldDispatch = true
   local hookId = SERVER_ENVELOPE_SOUND_HOOK_MAP[envelope.type]
   if hookId then
     self:playSoundHook(hookId)
@@ -466,6 +467,11 @@ function App:handleWsEnvelope(envelope)
     self:checkRulesVersion(payload.rulesVersion)
   elseif envelope.type == "room.state" then
     local payload = envelope.payload or {}
+    local sessionRoomCode = self._session.roomCode
+    local payloadRoomCode = payload.roomCode
+    if sessionRoomCode and payloadRoomCode and tostring(sessionRoomCode) ~= tostring(payloadRoomCode) then
+      shouldDispatch = false
+    end
     self:checkRulesVersion(payload.rulesVersion)
   elseif envelope.type == "room.closed" then
     self._wsClient:disconnect()
@@ -476,6 +482,9 @@ function App:handleWsEnvelope(envelope)
       role = nil,
       serverRulesVersion = nil
     }
+  end
+  if not shouldDispatch then
+    return
   end
   self._sceneManager:dispatch("onAppEvent", {
     type = "ws_envelope",
