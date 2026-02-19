@@ -28,15 +28,55 @@ local KNOWN_DISPLAY_MODE_MAP = {
   [Constants.DISPLAY_MODE_WINDOWED] = true,
   [Constants.DISPLAY_MODE_FULLSCREEN] = true
 }
+local KNOWN_LANGUAGE_MAP = {
+  ko = true,
+  en = true
+}
 
 local function trim(value)
   return (value:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function getUtfModule()
+  if love and love.utf8 then
+    return love.utf8
+  end
+  local isLoaded, moduleValue = pcall(require, "utf8")
+  if isLoaded and type(moduleValue) == "table" then
+    return moduleValue
+  end
+  return nil
+end
+
+local UTF_MODULE = getUtfModule()
+
+local function truncateUtf8(value, maxChars)
+  if type(value) ~= "string" then
+    return ""
+  end
+  local safeMax = tonumber(maxChars) or 0
+  if safeMax <= 0 then
+    return ""
+  end
+
+  if UTF_MODULE and type(UTF_MODULE.offset) == "function" then
+    local isOk, cutIndex = pcall(UTF_MODULE.offset, value, safeMax + 1)
+    if isOk and type(cutIndex) == "number" then
+      return string.sub(value, 1, cutIndex - 1)
+    end
+  end
+
+  if #value <= safeMax then
+    return value
+  end
+  return string.sub(value, 1, safeMax)
 end
 
 local function sanitizeNickname(value)
   local text = tostring(value or "")
   text = text:gsub("[\r\n]", " ")
   text = trim(text)
+  text = truncateUtf8(text, Constants.NICKNAME_MAX_LENGTH)
   if text == "" then
     return "Player"
   end
@@ -50,10 +90,19 @@ local function sanitizeDisplayMode(value)
   return Constants.DISPLAY_MODE_WINDOWED
 end
 
+local function sanitizeLanguage(value)
+  local normalized = tostring(value or ""):lower()
+  if KNOWN_LANGUAGE_MAP[normalized] then
+    return normalized
+  end
+  return "ko"
+end
+
 local function cloneSettings(settings)
   return {
     nickname = settings.nickname,
-    displayMode = settings.displayMode
+    displayMode = settings.displayMode,
+    language = settings.language
   }
 end
 
@@ -65,7 +114,8 @@ end
 function SettingsManager:getDefaultSettings()
   return {
     nickname = "Player",
-    displayMode = Constants.DISPLAY_MODE_WINDOWED
+    displayMode = Constants.DISPLAY_MODE_WINDOWED,
+    language = "ko"
   }
 end
 
@@ -97,6 +147,8 @@ function SettingsManager:loadSettings()
           settings.nickname = sanitizeNickname(value)
         elseif key == "display_mode" then
           settings.displayMode = sanitizeDisplayMode(value)
+        elseif key == "language" then
+          settings.language = sanitizeLanguage(value)
         end
       end
     end
@@ -108,7 +160,8 @@ end
 function SettingsManager:saveSettings(settings)
   local normalized = {
     nickname = sanitizeNickname(settings.nickname),
-    displayMode = sanitizeDisplayMode(settings.displayMode)
+    displayMode = sanitizeDisplayMode(settings.displayMode),
+    language = sanitizeLanguage(settings.language)
   }
 
   local isFullscreen = normalized.displayMode == Constants.DISPLAY_MODE_FULLSCREEN
@@ -116,6 +169,7 @@ function SettingsManager:saveSettings(settings)
     "# ProjectR settings.ini (UTF-8)",
     "nickname=" .. normalized.nickname,
     "display_mode=" .. normalized.displayMode,
+    "language=" .. normalized.language,
     "window_width=" .. tostring(Constants.WINDOWED_W),
     "window_height=" .. tostring(Constants.WINDOWED_H),
     "fullscreen=" .. (isFullscreen and "true" or "false"),
@@ -178,10 +232,12 @@ function SettingsManager:normalizeSettings(settings)
   local defaultSettings = self:getDefaultSettings()
   local normalized = {
     nickname = settings and settings.nickname or defaultSettings.nickname,
-    displayMode = settings and settings.displayMode or defaultSettings.displayMode
+    displayMode = settings and settings.displayMode or defaultSettings.displayMode,
+    language = settings and settings.language or defaultSettings.language
   }
   normalized.nickname = sanitizeNickname(normalized.nickname)
   normalized.displayMode = sanitizeDisplayMode(normalized.displayMode)
+  normalized.language = sanitizeLanguage(normalized.language)
   return cloneSettings(normalized)
 end
 

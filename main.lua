@@ -33,6 +33,7 @@ local renderScale
 function love.load()
   math.randomseed(os.time())
   love.keyboard.setKeyRepeat(true)
+  love.graphics.setDefaultFilter("nearest", "nearest")
   FontManager.loadFonts()
   love.graphics.setFont(FontManager.getFont("ui"))
 

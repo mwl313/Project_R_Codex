@@ -25,6 +25,7 @@
 local Constants = require("constants")
 local Utf8Utils = require("utils.utf8_utils")
 local FontManager = require("assets.font_manager")
+local UIDraw = require("ui.ui_draw")
 
 local TextInput = {}
 TextInput.__index = TextInput
@@ -62,6 +63,7 @@ function TextInput.new(params)
     placeholder = params.placeholder or "",
     text = params.text or "",
     compositionText = "",
+    maxChars = params.maxChars or nil,
     isFocused = false,
     isEnabled = params.isEnabled ~= false,
     onEnter = params.onEnter
@@ -77,7 +79,11 @@ function TextInput:setFocus(isFocused)
 end
 
 function TextInput:setText(text)
-  self.text = text or ""
+  local value = type(text) == "string" and text or ""
+  if type(self.maxChars) == "number" and self.maxChars > 0 then
+    value = Utf8Utils.truncateToLength(value, self.maxChars)
+  end
+  self.text = value
 end
 
 function TextInput:getText()
@@ -94,7 +100,11 @@ function TextInput:insertText(text)
     return false
   end
 
-  self.text = self.text .. insertValue
+  local nextText = self.text .. insertValue
+  if type(self.maxChars) == "number" and self.maxChars > 0 then
+    nextText = Utf8Utils.truncateToLength(nextText, self.maxChars)
+  end
+  self.text = nextText
   return true
 end
 
@@ -171,11 +181,14 @@ function TextInput:mousepressed(mouseX, mouseY, button)
 end
 
 function TextInput:draw()
-  love.graphics.setColor(Constants.COLOR_INPUT_BG)
-  love.graphics.rectangle("fill", self.x, self.y, self.w, self.h, 6, 6)
-
-  love.graphics.setColor(self.isFocused and Constants.COLOR_PANEL_BORDER or Constants.COLOR_TEXT_SUB)
-  love.graphics.rectangle("line", self.x, self.y, self.w, self.h, 6, 6)
+  UIDraw.drawTextBox(
+    self,
+    self.isFocused,
+    Constants.COLOR_INPUT_BG,
+    Constants.COLOR_PANEL_BORDER,
+    Constants.COLOR_TEXT_SUB,
+    nil
+  )
 
   local viewText = self.text
   if self.compositionText ~= "" then

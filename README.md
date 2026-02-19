@@ -21,13 +21,21 @@ love .
 
 - 2인 테스트는 클라이언트를 2개 실행해서 진행합니다.
 
+### 3) 권장 점검 명령
+
+```bash
+npm run typecheck
+npm run i18n:audit
+```
+
 ## 현재 구현 상태 (Phase별)
 
-### Phase 0 (SPEC/SSOT)
+### Phase 0 (SPEC/SSOT 문서화)
 
-- `docs/spec/` 아래 스펙 문서 체계 구성
+- `docs/spec/` 스펙 문서 체계 구성 완료
 - `docs/spec/INDEX.md`로 스펙/테스트 문서 인덱싱
 - 네이밍 규칙 문서 반영: `docs/spec/naming_convention.md`
+- SSOT 운영 규칙 문서 추가: `docs/spec/SPEC_10_SHARED_RULES_WORKFLOW.md`
 
 ### Phase 1 (서버 최소 골격)
 
@@ -43,16 +51,19 @@ love .
 - `room.state`, `room.joined`, `room.left`, `room.closed`
 - `chat.message`, `chat.denied`
 - 룸 코드 정책
-- 16자리 코드, 가독성 문자셋 사용 (`O/0`, `I/1` 제외 계열)
+- 16자리 코드 + 가독성 문자셋 (`O/0`, `I/1` 제외)
+- 룰 버전 전파
+- `/health`, `/room/create`, `/room/join`, `server.welcome`, `room.state`에 `rulesVersion` 포함
 
 ### Phase 2 (클라이언트 매칭~대기방)
 
 - 로비 메뉴 구현
-- `싱글플레이어`(placeholder), `방 생성`, `방 찾기`, `닉네임 변경`, `환경설정`, 기타 메뉴
+- `싱글플레이어`(수동 테스트용 더미 씬), `방 생성`, `방 찾기`, `닉네임 변경`, `환경설정`, 기타 메뉴
 - 오버레이(팝업) 기반 설정 UI
 - 닉네임 변경 오버레이 (70%)
 - 환경설정 오버레이 (70%)
-- 디스플레이 모드 드롭다운
+- 디스플레이/언어 드롭다운 UI
+- 드롭다운 단일 열림 제어 + 외부 클릭 닫힘 + 상위 레이어 렌더
 - 창모드 `1280x720` 고정
 - 전체화면 `현재 모니터 해상도`
 - 영구 저장
@@ -60,6 +71,7 @@ love .
 - `settings.ini` 로드/저장 (`project_r` save directory)
 - 한글 폰트/입력 안정화
 - 공용 FontManager (`title/ui/small`)
+- 기본 폰트 경로: `assets/fonts/MulmaruMono.ttf`
 - 폰트 누락 시 기본 폰트 폴백 + 경고
 - UTF-8 안전 TextInput + IME 조합 표시
 - 대기방 기능
@@ -80,7 +92,7 @@ love .
 - 카드 선택
 - 호스트 2장 중 1장 선택
 - 게스트 3장 중 2장 선택
-- 제한시간 자동 선택
+- 제한시간 자동 선택(앞에서부터)
 - 플레이 단계
 - 턴 시작/종료, 30초 타이머
 - 드래그 조준/발사/취소
@@ -100,7 +112,7 @@ love .
 - 보드 클릭으로 장애물 생성
 - `invincible` (무적)
 - 다음 턴 방어 상태 적용
-- 무적 돌 충돌 시 비무적 돌 반사 중심으로 처리
+- 무적 돌 충돌 시 비무적 돌 반사 중심 처리
 - `shockwave` (충격파)
 - 발사된 돌 기반 발동
 - 돌-벽/돌-돌/돌-장애물 충돌 시 반복 발동
@@ -112,12 +124,40 @@ love .
 - `agile` (날렵함)
 - 동일 턴 추가 발사(2회) 지원
 
-## 이펙트 구조
+### Phase 5 (Asset/Polish 일부)
 
-- 공용 이펙트 매니저 추가: `effects/effect_manager.lua`
-- 현재 구현 이펙트
-- 충격파 원형 파동(임시 시각효과)
-- MatchScene에서 이펙트 생성/업데이트/렌더를 매니저에 위임
+- 사운드 훅 시스템
+- 중앙 관리: `managers/sound_manager.lua`
+- 주요 HTTP/WS/매치 이벤트에서 훅 ID 재생
+- 파일 규칙: `assets/sounds/<hookId>.(ogg|wav|mp3)`
+- 사운드 파일이 없어도 no-op으로 정상 진행(크래시 없음)
+- 공용 이펙트 매니저: `effects/effect_manager.lua`
+- 현재 구현 이펙트: 충격파 원형 파동(임시 시각효과)
+
+## 룰/밸런스 SSOT 구조
+
+- 공통 규칙 SSOT: `shared/gameplay_rules.json`
+- 카드 수치 SSOT: `shared/card_rules.json`
+- 서버 로더: `src/rules.ts`, `src/card_rules.ts`
+- 클라 로더: `constants.lua`, `shared/card_rules.lua`
+- 가이드 문서
+- `shared/gameplay_rules.README.md`
+- `shared/card_rules.README.md`
+
+## i18n / 텍스트 관리
+
+- i18n 런타임: `i18n/i18n.lua`
+- 로케일: `i18n/locales/ko.lua`, `i18n/locales/en.lua`
+- 신규 언어 템플릿: `i18n/locales/template.lua`
+- 누락 키 런타임 덤프: `_G.I18N_DEBUG_DUMP_MISSING()`
+- 정적 점검 스크립트: `tools/i18n_audit.js`
+- 점검 명령: `npm run i18n:audit`
+
+## 메커니즘 구조 (클라 공통화)
+
+- 공용 진입점: `game_mechanics.lua`
+- 물리 코어: `physics_engine.lua`
+- 멀티 씬(`scenes/match_scene.lua`)과 싱글 더미 씬(`scenes/single_dummy_scene.lua`)이 동일 메커니즘 진입점을 참조
 
 ## 로컬 테스트 문서
 

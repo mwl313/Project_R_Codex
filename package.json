@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "typecheck": "tsc --noEmit",
+    "i18n:audit": "node tools/i18n_audit.js",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {

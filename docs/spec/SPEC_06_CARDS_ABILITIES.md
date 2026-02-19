@@ -1,5 +1,5 @@
 # SPEC_06_CARDS_ABILITIES - Card Abilities and Use Contract
-Date: 2026-02-09
+Date: 2026-02-11
 
 ## Naming Convention
 - Authoritative naming/comment rule file: `docs/spec/naming_convention.md`.
@@ -16,6 +16,16 @@ Date: 2026-02-09
 - `invincible` (무적)
 - `rockfall` (낙석)
 - `agile` (날렵함)
+
+## 2.1 Data Ownership (Implemented)
+- Card numeric constraints/toggles are centralized in:
+  - `shared/card_rules.json`
+- Runtime loaders:
+  - server: `src/card_rules.ts`
+  - client: `shared/card_rules.lua`
+- Behavior ownership:
+  - card action logic stays in `src/abilities.ts` and `abilities.lua`
+  - JSON changes should not require protocol field rename.
 
 ## 3. Card Use Common Rules
 ### 3.1 Per-turn card use limit
@@ -50,17 +60,43 @@ Date: 2026-02-09
 ## 5. Ability Definitions (MVP)
 ### 5.1 `reinforcement`
 - Spawn 1 friendly stone at valid target position.
+- Targeting UX:
+  - enter target mode
+  - preview stone follows cursor on board
+  - board click commits placement
 - Spawned stone cannot move in the same turn.
 
 ### 5.2 `shockwave`
-- On qualifying collision, apply radial push around collision boundary point.
-- Radius/strength are tunable constants.
+- Card enables shockwave mode for the current turn owner.
+- Shockwave source is the **shot stone center** (not boundary midpoint).
+- Trigger conditions:
+  - shot stone vs board boundary
+  - shot stone vs obstacle
+  - shot stone vs stone (ally/enemy)
+- Re-trigger is allowed on chained collisions in the same shot simulation.
+- Shockwave affects stones within radius, excluding:
+  - invincible stones
+  - the shot stone itself
+- Radius/strength are tunable constants:
+  - `shockwave.radius_multiplier`
+  - `shockwave.strength`
 
 ### 5.3 `invincible`
-- Friendly stones ignore displacement effects for configured turn count.
+- Friendly stones become immovable for configured turn count.
+- Collision with non-invincible stones uses reflection-style response:
+  - invincible stones stay fixed
+  - moving stone bounces away
 
 ### 5.4 `rockfall`
 - Spawn one rock obstacle at valid target position.
+- Targeting UX:
+  - enter target mode
+  - preview obstacle follows cursor on board
+  - board click commits placement
+- Placement validity:
+  - inside board + margin
+  - no overlap with stones
+  - no overlap with existing obstacles
 
 ### 5.5 `agile`
 - Grants additional shot budget in current turn.
@@ -132,6 +168,7 @@ Date: 2026-02-09
 - Save nickname/display settings.
 - Restart client and verify:
   - values reloaded from `settings.ini`
+  - saved language (`ko/en`) applied on startup
   - windowed 1280x720 fixed
   - fullscreen current monitor resolution
   - unknown keys ignored safely.
@@ -143,3 +180,12 @@ Date: 2026-02-09
   - room code and role
   - local log timestamp
   - expected vs actual.
+
+## 8. Change Log
+- 2026-02-10:
+  - Added reinforcement/rockfall target-mode UX details.
+  - Clarified invincible collision response as reflection-style bounce.
+  - Added language persistence verification item.
+- 2026-02-11:
+  - Added card data ownership split (`card_rules.json` vs ability logic code).
+  - Updated shockwave tunable naming to card-rule JSON keys.

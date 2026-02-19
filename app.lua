@@ -21,23 +21,50 @@
 ]]
 
 local Constants = require("constants")
+local Config = require("config")
 local Json = require("utils.json")
+local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
+local UISkin = require("ui.ui_skin")
+local UIDraw = require("ui.ui_draw")
 local SceneManager = require("managers.scene_manager")
 local SettingsManager = require("managers.settings_manager")
+local SoundManager = require("managers.sound_manager")
 local HttpClient = require("net.http_client")
 local WsClient = require("net.ws_client")
 
 local App = {}
 App.__index = App
 
+local function t(key, vars)
+  return I18n.t(key, vars)
+end
+
 local function createSceneFactoryTable()
   return {
     lobby = function(app)
       return require("scenes.lobby_scene").new(app)
     end,
+    play = function(app)
+      return require("scenes.play_scene").new(app)
+    end,
+    multiplayer = function(app)
+      return require("scenes.multiplayer_scene").new(app)
+    end,
+    guide = function(app)
+      return require("scenes.guide_scene").new(app)
+    end,
+    skin = function(app)
+      return require("scenes.skin_scene").new(app)
+    end,
+    credits = function(app)
+      return require("scenes.credits_scene").new(app)
+    end,
     roomSearch = function(app)
       return require("scenes.room_search_scene").new(app)
+    end,
+    singleDummy = function(app)
+      return require("scenes.single_dummy_scene").new(app)
     end,
     waitingRoom = function(app)
       return require("scenes.waiting_room_scene").new(app)
@@ -52,36 +79,92 @@ local function startsWith(value, prefix)
   return value:sub(1, #prefix) == prefix
 end
 
+local CLIENT_ENVELOPE_SOUND_HOOK_MAP = {
+  ["client.chat.send"] = "chat_send",
+  ["client.room.leave"] = "room_leave_request",
+  ["client.match.start"] = "match_start_request",
+  ["client.match.placement.submit"] = "placement_submit",
+  ["client.match.cards.pick"] = "card_pick_submit",
+  ["client.match.turn.cardUse"] = "card_use_request",
+  ["client.match.rematch.vote"] = "result_vote_submit",
+  ["client.match.surrender"] = "match_surrender_request",
+  ["client.match.turn.shot"] = "shot_request",
+  ["client.match.turn.snapshot"] = "snapshot_submit"
+}
+
+local SERVER_ENVELOPE_SOUND_HOOK_MAP = {
+  ["server.welcome"] = "ws_welcome",
+  ["room.joined"] = "room_joined",
+  ["room.left"] = "room_left",
+  ["room.closed"] = "room_closed",
+  ["chat.message"] = "chat_received",
+  ["chat.denied"] = "chat_denied",
+  ["match.turnOrder"] = "match_turn_order",
+  ["match.phaseChanged"] = "match_phase_changed",
+  ["match.placement.revealStart"] = "placement_reveal_start",
+  ["match.cards.dealt"] = "cards_dealt",
+  ["match.cards.locked"] = "cards_locked",
+  ["match.turn.cardCue"] = "card_cue",
+  ["match.turn.cardApplied"] = "card_applied",
+  ["match.turn.start"] = "turn_start",
+  ["match.turn.shotAccepted"] = "shot_accepted",
+  ["match.turn.snapshotRequested"] = "snapshot_requested",
+  ["match.turn.snapshotApplied"] = "snapshot_applied",
+  ["match.result"] = "match_result",
+  ["error.generic"] = "error_generic"
+}
+
+local NETWORK_EVENT_SOUND_HOOK_MAP = {
+  ws_open = "ws_open",
+  ws_close = "ws_close",
+  ws_error = "ws_error"
+}
+
 function App.new(renderScale)
   local instance = {
     _renderScale = renderScale,
     _httpClient = HttpClient.new(),
     _wsClient = WsClient.new(),
     _settingsManager = SettingsManager.new(),
+    _soundManager = SoundManager.new(),
     _sceneManager = nil,
     _pendingHttpMap = {},
     _session = {
       roomCode = nil,
       token = nil,
       wsUrl = nil,
-      role = nil
+      role = nil,
+      serverRulesVersion = nil
     },
     _nickname = "Player",
     _displayMode = Constants.DISPLAY_MODE_WINDOWED,
+    _language = "ko",
     _fontWarningText = FontManager.getWarningMessage(),
     _worldMouseX = 0,
     _worldMouseY = 0,
-    _pendingBootWarningText = nil
+    _pendingBootWarningText = nil,
+    _lastRulesVersionWarningKey = nil,
+    _uiSkin = nil
   }
   setmetatable(instance, App)
 
   instance:loadPersistentSettings()
+  instance._fontWarningText = FontManager.getWarningMessage()
+  instance._uiSkin = UISkin.load()
+  UIDraw.setSkin(instance._uiSkin)
   instance._sceneManager = SceneManager.new(createSceneFactoryTable(), instance)
   instance._sceneManager:setScene("lobby")
   if instance._pendingBootWarningText then
     instance:emitUiStatus(instance._pendingBootWarningText, Constants.COLOR_DANGER)
   end
   return instance
+end
+
+function App:playSoundHook(hookId)
+  if not self._soundManager then
+    return
+  end
+  self._soundManager:playHook(hookId)
 end
 
 function App:getNickname()
@@ -100,6 +183,14 @@ function App:getDisplayMode()
   return self._displayMode
 end
 
+function App:getLanguage()
+  return self._language
+end
+
+function App:setLanguage(language)
+  self._language = I18n.setLanguage(language)
+end
+
 function App:getSettingsDebugPath()
   return self._settingsManager:getSettingsDebugPath()
 end
@@ -109,23 +200,29 @@ function App:loadPersistentSettings()
   local normalizedSettings = self._settingsManager:normalizeSettings(loadedSettings)
 
   self._nickname = normalizedSettings.nickname
+  self._language = I18n.setLanguage(normalizedSettings.language)
   local appliedDisplayMode, applyError = self._settingsManager:applyDisplayMode(normalizedSettings.displayMode)
   self._displayMode = appliedDisplayMode
   self:resize(love.graphics.getDimensions())
 
   if loadError then
-    self._pendingBootWarningText = "settings.ini 로드 실패, 기본값 사용: " .. tostring(loadError)
+    self._pendingBootWarningText = t("app.settings.load_failed_default", {
+      error = loadError
+    })
     return
   end
   if applyError then
-    self._pendingBootWarningText = "디스플레이 적용 실패, 창모드 사용: " .. tostring(applyError)
+    self._pendingBootWarningText = t("app.settings.apply_failed_windowed", {
+      error = applyError
+    })
   end
 end
 
 function App:savePersistentSettings(patchSettings)
   local mergedSettings = self._settingsManager:normalizeSettings({
     nickname = patchSettings and patchSettings.nickname or self._nickname,
-    displayMode = patchSettings and patchSettings.displayMode or self._displayMode
+    displayMode = patchSettings and patchSettings.displayMode or self._displayMode,
+    language = patchSettings and patchSettings.language or self._language
   })
 
   local applyWarning = nil
@@ -138,14 +235,19 @@ function App:savePersistentSettings(patchSettings)
   end
 
   self._nickname = mergedSettings.nickname
+  self._language = I18n.setLanguage(mergedSettings.language)
 
   local isSaved, saveError = self._settingsManager:saveSettings(mergedSettings)
   if not isSaved then
-    return false, "settings.ini 저장 실패: " .. tostring(saveError)
+    return false, t("app.settings.save_failed", {
+      error = saveError
+    })
   end
 
   if applyWarning then
-    return true, "디스플레이 모드 적용 경고: " .. tostring(applyWarning)
+    return true, t("app.settings.apply_warning", {
+      error = applyWarning
+    })
   end
   return true, nil
 end
@@ -163,19 +265,47 @@ function App:updateMouseFromScreen(screenX, screenY)
 end
 
 function App:goLobby(params)
-  self._sceneManager:setScene("lobby", params)
+  self:goScene("lobby", params)
+end
+
+function App:goPlay(params)
+  self:goScene("play", params)
+end
+
+function App:goMultiplayer(params)
+  self:goScene("multiplayer", params)
+end
+
+function App:goGuide(params)
+  self:goScene("guide", params)
+end
+
+function App:goSkin(params)
+  self:goScene("skin", params)
+end
+
+function App:goCredits(params)
+  self:goScene("credits", params)
 end
 
 function App:goRoomSearch(params)
-  self._sceneManager:setScene("roomSearch", params)
+  self:goScene("roomSearch", params)
+end
+
+function App:goSingleDummy(params)
+  self:goScene("singleDummy", params)
 end
 
 function App:goWaitingRoom(params)
-  self._sceneManager:setScene("waitingRoom", params)
+  self:goScene("waitingRoom", params)
 end
 
 function App:goMatch(params)
-  self._sceneManager:setScene("match", params)
+  self:goScene("match", params)
+end
+
+function App:goScene(sceneName, params)
+  self._sceneManager:setScene(sceneName, params)
 end
 
 function App:emitUiStatus(text, color)
@@ -191,13 +321,33 @@ function App:buildHttpUrl(path)
 end
 
 function App:buildWsUrl(pathOrAbsolute)
-  if startsWith(pathOrAbsolute, "ws://") then
+  if startsWith(pathOrAbsolute, "ws://") or startsWith(pathOrAbsolute, "wss://") then
     return pathOrAbsolute
   end
   return Constants.SERVER_WS_BASE_URL .. pathOrAbsolute
 end
 
+function App:checkRulesVersion(serverVersion)
+  if type(serverVersion) ~= "number" then
+    return
+  end
+  self._session.serverRulesVersion = serverVersion
+  if serverVersion == Constants.RULES_VERSION then
+    return
+  end
+  local warningKey = tostring(serverVersion) .. ":" .. tostring(Constants.RULES_VERSION)
+  if self._lastRulesVersionWarningKey == warningKey then
+    return
+  end
+  self._lastRulesVersionWarningKey = warningKey
+  self:emitUiStatus(t("app.ui.rules_version_mismatch", {
+    clientVersion = tostring(Constants.RULES_VERSION),
+    serverVersion = tostring(serverVersion)
+  }), Constants.COLOR_DANGER)
+end
+
 function App:createRoom()
+  self:playSoundHook("room_create_request")
   local requestId = self._httpClient:request("POST", self:buildHttpUrl("/room/create"), {
     nickname = self._nickname
   }, {
@@ -207,6 +357,7 @@ function App:createRoom()
 end
 
 function App:joinRoom(roomCode)
+  self:playSoundHook("room_join_request")
   local requestId = self._httpClient:request("POST", self:buildHttpUrl("/room/join"), {
     roomCode = roomCode,
     nickname = self._nickname
@@ -218,7 +369,8 @@ end
 
 function App:connectWebSocket()
   if not self._session.wsUrl then
-    self:emitUiStatus("WS URL이 없습니다.", Constants.COLOR_DANGER)
+    self:playSoundHook("error_generic")
+    self:emitUiStatus(t("app.ui.ws_url_missing"), Constants.COLOR_DANGER)
     return
   end
   self._wsClient:connect(self:buildWsUrl(self._session.wsUrl))
@@ -229,6 +381,10 @@ function App:sendWsEnvelope(envelopeType, payload)
     type = envelopeType,
     payload = payload or {}
   })
+  local hookId = CLIENT_ENVELOPE_SOUND_HOOK_MAP[envelopeType]
+  if hookId then
+    self:playSoundHook(hookId)
+  end
 end
 
 function App:sendChat(text)
@@ -244,7 +400,8 @@ function App:leaveRoom()
     roomCode = nil,
     token = nil,
     wsUrl = nil,
-    role = nil
+    role = nil,
+    serverRulesVersion = nil
   }
 end
 
@@ -261,14 +418,18 @@ function App:handleHttpResponse(event)
     if isDecoded and parsed then
       bodyTable = parsed
     else
-      self:emitUiStatus("응답 파싱 실패", Constants.COLOR_DANGER)
+      self:playSoundHook("http_parse_error")
+      self:emitUiStatus(t("app.ui.response_parse_failed"), Constants.COLOR_DANGER)
       return
     end
   end
 
   if not event.ok or not bodyTable.ok then
+    self:playSoundHook("http_error")
     local reason = bodyTable.error or event.error or ("http_status_" .. tostring(event.status))
-    self:emitUiStatus("요청 실패: " .. tostring(reason), Constants.COLOR_DANGER)
+    self:emitUiStatus(t("app.ui.request_failed", {
+      reason = reason
+    }), Constants.COLOR_DANGER)
     return
   end
 
@@ -276,24 +437,40 @@ function App:handleHttpResponse(event)
   self._session.token = bodyTable.token
   self._session.wsUrl = bodyTable.wsUrl
   self._session.role = nil
+  self:checkRulesVersion(bodyTable.rulesVersion)
 
   if requestMeta.kind == "createRoom" or requestMeta.kind == "joinRoom" then
+    if requestMeta.kind == "createRoom" then
+      self:playSoundHook("room_create_success")
+    else
+      self:playSoundHook("room_join_success")
+    end
     self:goWaitingRoom()
     self:connectWebSocket()
   end
 end
 
 function App:handleWsEnvelope(envelope)
+  local hookId = SERVER_ENVELOPE_SOUND_HOOK_MAP[envelope.type]
+  if hookId then
+    self:playSoundHook(hookId)
+  end
+
   if envelope.type == "server.welcome" then
     local payload = envelope.payload or {}
     self._session.role = payload.role
+    self:checkRulesVersion(payload.rulesVersion)
+  elseif envelope.type == "room.state" then
+    local payload = envelope.payload or {}
+    self:checkRulesVersion(payload.rulesVersion)
   elseif envelope.type == "room.closed" then
     self._wsClient:disconnect()
     self._session = {
       roomCode = nil,
       token = nil,
       wsUrl = nil,
-      role = nil
+      role = nil,
+      serverRulesVersion = nil
     }
   end
   self._sceneManager:dispatch("onAppEvent", {
@@ -317,9 +494,14 @@ function App:pollNetworkEvents()
       if isDecoded and envelope then
         self:handleWsEnvelope(envelope)
       else
-        self:emitUiStatus("WS 메시지 파싱 실패", Constants.COLOR_DANGER)
+        self:playSoundHook("ws_parse_error")
+        self:emitUiStatus(t("app.ui.ws_message_parse_failed"), Constants.COLOR_DANGER)
       end
     else
+      local hookId = NETWORK_EVENT_SOUND_HOOK_MAP[event.type]
+      if hookId then
+        self:playSoundHook(hookId)
+      end
       self._sceneManager:dispatch("onAppEvent", event)
     end
   end
@@ -364,6 +546,13 @@ function App:mousereleased(screenX, screenY, button)
 end
 
 function App:keypressed(key)
+  if key == "f6" then
+    Config.UI_USE_NINESLICE = not Config.UI_USE_NINESLICE
+    self:emitUiStatus(t("app.ui.ui_skin_toggle", {
+      state = Config.UI_USE_NINESLICE and t("common.on") or t("common.off")
+    }), Constants.COLOR_TEXT_SUB)
+    return
+  end
   self._sceneManager:dispatch("keypressed", key)
 end
 
@@ -380,6 +569,9 @@ function App:resize(screenW, screenH)
 end
 
 function App:shutdown()
+  if self._soundManager then
+    self._soundManager:stopAll()
+  end
   self._httpClient:shutdown()
   self._wsClient:shutdown()
 end

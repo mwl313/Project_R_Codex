@@ -1,5 +1,5 @@
 # SPEC_01_OVERVIEW - Definitions and State Model
-Date: 2026-02-09
+Date: 2026-02-10
 
 ## Naming Convention
 - Authoritative naming/comment rule file: `docs/spec/naming_convention.md`.
@@ -19,7 +19,7 @@ Date: 2026-02-09
   - all phase/turn timers
   - card draft/pick validation and timeout auto-pick
   - leave/disconnect/surrender resolution
-  - result (`p1_win`, `p2_win`, `draw`)
+  - result (`winnerPlayerIndex` + `reason`)
 - Client is responsible for:
   - UI rendering/input
   - local physics simulation
@@ -67,6 +67,10 @@ Date: 2026-02-09
 - Nickname and settings persist in `settings.ini` under identity `project_r`.
 - Settings/nickname changes must be handled as overlays (not scene transitions).
 - Overlay panel ratio is fixed at 70% of viewport/world-scaled screen.
+- Settings saved fields:
+  - `display_mode`
+  - `language`
+  - `nickname`
 
 ## 9. Definition of Done (MVP)
 - With local worker + two clients:
@@ -79,3 +83,6 @@ Date: 2026-02-09
 ## 10. Change Log
 - 2026-02-09:
   - Resolved spec conflict: reveal duration updated from `10 seconds` to `5 seconds` to match current gameplay rules and implementation.
+- 2026-02-10:
+  - Updated result authority wording to `winnerPlayerIndex + reason`.
+  - Added persisted `language` field in overlay/settings rules.

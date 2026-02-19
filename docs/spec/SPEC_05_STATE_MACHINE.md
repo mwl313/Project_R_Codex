@@ -1,5 +1,5 @@
 # SPEC_05_STATE_MACHINE - State Machine and Implementation Plan
-Date: 2026-02-09
+Date: 2026-02-10
 
 ## Naming Convention
 - Authoritative naming/comment rule file: `docs/spec/naming_convention.md`.
@@ -21,6 +21,13 @@ Date: 2026-02-09
   - disconnect/surrender result routing
   - end-of-turn snapshot apply timing
 - Client is authoritative only for local rendering/input simulation, then reconciles.
+
+## 2.1 Shared Mechanics Modules (Implemented)
+- Physics and turn simulation logic are centralized on client:
+  - `physics_engine.lua` (pure collision/simulation core)
+  - `game_mechanics.lua` (scene-facing turn/sim integration)
+- Reuse policy:
+  - multiplayer match scene and single dummy scene must call the same `game_mechanics.lua` entrypoints.
 
 ## 3. Turn Internal Subflow (`PLAYING`)
 - Required turn subflow:
@@ -156,6 +163,7 @@ Date: 2026-02-09
 - Persist:
   - display mode (`windowed_1280x720` or `fullscreen_native`)
   - nickname
+  - language (`ko` or `en`)
 - Must survive restart.
 - Detailed INI contract:
   - `docs/spec/SPEC_07_TUNABLES.md`
@@ -169,3 +177,10 @@ Date: 2026-02-09
   - `docs/spec/SPEC_06_CARDS_ABILITIES.md`
 - Gameplay rule summary:
   - `docs/spec/SPEC_04_GAME_RULES.md`
+- Localization/text policy:
+  - `docs/spec/SPEC_09_LOCALIZATION_AND_TEXT.md`
+
+## 11. Change Log
+- 2026-02-10:
+  - Added shared client mechanics module contract (`physics_engine.lua`, `game_mechanics.lua`).
+  - Added persisted language setting to runtime safety section.

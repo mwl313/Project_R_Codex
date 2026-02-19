@@ -10,7 +10,7 @@
 - 스레드 진입 시 자동 실행
 
 주의:
-- ws:// 프로토콜만 지원한다 (wss 미지원)
+- ws://, wss:// 프로토콜을 지원한다
 ]]
 
 local Json = require("utils.json")
@@ -27,20 +27,18 @@ if not hasLoveTimer then
 end
 
 local hasSocket, socketModule = pcall(require, "socket")
+local hasSsl, sslModule = pcall(require, "ssl")
 local hasBit, bitModule = pcall(require, "bit")
 if not hasBit then
   hasBit, bitModule = pcall(require, "bit32")
 end
 
-local function nowMs()
-  if loveTimerModule and loveTimerModule.getTime then
-    local isOk, value = pcall(loveTimerModule.getTime)
-    if isOk and type(value) == "number" then
-      return value * 1000
-    end
-  end
-  return os.clock() * 1000
-end
+local bxor = hasBit and bitModule.bxor or nil
+local band = hasBit and bitModule.band or nil
+local rshift = hasBit and bitModule.rshift or nil
+local bor = hasBit and bitModule.bor or nil
+local lshift = hasBit and bitModule.lshift or nil
+local bnot = hasBit and bitModule.bnot or nil
 
 local function sleepMs(durationMs)
   local safeMs = tonumber(durationMs) or 0
@@ -57,18 +55,11 @@ local function sleepMs(durationMs)
   end
 
   if hasSocket and socketModule and socketModule.sleep then
-    local isOk = pcall(socketModule.sleep, safeDurationSec)
-    if isOk then
-      return
-    end
-  end
-
-  local targetMs = nowMs() + safeMs
-  while nowMs() < targetMs do
+    pcall(socketModule.sleep, safeDurationSec)
   end
 end
 
-math.randomseed(os.time() + math.floor(nowMs()))
+math.randomseed(os.time() + math.floor(os.clock() * 1000))
 
 local function pushEvent(eventTable)
   eventChannel:push(Json.encode(eventTable))
@@ -78,18 +69,21 @@ local function parseWsUrl(url)
   if type(url) ~= "string" then
     return nil, "invalid_url"
   end
-  local host, portText, path = url:match("^ws://([^:/]+):?(%d*)(/?.*)$")
+  local scheme, host, portText, path = url:match("^(wss?)://([^:/]+):?(%d*)(/?.*)$")
   if not host then
-    return nil, "only_ws_protocol_supported"
+    return nil, "only_ws_or_wss_protocol_supported"
   end
+  local isSecure = scheme == "wss"
   local port = tonumber(portText)
   if not port then
-    port = 80
+    port = isSecure and 443 or 80
   end
   if not path or path == "" then
     path = "/"
   end
   return {
+    scheme = scheme,
+    isSecure = isSecure,
     host = host,
     port = port,
     path = path
@@ -125,6 +119,130 @@ local function toBase64(binaryText)
   return table.concat(result)
 end
 
+local function leftRotate32(value, bitCount)
+  local safeBits = bitCount % 32
+  return band(bor(lshift(value, safeBits), rshift(value, 32 - safeBits)), 0xFFFFFFFF)
+end
+
+local function sha1Binary(text)
+  local bytes = { string.byte(text, 1, #text) }
+  local bitLength = #bytes * 8
+
+  bytes[#bytes + 1] = 0x80
+  while (#bytes % 64) ~= 56 do
+    bytes[#bytes + 1] = 0
+  end
+
+  local high = math.floor(bitLength / 2 ^ 32)
+  local low = bitLength % 2 ^ 32
+  for shift = 24, 0, -8 do
+    bytes[#bytes + 1] = band(rshift(high, shift), 0xFF)
+  end
+  for shift = 24, 0, -8 do
+    bytes[#bytes + 1] = band(rshift(low, shift), 0xFF)
+  end
+
+  local h0 = 0x67452301
+  local h1 = 0xEFCDAB89
+  local h2 = 0x98BADCFE
+  local h3 = 0x10325476
+  local h4 = 0xC3D2E1F0
+
+  local words = {}
+  for chunkStart = 1, #bytes, 64 do
+    for wordIndex = 0, 15 do
+      local base = chunkStart + wordIndex * 4
+      words[wordIndex] = bor(
+        lshift(bytes[base] or 0, 24),
+        bor(lshift(bytes[base + 1] or 0, 16), bor(lshift(bytes[base + 2] or 0, 8), bytes[base + 3] or 0))
+      )
+    end
+
+    for wordIndex = 16, 79 do
+      words[wordIndex] = leftRotate32(
+        bxor(bxor(words[wordIndex - 3], words[wordIndex - 8]), bxor(words[wordIndex - 14], words[wordIndex - 16])),
+        1
+      )
+    end
+
+    local a = h0
+    local b = h1
+    local c = h2
+    local d = h3
+    local e = h4
+
+    for index = 0, 79 do
+      local f
+      local k
+      if index <= 19 then
+        f = bor(band(b, c), band(bnot(b), d))
+        k = 0x5A827999
+      elseif index <= 39 then
+        f = bxor(b, bxor(c, d))
+        k = 0x6ED9EBA1
+      elseif index <= 59 then
+        f = bor(bor(band(b, c), band(b, d)), band(c, d))
+        k = 0x8F1BBCDC
+      else
+        f = bxor(b, bxor(c, d))
+        k = 0xCA62C1D6
+      end
+
+      local temp = band(leftRotate32(a, 5) + f + e + k + words[index], 0xFFFFFFFF)
+      e = d
+      d = c
+      c = leftRotate32(b, 30)
+      b = a
+      a = temp
+    end
+
+    h0 = band(h0 + a, 0xFFFFFFFF)
+    h1 = band(h1 + b, 0xFFFFFFFF)
+    h2 = band(h2 + c, 0xFFFFFFFF)
+    h3 = band(h3 + d, 0xFFFFFFFF)
+    h4 = band(h4 + e, 0xFFFFFFFF)
+  end
+
+  local out = {}
+  local hashParts = { h0, h1, h2, h3, h4 }
+  for _, part in ipairs(hashParts) do
+    out[#out + 1] = string.char(band(rshift(part, 24), 0xFF))
+    out[#out + 1] = string.char(band(rshift(part, 16), 0xFF))
+    out[#out + 1] = string.char(band(rshift(part, 8), 0xFF))
+    out[#out + 1] = string.char(band(part, 0xFF))
+  end
+  return table.concat(out)
+end
+
+local function buildExpectedAcceptKey(secKey)
+  return toBase64(sha1Binary(secKey .. "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+end
+
+local function parseHeaderMap(headerLines)
+  local headerMap = {}
+  for _, line in ipairs(headerLines or {}) do
+    local key, value = line:match("^%s*([^:]+):%s*(.-)%s*$")
+    if key and value then
+      headerMap[string.lower(key)] = value
+    end
+  end
+  return headerMap
+end
+
+local function headerContainsToken(headerValue, targetToken)
+  if type(headerValue) ~= "string" then
+    return false
+  end
+  local target = string.lower(targetToken or "")
+  for token in string.gmatch(string.lower(headerValue), "[^,]+") do
+    local trimmed = token:gsub("^%s+", ""):gsub("%s+$", "")
+    if trimmed == target then
+      return true
+    end
+  end
+  return false
+end
+
 local function generateSecKey()
   local bytes = {}
   for index = 1, 16 do
@@ -134,9 +252,15 @@ local function generateSecKey()
 end
 
 local function buildHandshakeRequest(connectionInfo, secKey)
+  local hostHeader = connectionInfo.host
+  local isDefaultPort = (connectionInfo.isSecure and connectionInfo.port == 443) or (not connectionInfo.isSecure and connectionInfo.port == 80)
+  if not isDefaultPort then
+    hostHeader = hostHeader .. ":" .. tostring(connectionInfo.port)
+  end
+
   return table.concat({
     "GET " .. connectionInfo.path .. " HTTP/1.1\r\n",
-    "Host: " .. connectionInfo.host .. ":" .. tostring(connectionInfo.port) .. "\r\n",
+    "Host: " .. hostHeader .. "\r\n",
     "Upgrade: websocket\r\n",
     "Connection: Upgrade\r\n",
     "Sec-WebSocket-Key: " .. secKey .. "\r\n",
@@ -145,32 +269,75 @@ local function buildHandshakeRequest(connectionInfo, secKey)
   })
 end
 
-local function receiveHttpHeaders(tcpSocket)
-  local statusLine, statusError = tcpSocket:receive("*l")
+local function receiveHttpHeaders(clientSocket)
+  local statusLine, statusError = clientSocket:receive("*l")
   if not statusLine then
     return nil, statusError or "handshake_failed"
   end
+  statusLine = statusLine:gsub("\r$", "")
 
   local headerLines = {}
   while true do
-    local line, lineError = tcpSocket:receive("*l")
+    local line, lineError = clientSocket:receive("*l")
     if not line then
       return nil, lineError or "handshake_failed"
     end
+    line = line:gsub("\r$", "")
     if line == "" then
       break
     end
     headerLines[#headerLines + 1] = line
   end
+
   return {
     statusLine = statusLine,
     headerLines = headerLines
   }, nil
 end
 
-local bxor = hasBit and bitModule.bxor or nil
-local band = hasBit and bitModule.band or nil
-local rshift = hasBit and bitModule.rshift or nil
+local function validateHandshake(handshake, expectedAcceptKey)
+  local statusCodeText = handshake.statusLine:match("^HTTP/%d+%.%d+%s+(%d+)")
+  local statusCode = tonumber(statusCodeText)
+  if statusCode ~= 101 then
+    return false, "handshake_status_not_101:" .. tostring(handshake.statusLine)
+  end
+
+  local headers = parseHeaderMap(handshake.headerLines)
+  if not headerContainsToken(headers["upgrade"], "websocket") then
+    return false, "handshake_missing_upgrade"
+  end
+  if not headerContainsToken(headers["connection"], "upgrade") then
+    return false, "handshake_missing_connection_upgrade"
+  end
+
+  local acceptKey = headers["sec-websocket-accept"]
+  if type(acceptKey) ~= "string" then
+    return false, "handshake_missing_accept_key"
+  end
+  local normalizedAccept = acceptKey:gsub("^%s+", ""):gsub("%s+$", "")
+  if normalizedAccept ~= expectedAcceptKey then
+    return false, "handshake_invalid_accept_key"
+  end
+
+  return true, nil
+end
+
+local function performTlsHandshake(tlsSocket, timeoutSec)
+  local deadline = os.clock() + (timeoutSec or 5)
+  while true do
+    local isOk, handshakeError = tlsSocket:dohandshake()
+    if isOk then
+      return true, nil
+    end
+    if handshakeError ~= "wantread" and handshakeError ~= "wantwrite" and handshakeError ~= "timeout" then
+      return false, handshakeError
+    end
+    if os.clock() >= deadline then
+      return false, "timeout"
+    end
+    sleepMs(10)
+  end
+end
 
 local function buildMaskedFrame(opcode, payload)
   local payloadText = payload or ""
@@ -344,8 +511,8 @@ local function connectSocket(url)
 
   disconnectSocket("reconnect", false)
 
-  local socketValue = socketModule.tcp()
-  if not socketValue then
+  local rawSocket = socketModule.tcp()
+  if not rawSocket then
     pushEvent({
       type = "ws_error",
       message = "tcp_create_failed"
@@ -353,10 +520,10 @@ local function connectSocket(url)
     return
   end
 
-  socketValue:settimeout(5)
-  local isSuccess, connectError = socketValue:connect(info.host, info.port)
+  rawSocket:settimeout(5)
+  local isSuccess, connectError = rawSocket:connect(info.host, info.port)
   if not isSuccess then
-    socketValue:close()
+    rawSocket:close()
     pushEvent({
       type = "ws_error",
       message = "connect_failed:" .. tostring(connectError)
@@ -364,11 +531,53 @@ local function connectSocket(url)
     return
   end
 
+  local clientSocket = rawSocket
+  if info.isSecure then
+    if not hasSsl or not sslModule or not sslModule.wrap then
+      rawSocket:close()
+      pushEvent({
+        type = "ws_error",
+        message = "ssl_module_not_available"
+      })
+      return
+    end
+
+    local wrappedSocket, wrapError = sslModule.wrap(rawSocket, {
+      mode = "client",
+      protocol = "tlsv1_2",
+      verify = "none",
+      options = "all",
+      server = info.host
+    })
+    if not wrappedSocket then
+      rawSocket:close()
+      pushEvent({
+        type = "ws_error",
+        message = "ssl_wrap_failed:" .. tostring(wrapError)
+      })
+      return
+    end
+
+    wrappedSocket:settimeout(5)
+    local handshakeOk, handshakeError = performTlsHandshake(wrappedSocket, 5)
+    if not handshakeOk then
+      wrappedSocket:close()
+      pushEvent({
+        type = "ws_error",
+        message = "ssl_handshake_failed:" .. tostring(handshakeError)
+      })
+      return
+    end
+
+    clientSocket = wrappedSocket
+  end
+
   local secKey = generateSecKey()
+  local expectedAcceptKey = buildExpectedAcceptKey(secKey)
   local requestText = buildHandshakeRequest(info, secKey)
-  local sendOk, sendError = socketValue:send(requestText)
+  local sendOk, sendError = clientSocket:send(requestText)
   if not sendOk then
-    socketValue:close()
+    clientSocket:close()
     pushEvent({
       type = "ws_error",
       message = "handshake_send_failed:" .. tostring(sendError)
@@ -376,26 +585,28 @@ local function connectSocket(url)
     return
   end
 
-  local handshake, handshakeError = receiveHttpHeaders(socketValue)
+  local handshake, handshakeError = receiveHttpHeaders(clientSocket)
   if not handshake then
-    socketValue:close()
+    clientSocket:close()
     pushEvent({
       type = "ws_error",
       message = "handshake_failed:" .. tostring(handshakeError)
     })
     return
   end
-  if not handshake.statusLine:find("101", 1, true) then
-    socketValue:close()
+
+  local isHandshakeValid, handshakeValidationError = validateHandshake(handshake, expectedAcceptKey)
+  if not isHandshakeValid then
+    clientSocket:close()
     pushEvent({
       type = "ws_error",
-      message = "handshake_status_not_101:" .. handshake.statusLine
+      message = handshakeValidationError
     })
     return
   end
 
-  socketValue:settimeout(0)
-  tcpSocket = socketValue
+  clientSocket:settimeout(0)
+  tcpSocket = clientSocket
   receiveBuffer = ""
   isConnected = true
 
@@ -451,9 +662,11 @@ local function pumpSocketRead()
       disconnectSocket("remote_closed", true)
       return
     end
-    if receiveError == "timeout" or not receiveError then
+
+    if receiveError == "timeout" then
       break
     end
+
     if receiveError then
       pushEvent({
         type = "ws_error",
@@ -461,6 +674,10 @@ local function pumpSocketRead()
       })
       disconnectSocket("receive_failed", true)
       return
+    end
+
+    if not receiveError and (not data or #data == 0) then
+      break
     end
   end
 
@@ -474,26 +691,75 @@ local function pumpSocketRead()
   end
 end
 
+local function handleCommand(commandRaw)
+  if not commandRaw then
+    return
+  end
+
+  local isDecoded, command = pcall(Json.decode, commandRaw)
+  if not isDecoded or type(command) ~= "table" then
+    return
+  end
+
+  if command.type == "connect" then
+    connectSocket(command.url)
+  elseif command.type == "send" then
+    sendFrame(0x1, command.payload or "")
+  elseif command.type == "disconnect" then
+    disconnectSocket("client_disconnect", true)
+  elseif command.type == "shutdown" then
+    return false
+  end
+
+  return true
+end
+
 local isRunning = true
 while isRunning do
-  local commandRaw = commandChannel:pop()
-  if commandRaw then
-    local isDecoded, command = pcall(Json.decode, commandRaw)
-    if isDecoded and command then
-      if command.type == "connect" then
-        connectSocket(command.url)
-      elseif command.type == "send" then
-        sendFrame(0x1, command.payload or "")
-      elseif command.type == "disconnect" then
-        disconnectSocket("client_disconnect", true)
-      elseif command.type == "shutdown" then
-        isRunning = false
-      end
+  local hadCommand = false
+
+  while true do
+    local commandRaw = commandChannel:pop()
+    if not commandRaw then
+      break
+    end
+    hadCommand = true
+    local shouldContinue = handleCommand(commandRaw)
+    if shouldContinue == false then
+      isRunning = false
+      break
     end
   end
 
-  pumpSocketRead()
-  sleepMs(10)
+  if not isRunning then
+    break
+  end
+
+  if isConnected and tcpSocket then
+    if hasSocket and socketModule and socketModule.select then
+      local readableList, _, selectError = socketModule.select({ tcpSocket }, nil, 0.05)
+      if selectError and selectError ~= "timeout" then
+        pushEvent({
+          type = "ws_error",
+          message = "select_failed:" .. tostring(selectError)
+        })
+        disconnectSocket("select_failed", true)
+      elseif readableList and #readableList > 0 then
+        pumpSocketRead()
+      end
+    else
+      pumpSocketRead()
+      if not hadCommand then
+        sleepMs(10)
+      end
+    end
+  elseif not hadCommand then
+    local blockingCommand = commandChannel:demand()
+    local shouldContinue = handleCommand(blockingCommand)
+    if shouldContinue == false then
+      isRunning = false
+    end
+  end
 end
 
 disconnectSocket("shutdown", false)
