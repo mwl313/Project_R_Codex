@@ -20,6 +20,7 @@ local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
 local UIDraw = require("ui.ui_draw")
 local CardAnimator = require("ui.card_animator")
+local CardHandBar = require("ui.card_hand_bar")
 local EffectManager = require("effects.effect_manager")
 local Abilities = require("abilities")
 local GameMechanics = require("game_mechanics")
@@ -241,6 +242,7 @@ function MatchScene.new(app)
     _statusColor = Constants.COLOR_TEXT_SUB,
     _boardX = boardX,
     _boardY = boardY,
+    _forcedLocalRole = nil,
 
     _myStoneList = {},
     _isPlacementSubmitted = false,
@@ -297,6 +299,9 @@ function MatchScene.new(app)
     _isShotSimulating = false,
     _shouldSendSnapshotAfterSim = false,
     _playingCardButtonList = {},
+    _playingCardHandBar = nil,
+    _optimisticConsumedCardIdSet = {},
+    _pendingDeclaredTargetCardId = nil,
     _surrenderButton = nil,
     _resultRematchButton = nil,
     _resultLobbyButton = nil,
@@ -365,12 +370,26 @@ function MatchScene.new(app)
       instance:requestResultVote("to_lobby")
     end
   })
+  instance._playingCardHandBar = CardHandBar.new({
+    boardCenterX = boardX + Constants.BOARD_W * 0.5,
+    boardCenterY = boardY + Constants.BOARD_H * 0.5,
+    canUseCard = function(cardId)
+      return instance:canUseCardInTurn(cardId)
+    end,
+    onCardDeclared = function(cardId)
+      return instance:handleHandCardDeclared(cardId)
+    end,
+    onCardBlocked = function(_cardId)
+      instance:handleHandCardBlocked()
+    end
+  })
 
   return instance
 end
 
 function MatchScene:enter(params)
   self._roomState = createDefaultRoomState()
+  self._forcedLocalRole = params and params.localRole or nil
 
   self._myStoneList = {}
   self._isPlacementSubmitted = false
@@ -425,6 +444,8 @@ function MatchScene:enter(params)
   self._isShotSimulating = false
   self._shouldSendSnapshotAfterSim = false
   self._playingCardButtonList = {}
+  self._optimisticConsumedCardIdSet = {}
+  self._pendingDeclaredTargetCardId = nil
   self._isResultVotePending = false
   self._myResultVote = nil
   self._opponentResultVote = nil
@@ -435,6 +456,7 @@ function MatchScene:enter(params)
   if params and type(params.roomState) == "table" then
     self:applyRoomState(params.roomState)
   end
+  self:refreshPlayingCardHand()
 end
 
 function MatchScene:setStatus(statusText, statusColor)
@@ -443,6 +465,9 @@ function MatchScene:setStatus(statusText, statusColor)
 end
 
 function MatchScene:getMyRole()
+  if self._forcedLocalRole == "host" or self._forcedLocalRole == "guest" then
+    return self._forcedLocalRole
+  end
   local session = self._app:getSession()
   return session and session.role or nil
 end
@@ -891,38 +916,77 @@ function MatchScene:canUseCardInTurn(cardId)
   return Abilities.isSupportedTurnCard(cardId)
 end
 
+function MatchScene:refreshPlayingCardHand()
+  if not self._playingCardHandBar then
+    return
+  end
+
+  local cardDisplayList = {}
+  for _, cardId in ipairs(self._myPickedCardList) do
+    if not self._optimisticConsumedCardIdSet[cardId] then
+      cardDisplayList[#cardDisplayList + 1] = {
+        id = cardId,
+        label = getCardLabel(cardId)
+      }
+    end
+  end
+  self._playingCardHandBar:setCards(cardDisplayList)
+end
+
+function MatchScene:restoreOptimisticConsumedCard(cardId)
+  if not cardId then
+    return
+  end
+  if not self._optimisticConsumedCardIdSet[cardId] then
+    return
+  end
+  self._optimisticConsumedCardIdSet[cardId] = nil
+  if self._pendingDeclaredTargetCardId == cardId then
+    self._pendingDeclaredTargetCardId = nil
+  end
+  self:refreshPlayingCardHand()
+end
+
+function MatchScene:handleHandCardBlocked()
+  if self._hasUsedCardThisTurn then
+    self:setStatus(t("match.status.card_already_used_turn"), Constants.COLOR_TEXT_SUB)
+    return
+  end
+  self:setStatus(t("match.status.cannot_use_card_now"), Constants.COLOR_DANGER)
+end
+
+function MatchScene:handleHandCardDeclared(cardId)
+  local isAccepted = self:requestTurnCardUse(cardId)
+  if not isAccepted then
+    return false
+  end
+
+  self._optimisticConsumedCardIdSet[cardId] = true
+  if cardId == "rockfall" or cardId == "reinforcement" then
+    self._pendingDeclaredTargetCardId = cardId
+  else
+    self._pendingDeclaredTargetCardId = nil
+  end
+  self:refreshPlayingCardHand()
+  return true
+end
+
 function MatchScene:rebuildPlayingCardButtons()
   self._playingCardButtonList = {}
-  local rect = self:getPlayingCardPanelRect()
-  for index, cardId in ipairs(self._myPickedCardList) do
-    local button = Button.new({
-      x = rect.x + 12,
-      y = rect.y + 34 + (index - 1) * 40,
-      w = rect.w - 24,
-      h = 34,
-      label = getCardLabel(cardId),
-      onClick = function()
-        self:requestTurnCardUse(cardId)
-      end
-    })
-    self._playingCardButtonList[#self._playingCardButtonList + 1] = {
-      cardId = cardId,
-      button = button
-    }
-  end
+  self:refreshPlayingCardHand()
 end
 
 function MatchScene:requestTurnCardUse(cardId)
   if not self:canUseCardInTurn(cardId) then
     self:setStatus(t("match.status.cannot_use_card_now"), Constants.COLOR_DANGER)
-    return
+    return false
   end
 
   if cardId == "rockfall" or cardId == "reinforcement" then
     self._pendingCardTargetId = cardId
     self:cancelAimDrag(true)
     self:setStatus(Abilities.getPendingTargetStartStatus(cardId), Constants.COLOR_TEXT_SUB)
-    return
+    return true
   end
 
   local payload = {
@@ -933,13 +997,18 @@ function MatchScene:requestTurnCardUse(cardId)
   self._app:sendWsEnvelope("client.match.turn.cardUse", payload)
   self._isCardUsePending = true
   self:setStatus(t("match.status.card_use_submit"), Constants.COLOR_TEXT_SUB)
+  return true
 end
 
 function MatchScene:cancelPendingCardTarget()
   if not self._pendingCardTargetId then
     return
   end
+  local cancelledCardId = self._pendingCardTargetId
   self._pendingCardTargetId = nil
+  if self._pendingDeclaredTargetCardId == cancelledCardId then
+    self:restoreOptimisticConsumedCard(cancelledCardId)
+  end
   self:setStatus(t("match.status.card_target_cancel"), Constants.COLOR_TEXT_SUB)
 end
 
@@ -958,6 +1027,9 @@ function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
   local pendingCardId = self._pendingCardTargetId
   if not self:isMyTurn() or self._hasUsedCardThisTurn or self._playingShotUsed > 0 then
     self._pendingCardTargetId = nil
+    if self._pendingDeclaredTargetCardId == pendingCardId then
+      self:restoreOptimisticConsumedCard(pendingCardId)
+    end
     self:setStatus(t("match.status.cannot_use_card_now"), Constants.COLOR_DANGER)
     return true
   end
@@ -989,6 +1061,9 @@ function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
     }
   })
   self._pendingCardTargetId = nil
+  if self._pendingDeclaredTargetCardId == pendingCardId then
+    self._pendingDeclaredTargetCardId = nil
+  end
   self._isCardUsePending = true
   self:setStatus(Abilities.getPendingTargetRequestStatus(pendingCardId), Constants.COLOR_TEXT_SUB)
   return true
@@ -1004,6 +1079,9 @@ function MatchScene:requestSurrender()
   end
   self._pendingCardTargetId = nil
   self:cancelAimDrag(true)
+  if self._playingCardHandBar then
+    self._playingCardHandBar:cancelCardDrag(false)
+  end
   self._app:sendWsEnvelope("client.match.surrender", {})
   self._isSurrenderPending = true
   self:setStatus(t("match.status.surrender_submit"), Constants.COLOR_DANGER)
@@ -1414,6 +1492,9 @@ function MatchScene:applyRoomState(payload)
       self:syncStoneVelocityMap()
     end
     if self._pendingCardTargetId and (not self:isMyTurn() or self._hasUsedCardThisTurn or self._playingShotUsed > 0 or self._isCardUsePending) then
+      if self._pendingDeclaredTargetCardId == self._pendingCardTargetId then
+        self:restoreOptimisticConsumedCard(self._pendingCardTargetId)
+      end
       self._pendingCardTargetId = nil
     end
     self:rebuildPlayingCardButtons()
@@ -1427,8 +1508,14 @@ function MatchScene:applyRoomState(payload)
     self._shockwaveSourceStoneId = nil
     self._lockedStoneIdSet = {}
     self._pendingCardTargetId = nil
+    self._pendingDeclaredTargetCardId = nil
     self._isSurrenderPending = false
     self:cancelAimDrag(true)
+    if self._playingCardHandBar then
+      self._playingCardHandBar:cancelCardDrag(false)
+    end
+    self._optimisticConsumedCardIdSet = {}
+    self:refreshPlayingCardHand()
     if self._effectManager then
       self._effectManager:clear()
     end
@@ -1496,6 +1583,14 @@ function MatchScene:update(dt)
   end
   if self:isPlayingPhase() then
     self:updateShotSimulation(dt)
+  end
+
+  if self._playingCardHandBar then
+    local mouseX, mouseY = self._app:getMouseWorldPosition()
+    self._playingCardHandBar:update(dt, mouseX, mouseY, {
+      isPlayingPhase = self:isPlayingPhase(),
+      isStoneDragging = self._isAimDragging
+    })
   end
 end
 
@@ -1925,7 +2020,9 @@ function MatchScene:draw()
     self:drawCardSelectPanel(mouseX, mouseY)
   elseif self._roomState.phase == Constants.PHASE_PLAYING then
     self:drawPlayingInfo()
-    self:drawPlayingCardPanel(mouseX, mouseY)
+    if self._playingCardHandBar then
+      self._playingCardHandBar:draw()
+    end
     self._surrenderButton.isEnabled = not self._isSurrenderPending
     self._surrenderButton:draw(mouseX, mouseY)
   elseif self._roomState.phase == Constants.PHASE_RESULT then
@@ -1949,6 +2046,10 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
   end
 
   if self:isPlayingPhase() and button == 2 then
+    if self._playingCardHandBar and self._playingCardHandBar:isDraggingCard() then
+      self._playingCardHandBar:cancelCardDrag(true)
+      return
+    end
     if self._pendingCardTargetId then
       self:cancelPendingCardTarget()
     else
@@ -1986,11 +2087,8 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
       self:commitPendingCardTargetByWorld(mouseX, mouseY)
       return
     end
-    for _, entry in ipairs(self._playingCardButtonList) do
-      if entry.button:isHovered(mouseX, mouseY) and entry.button.isEnabled then
-        entry.button:onClick()
-        return
-      end
+    if self._playingCardHandBar and self._playingCardHandBar:mousepressed(mouseX, mouseY, button) then
+      return
     end
     self:beginAimDrag(mouseX, mouseY)
     return
@@ -2025,6 +2123,9 @@ function MatchScene:mousereleased(mouseX, mouseY, button)
   if button ~= 1 then
     return
   end
+  if self:isPlayingPhase() and self._playingCardHandBar and self._playingCardHandBar:mousereleased(mouseX, mouseY, button) then
+    return
+  end
   if self:isPlayingPhase() and self._isAimDragging then
     self:commitAimDrag(mouseX, mouseY)
   end
@@ -2038,6 +2139,10 @@ end
 
 function MatchScene:keypressed(key)
   if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
+    return
+  end
+  if key == "escape" and self._playingCardHandBar and self._playingCardHandBar:isDraggingCard() then
+    self._playingCardHandBar:cancelCardDrag(true)
     return
   end
   if key == "escape" and self._pendingCardTargetId then
@@ -2127,6 +2232,8 @@ function MatchScene:onWsEnvelope(envelope)
       self._isCardPickPending = false
       if type(payload.pickedCards) == "table" then
         self._myPickedCardList = cloneStringList(payload.pickedCards)
+        self._optimisticConsumedCardIdSet = {}
+        self._pendingDeclaredTargetCardId = nil
         self._selectedCardList = cloneStringList(payload.pickedCards)
         self:syncCardAnimatorSelection()
         self:rebuildPlayingCardButtons()
@@ -2179,8 +2286,13 @@ function MatchScene:onWsEnvelope(envelope)
     self._isTurnShotPending = false
     self._isCardUsePending = false
     self._pendingCardTargetId = nil
+    self._pendingDeclaredTargetCardId = nil
+    self._optimisticConsumedCardIdSet = {}
     self._isSurrenderPending = false
     self:cancelAimDrag(true)
+    if self._playingCardHandBar then
+      self._playingCardHandBar:cancelCardDrag(false)
+    end
     if self._effectManager then
       self._effectManager:clear()
     end
@@ -2213,6 +2325,10 @@ function MatchScene:onWsEnvelope(envelope)
       self._isCardUsePending = false
       self._hasUsedCardThisTurn = true
       if type(payload.cardId) == "string" then
+        self._optimisticConsumedCardIdSet[payload.cardId] = nil
+        if self._pendingDeclaredTargetCardId == payload.cardId then
+          self._pendingDeclaredTargetCardId = nil
+        end
         removeString(self._myPickedCardList, payload.cardId)
       end
       Abilities.applyServerCardEffect(self, payload.effect)
@@ -2242,6 +2358,7 @@ function MatchScene:onWsEnvelope(envelope)
     self._isTurnShotPending = false
     self._isCardUsePending = false
     self._pendingCardTargetId = nil
+    self._pendingDeclaredTargetCardId = nil
     self:cancelAimDrag(true)
     if self._playingShotUsed >= self._playingShotBudget then
       self:setStatus(t("match.status.shot_accepted_wait_snapshot"), Constants.COLOR_TEXT_SUB)
@@ -2260,6 +2377,7 @@ function MatchScene:onWsEnvelope(envelope)
     self._turnEndsAtMs = nil
     self._isTurnShotPending = false
     self._isCardUsePending = false
+    self._pendingDeclaredTargetCardId = nil
     self:cancelAimDrag(true)
     self:setStatus(t("match.status.snapshot_requested"), Constants.COLOR_TEXT_SUB)
     self:sendHostSnapshotIfNeeded(payload.turnIndex, payload.reason)
@@ -2286,6 +2404,7 @@ function MatchScene:onWsEnvelope(envelope)
     self._isTurnShotPending = false
     self._isCardUsePending = false
     self._pendingCardTargetId = nil
+    self._pendingDeclaredTargetCardId = nil
     self:setStatus(t("match.status.snapshot_applied"), Constants.COLOR_TEXT_SUB)
     return
   end
@@ -2294,6 +2413,7 @@ function MatchScene:onWsEnvelope(envelope)
     local payload = envelope.payload or {}
     self._isSurrenderPending = false
     self._pendingCardTargetId = nil
+    self._pendingDeclaredTargetCardId = nil
     self._isResultVotePending = false
     self:setStatus(t("match.status.result_winner", {
       winner = tostring(payload.winnerPlayerIndex or "?")
@@ -2320,6 +2440,12 @@ function MatchScene:onWsEnvelope(envelope)
     end
     if payload.code == "card_already_used" or payload.code == "card_use_window_closed" or payload.code == "card_not_owned" or payload.code == "card_not_implemented" or payload.code == "invalid_card_id" or payload.code == "invalid_card_target" then
       self._isCardUsePending = false
+      if self._pendingDeclaredTargetCardId and self._pendingCardTargetId == self._pendingDeclaredTargetCardId then
+        self._pendingCardTargetId = nil
+      end
+      self._pendingDeclaredTargetCardId = nil
+      self._optimisticConsumedCardIdSet = {}
+      self:refreshPlayingCardHand()
     end
     if payload.code == "invalid_shot_power" or payload.code == "invalid_shot_dir" or payload.code == "invalid_shot_stone" or payload.code == "not_your_turn" or payload.code == "timeout" or payload.code == "turn_mismatch" or payload.code == "already_shot" or payload.code == "shot_budget_exceeded" or payload.code == "stone_locked_this_turn" then
       self._isTurnShotPending = false
@@ -2346,10 +2472,16 @@ end
 
 function MatchScene:onSceneWillChange(_event)
   self:cancelAimDrag(true)
+  if self._playingCardHandBar then
+    self._playingCardHandBar:cancelCardDrag(false)
+  end
 end
 
 function MatchScene:exit()
   self:cancelAimDrag(true)
+  if self._playingCardHandBar then
+    self._playingCardHandBar:cancelCardDrag(false)
+  end
 end
 
 function MatchScene:onAppEvent(event)
@@ -2379,6 +2511,9 @@ function MatchScene:onAppEvent(event)
 
   if event.type == "focus_lost" then
     self:cancelAimDrag(true)
+    if self._playingCardHandBar then
+      self._playingCardHandBar:cancelCardDrag(false)
+    end
   end
 end
 

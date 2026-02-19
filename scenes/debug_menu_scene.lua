@@ -210,6 +210,24 @@ local function buildMockMatchRoomState(phase, options)
   return roomState
 end
 
+local function buildCardZoneTestRoomState()
+  local roomState = buildMockMatchRoomState(Constants.PHASE_PLAYING)
+  roomState.match.cardSelect.myPickedCards = {
+    "reinforcement",
+    "rockfall",
+    "invincible"
+  }
+  roomState.match.cardSelect.myLocked = true
+  roomState.match.cardSelect.opponentLocked = true
+  roomState.match.playing.activePlayerIndex = 1
+  roomState.match.playing.hasCardUsedThisTurn = false
+  roomState.match.playing.shotUsed = 0
+  roomState.match.playing.shotBudget = 1
+  roomState.match.playing.awaitingSnapshot = false
+  roomState.match.playing.shotCommitted = false
+  return roomState
+end
+
 function DebugMenuScene.new(app)
   local instance = {
     _app = app,
@@ -338,6 +356,15 @@ function DebugMenuScene:createActionList()
       onClick = function()
         self._app:goMatch({
           roomState = buildMockMatchRoomState(Constants.PHASE_PLAYING)
+        }, Config.TRANSITION_FORWARD)
+      end
+    },
+    {
+      label = t("debug_menu.action.match_card_zone"),
+      onClick = function()
+        self._app:goMatch({
+          roomState = buildCardZoneTestRoomState(),
+          localRole = "host"
         }, Config.TRANSITION_FORWARD)
       end
     },

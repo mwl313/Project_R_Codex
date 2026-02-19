@@ -145,6 +145,7 @@ local LocaleEn = {
       match_card_first = "Match: Card Select (Pick 1)",
       match_card_second = "Match: Card Select (Pick 2)",
       match_playing = "Match: Playing Phase",
+      match_card_zone = "Match: Card Zone Test",
       match_result = "Match: Result Phase",
       single_dummy = "Single Dummy Scene"
     },
@@ -264,6 +265,9 @@ local LocaleEn = {
     card_select_waiting = "Waiting for opponent card lock...",
     card_select_selected = "Selected {selectedCount}/{pickCount}",
     power_label = "Power {power}",
+    hand = {
+      drop_prompt = "Drop a card in the center zone to use it"
+    },
     button = {
       submit_placement = "Submit Placement",
       confirm_selection = "Confirm Selection",
@@ -287,6 +291,7 @@ local LocaleEn = {
       card_pick_need_exact = "Select exactly {count} card(s) before confirming.",
       card_pick_submit = "Sending card selection...",
       cannot_use_card_now = "Cannot use card right now.",
+      card_already_used_turn = "You already used a card this turn.",
       card_use_submit = "Sending card use request...",
       card_target_cancel = "Card target selection cancelled.",
       card_target_cannot_place = "Cannot place card target at this position.",

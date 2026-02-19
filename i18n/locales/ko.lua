@@ -145,6 +145,7 @@ local LocaleKo = {
       match_card_first = "매치: 카드선택(1장 선택)",
       match_card_second = "매치: 카드선택(2장 선택)",
       match_playing = "매치: 턴 플레이 단계",
+      match_card_zone = "매치: 카드존 테스트",
       match_result = "매치: 결과 단계",
       single_dummy = "싱글 더미 씬"
     },
@@ -264,6 +265,9 @@ local LocaleKo = {
     card_select_waiting = "상대 선택 대기중...",
     card_select_selected = "{selectedCount}/{pickCount} 선택",
     power_label = "Power {power}",
+    hand = {
+      drop_prompt = "가운데 영역에 카드를 내려놓아 사용"
+    },
     button = {
       submit_placement = "배치 제출",
       confirm_selection = "선택 확정",
@@ -287,6 +291,7 @@ local LocaleKo = {
       card_pick_need_exact = "{count}장을 선택 후 확정하세요.",
       card_pick_submit = "카드 선택 확정 요청 전송...",
       cannot_use_card_now = "지금은 카드를 사용할 수 없습니다.",
+      card_already_used_turn = "이번 턴에는 이미 카드를 사용했습니다.",
       card_use_submit = "카드 사용 요청 전송...",
       card_target_cancel = "카드 대상 선택을 취소했습니다.",
       card_target_cannot_place = "해당 위치에는 배치할 수 없습니다.",
