@@ -18,6 +18,7 @@
 
 local Constants = require("constants")
 local FontManager = require("assets.font_manager")
+local UIDraw = require("ui.ui_draw")
 
 local Button = {}
 Button.__index = Button
@@ -32,7 +33,8 @@ function Button.new(params)
     onClick = params.onClick or function() end,
     isEnabled = params.isEnabled ~= false,
     color = params.color or Constants.COLOR_BUTTON,
-    hoverColor = params.hoverColor
+    hoverColor = params.hoverColor,
+    isPressed = params.isPressed == true
   }
   return setmetatable(instance, Button)
 end
@@ -43,18 +45,15 @@ end
 
 function Button:draw(mouseX, mouseY)
   local font = FontManager.getFont("ui")
+  local isHovered = self:isHovered(mouseX, mouseY)
   local drawColor = self.color
   if not self.isEnabled then
     drawColor = Constants.COLOR_BUTTON_DISABLED
-  elseif self:isHovered(mouseX, mouseY) then
+  elseif isHovered then
     drawColor = self.hoverColor or Constants.COLOR_BUTTON_HOVER
   end
 
-  love.graphics.setColor(drawColor)
-  love.graphics.rectangle("fill", self.x, self.y, self.w, self.h, 8, 8)
-
-  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
-  love.graphics.rectangle("line", self.x, self.y, self.w, self.h, 8, 8)
+  UIDraw.drawButton(self, self.label, nil, self.isEnabled, isHovered, self.isPressed, drawColor, Constants.COLOR_PANEL_BORDER, nil)
 
   love.graphics.setColor(Constants.COLOR_TEXT)
   love.graphics.setFont(font)

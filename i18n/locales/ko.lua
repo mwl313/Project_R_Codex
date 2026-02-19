@@ -48,7 +48,8 @@ local LocaleKo = {
       response_parse_failed = "응답 파싱 실패",
       request_failed = "요청 실패: {reason}",
       ws_message_parse_failed = "WS 메시지 파싱 실패",
-      rules_version_mismatch = "룰 버전 불일치: 클라이언트 {clientVersion} / 서버 {serverVersion}"
+      rules_version_mismatch = "룰 버전 불일치: 클라이언트 {clientVersion} / 서버 {serverVersion}",
+      ui_skin_toggle = "UI skin: {state}"
     },
     settings = {
       load_failed_default = "settings.ini 로드 실패, 기본값 사용: {error}",

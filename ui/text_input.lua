@@ -25,6 +25,7 @@
 local Constants = require("constants")
 local Utf8Utils = require("utils.utf8_utils")
 local FontManager = require("assets.font_manager")
+local UIDraw = require("ui.ui_draw")
 
 local TextInput = {}
 TextInput.__index = TextInput
@@ -180,11 +181,14 @@ function TextInput:mousepressed(mouseX, mouseY, button)
 end
 
 function TextInput:draw()
-  love.graphics.setColor(Constants.COLOR_INPUT_BG)
-  love.graphics.rectangle("fill", self.x, self.y, self.w, self.h, 6, 6)
-
-  love.graphics.setColor(self.isFocused and Constants.COLOR_PANEL_BORDER or Constants.COLOR_TEXT_SUB)
-  love.graphics.rectangle("line", self.x, self.y, self.w, self.h, 6, 6)
+  UIDraw.drawTextBox(
+    self,
+    self.isFocused,
+    Constants.COLOR_INPUT_BG,
+    Constants.COLOR_PANEL_BORDER,
+    Constants.COLOR_TEXT_SUB,
+    nil
+  )
 
   local viewText = self.text
   if self.compositionText ~= "" then

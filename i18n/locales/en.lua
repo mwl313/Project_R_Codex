@@ -48,7 +48,8 @@ local LocaleEn = {
       response_parse_failed = "Failed to parse response.",
       request_failed = "Request failed: {reason}",
       ws_message_parse_failed = "Failed to parse WS message.",
-      rules_version_mismatch = "Rules version mismatch: client {clientVersion} / server {serverVersion}"
+      rules_version_mismatch = "Rules version mismatch: client {clientVersion} / server {serverVersion}",
+      ui_skin_toggle = "UI skin: {state}"
     },
     settings = {
       load_failed_default = "Failed to load settings.ini, using defaults: {error}",

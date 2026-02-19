@@ -21,9 +21,12 @@
 ]]
 
 local Constants = require("constants")
+local Config = require("config")
 local Json = require("utils.json")
 local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
+local UISkin = require("ui.ui_skin")
+local UIDraw = require("ui.ui_draw")
 local SceneManager = require("managers.scene_manager")
 local SettingsManager = require("managers.settings_manager")
 local SoundManager = require("managers.sound_manager")
@@ -140,12 +143,15 @@ function App.new(renderScale)
     _worldMouseX = 0,
     _worldMouseY = 0,
     _pendingBootWarningText = nil,
-    _lastRulesVersionWarningKey = nil
+    _lastRulesVersionWarningKey = nil,
+    _uiSkin = nil
   }
   setmetatable(instance, App)
 
   instance:loadPersistentSettings()
   instance._fontWarningText = FontManager.getWarningMessage()
+  instance._uiSkin = UISkin.load()
+  UIDraw.setSkin(instance._uiSkin)
   instance._sceneManager = SceneManager.new(createSceneFactoryTable(), instance)
   instance._sceneManager:setScene("lobby")
   if instance._pendingBootWarningText then
@@ -540,6 +546,13 @@ function App:mousereleased(screenX, screenY, button)
 end
 
 function App:keypressed(key)
+  if key == "f6" then
+    Config.UI_USE_NINESLICE = not Config.UI_USE_NINESLICE
+    self:emitUiStatus(t("app.ui.ui_skin_toggle", {
+      state = Config.UI_USE_NINESLICE and t("common.on") or t("common.off")
+    }), Constants.COLOR_TEXT_SUB)
+    return
+  end
   self._sceneManager:dispatch("keypressed", key)
 end
 

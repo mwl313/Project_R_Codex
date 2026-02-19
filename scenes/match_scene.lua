@@ -17,6 +17,7 @@ local Constants = require("constants")
 local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
+local UIDraw = require("ui.ui_draw")
 local EffectManager = require("effects.effect_manager")
 local Abilities = require("abilities")
 local GameMechanics = require("game_mechanics")
@@ -1347,10 +1348,7 @@ function MatchScene:drawPlayingCardPanel(mouseX, mouseY)
   end
 
   local rect = self:getPlayingCardPanelRect()
-  love.graphics.setColor(Constants.COLOR_PANEL)
-  love.graphics.rectangle("fill", rect.x, rect.y, rect.w, rect.h, 8, 8)
-  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
-  love.graphics.rectangle("line", rect.x, rect.y, rect.w, rect.h, 8, 8)
+  UIDraw.drawPanel(rect, Constants.COLOR_PANEL, Constants.COLOR_PANEL_BORDER, nil)
 
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT)
@@ -1414,10 +1412,12 @@ function MatchScene:drawCardSelectPanel(mouseX, mouseY)
   love.graphics.setColor(Constants.COLOR_OVERLAY_DIM)
   love.graphics.rectangle("fill", self._boardX, self._boardY, Constants.BOARD_W, Constants.BOARD_H, 8, 8)
 
-  love.graphics.setColor(Constants.COLOR_PANEL)
-  love.graphics.rectangle("fill", panelX, panelY, panelW, panelH, 10, 10)
-  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
-  love.graphics.rectangle("line", panelX, panelY, panelW, panelH, 10, 10)
+  UIDraw.drawPanel({
+    x = panelX,
+    y = panelY,
+    w = panelW,
+    h = panelH
+  }, Constants.COLOR_PANEL, Constants.COLOR_PANEL_BORDER, nil)
 
   love.graphics.setFont(FontManager.getFont("ui"))
   love.graphics.setColor(Constants.COLOR_TEXT)
@@ -1492,10 +1492,7 @@ function MatchScene:drawResultPanel(mouseX, mouseY)
   love.graphics.setColor(Constants.COLOR_OVERLAY_DIM)
   love.graphics.rectangle("fill", self._boardX, self._boardY, Constants.BOARD_W, Constants.BOARD_H, 8, 8)
 
-  love.graphics.setColor(Constants.COLOR_PANEL)
-  love.graphics.rectangle("fill", rect.x, rect.y, rect.w, rect.h, 10, 10)
-  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
-  love.graphics.rectangle("line", rect.x, rect.y, rect.w, rect.h, 10, 10)
+  UIDraw.drawPanel(rect, Constants.COLOR_PANEL, Constants.COLOR_PANEL_BORDER, nil)
 
   love.graphics.setFont(FontManager.getFont("title"))
   love.graphics.setColor(Constants.COLOR_TEXT)

@@ -20,6 +20,7 @@ local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
 local Dropdown = require("ui.dropdown")
 local TextInput = require("ui.text_input")
+local UIDraw = require("ui.ui_draw")
 
 local LobbyScene = {}
 LobbyScene.__index = LobbyScene
@@ -395,10 +396,12 @@ function LobbyScene:drawOverlay(mouseX, mouseY)
   love.graphics.setColor(Constants.COLOR_OVERLAY_DIM)
   love.graphics.rectangle("fill", 0, 0, Constants.BASE_WORLD_W, Constants.BASE_WORLD_H)
 
-  love.graphics.setColor(Constants.COLOR_PANEL)
-  love.graphics.rectangle("fill", self._overlay.panelX, self._overlay.panelY, self._overlay.panelW, self._overlay.panelH, 10, 10)
-  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
-  love.graphics.rectangle("line", self._overlay.panelX, self._overlay.panelY, self._overlay.panelW, self._overlay.panelH, 10, 10)
+  UIDraw.drawPanel({
+    x = self._overlay.panelX,
+    y = self._overlay.panelY,
+    w = self._overlay.panelW,
+    h = self._overlay.panelH
+  }, Constants.COLOR_PANEL, Constants.COLOR_PANEL_BORDER, nil)
 
   if self._overlay.kind == "nickname" then
     love.graphics.setFont(FontManager.getFont("title"))
