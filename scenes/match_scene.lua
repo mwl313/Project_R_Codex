@@ -24,6 +24,7 @@ local EffectManager = require("effects.effect_manager")
 local Abilities = require("abilities")
 local GameMechanics = require("game_mechanics")
 local TimeUtils = require("utils.time_utils")
+local InputCaptureGuard = require("utils.input_capture_guard")
 
 local MatchScene = {}
 MatchScene.__index = MatchScene
@@ -170,6 +171,65 @@ local function getCardLabel(cardId)
   return Abilities.getCardLabel(cardId)
 end
 
+local function clamp(value, minValue, maxValue)
+  if value < minValue then
+    return minValue
+  end
+  if value > maxValue then
+    return maxValue
+  end
+  return value
+end
+
+local function intersectSegmentWithWorldRect(fromX, fromY, toX, toY)
+  local minX = 0
+  local minY = 0
+  local maxX = Constants.BASE_WORLD_W
+  local maxY = Constants.BASE_WORLD_H
+
+  if toX >= minX and toX <= maxX and toY >= minY and toY <= maxY then
+    return toX, toY
+  end
+
+  local dx = toX - fromX
+  local dy = toY - fromY
+  local bestT = nil
+  local bestX = nil
+  local bestY = nil
+
+  local function tryHit(t, x, y)
+    if t < 0 or t > 1 then
+      return
+    end
+    if x < minX or x > maxX or y < minY or y > maxY then
+      return
+    end
+    if bestT == nil or t < bestT then
+      bestT = t
+      bestX = x
+      bestY = y
+    end
+  end
+
+  if dx ~= 0 then
+    local tLeft = (minX - fromX) / dx
+    tryHit(tLeft, minX, fromY + dy * tLeft)
+    local tRight = (maxX - fromX) / dx
+    tryHit(tRight, maxX, fromY + dy * tRight)
+  end
+  if dy ~= 0 then
+    local tTop = (minY - fromY) / dy
+    tryHit(tTop, fromX + dx * tTop, minY)
+    local tBottom = (maxY - fromY) / dy
+    tryHit(tBottom, fromX + dx * tBottom, maxY)
+  end
+
+  if bestX and bestY then
+    return bestX, bestY
+  end
+  return clamp(toX, minX, maxX), clamp(toY, minY, maxY)
+end
+
 function MatchScene.new(app)
   local boardX = (Constants.BASE_WORLD_W - Constants.BOARD_W) * 0.5
   local boardY = (Constants.BASE_WORLD_H - Constants.BOARD_H) * 0.5
@@ -222,7 +282,14 @@ function MatchScene.new(app)
     _pendingCardTargetId = nil,
     _isSurrenderPending = false,
     _isAimDragging = false,
+    _isAimRelativeMode = false,
     _aimStoneId = nil,
+    _aimStartWorldX = nil,
+    _aimStartWorldY = nil,
+    _aimAccumWorldDX = 0,
+    _aimAccumWorldDY = 0,
+    _aimLastMouseWorldX = nil,
+    _aimLastMouseWorldY = nil,
     _lastAutoSnapshotTurnIndex = nil,
     _stoneVelocityMap = {},
     _simAccumulatorSec = 0,
@@ -343,7 +410,14 @@ function MatchScene:enter(params)
   self._pendingCardTargetId = nil
   self._isSurrenderPending = false
   self._isAimDragging = false
+  self._isAimRelativeMode = false
   self._aimStoneId = nil
+  self._aimStartWorldX = nil
+  self._aimStartWorldY = nil
+  self._aimAccumWorldDX = 0
+  self._aimAccumWorldDY = 0
+  self._aimLastMouseWorldX = nil
+  self._aimLastMouseWorldY = nil
   self._lastAutoSnapshotTurnIndex = nil
   self._stoneVelocityMap = {}
   self._simAccumulatorSec = 0
@@ -846,8 +920,7 @@ function MatchScene:requestTurnCardUse(cardId)
 
   if cardId == "rockfall" or cardId == "reinforcement" then
     self._pendingCardTargetId = cardId
-    self._isAimDragging = false
-    self._aimStoneId = nil
+    self:cancelAimDrag(true)
     self:setStatus(Abilities.getPendingTargetStartStatus(cardId), Constants.COLOR_TEXT_SUB)
     return
   end
@@ -930,8 +1003,7 @@ function MatchScene:requestSurrender()
     return
   end
   self._pendingCardTargetId = nil
-  self._isAimDragging = false
-  self._aimStoneId = nil
+  self:cancelAimDrag(true)
   self._app:sendWsEnvelope("client.match.surrender", {})
   self._isSurrenderPending = true
   self:setStatus(t("match.status.surrender_submit"), Constants.COLOR_DANGER)
@@ -972,40 +1044,144 @@ function MatchScene:beginAimDrag(worldX, worldY)
 
   self._isAimDragging = true
   self._aimStoneId = stone.id
+  self._aimStartWorldX = worldX
+  self._aimStartWorldY = worldY
+  self._aimAccumWorldDX = 0
+  self._aimAccumWorldDY = 0
+  self._aimLastMouseWorldX = worldX
+  self._aimLastMouseWorldY = worldY
+  self._isAimRelativeMode = InputCaptureGuard.captureRelativeMouse()
+  if self._isAimRelativeMode then
+    self._aimLastMouseWorldX = nil
+    self._aimLastMouseWorldY = nil
+  end
   self:setStatus(t("match.status.aiming"), Constants.COLOR_TEXT_SUB)
 end
 
-function MatchScene:cancelAimDrag()
+function MatchScene:getAimCursorWorldPosition()
+  local startWorldX = self._aimStartWorldX or 0
+  local startWorldY = self._aimStartWorldY or 0
+  return startWorldX + self._aimAccumWorldDX, startWorldY + self._aimAccumWorldDY
+end
+
+function MatchScene:resolveAimRestoreScreenPosition(stoneWorldX, stoneWorldY)
+  local aimWorldX, aimWorldY = self:getAimCursorWorldPosition()
+  local restoreWorldX, restoreWorldY = intersectSegmentWithWorldRect(stoneWorldX, stoneWorldY, aimWorldX, aimWorldY)
+  return self._app:worldToScreen(restoreWorldX, restoreWorldY)
+end
+
+function MatchScene:cancelAimDrag(silent)
+  local restoreScreenX = nil
+  local restoreScreenY = nil
+  if self._isAimDragging then
+    self:updateAimDragInput()
+    local stone = self:getAliveStoneById(self._aimStoneId)
+    if stone then
+      local localX, localY = self:canonicalToLocal(stone.x, stone.y)
+      local stoneWorldX = self._boardX + localX
+      local stoneWorldY = self._boardY + localY
+      restoreScreenX, restoreScreenY = self:resolveAimRestoreScreenPosition(stoneWorldX, stoneWorldY)
+    end
+  end
+
+  if (not self._isAimDragging) and (not self._aimStoneId) then
+    InputCaptureGuard.release(restoreScreenX, restoreScreenY)
+    self._isAimRelativeMode = false
+    self._aimStartWorldX = nil
+    self._aimStartWorldY = nil
+    self._aimAccumWorldDX = 0
+    self._aimAccumWorldDY = 0
+    self._aimLastMouseWorldX = nil
+    self._aimLastMouseWorldY = nil
+    return
+  end
+  local shouldShowStatus = not silent
+  self._isAimDragging = false
+  self._aimStoneId = nil
+  self._aimStartWorldX = nil
+  self._aimStartWorldY = nil
+  self._aimAccumWorldDX = 0
+  self._aimAccumWorldDY = 0
+  self._aimLastMouseWorldX = nil
+  self._aimLastMouseWorldY = nil
+  self._isAimRelativeMode = false
+  InputCaptureGuard.release(restoreScreenX, restoreScreenY)
+  if shouldShowStatus then
+    self:setStatus(t("match.status.shot_cancelled"), Constants.COLOR_TEXT_SUB)
+  end
+end
+
+function MatchScene:updateAimDragInput()
   if not self._isAimDragging then
     return
   end
-  self._isAimDragging = false
-  self._aimStoneId = nil
-  self:setStatus(t("match.status.shot_cancelled"), Constants.COLOR_TEXT_SUB)
+
+  if self._isAimRelativeMode then
+    local relativeDx, relativeDy, isRelative = InputCaptureGuard.consumeRelativeDelta()
+    if isRelative then
+      local worldDx, worldDy = self._app:screenDeltaToWorldDelta(relativeDx, relativeDy)
+      self._aimAccumWorldDX = self._aimAccumWorldDX + worldDx
+      self._aimAccumWorldDY = self._aimAccumWorldDY + worldDy
+      return
+    end
+    self._isAimRelativeMode = false
+    InputCaptureGuard.release()
+  end
+
+  local mouseWorldX, mouseWorldY = self._app:getMouseWorldPosition()
+  if self._aimLastMouseWorldX ~= nil and self._aimLastMouseWorldY ~= nil then
+    self._aimAccumWorldDX = self._aimAccumWorldDX + (mouseWorldX - self._aimLastMouseWorldX)
+    self._aimAccumWorldDY = self._aimAccumWorldDY + (mouseWorldY - self._aimLastMouseWorldY)
+  end
+  self._aimLastMouseWorldX = mouseWorldX
+  self._aimLastMouseWorldY = mouseWorldY
 end
 
-function MatchScene:commitAimDrag(worldX, worldY)
+function MatchScene:commitAimDrag(_worldX, _worldY)
   if not self._isAimDragging then
     return
   end
   if not self:isShotInputEnabled() then
-    self:cancelAimDrag()
+    self:cancelAimDrag(true)
     return
   end
 
+  self:updateAimDragInput()
+
   local stone = self:getAliveStoneById(self._aimStoneId)
+  local restoreScreenX = nil
+  local restoreScreenY = nil
+  local aimWorldX, aimWorldY = self:getAimCursorWorldPosition()
+  if stone then
+    local localX, localY = self:canonicalToLocal(stone.x, stone.y)
+    local stoneWorldX = self._boardX + localX
+    local stoneWorldY = self._boardY + localY
+    restoreScreenX, restoreScreenY = self:resolveAimRestoreScreenPosition(stoneWorldX, stoneWorldY)
+  end
   self._isAimDragging = false
+  self._isAimRelativeMode = false
   self._aimStoneId = nil
+  self._aimStartWorldX = nil
+  self._aimStartWorldY = nil
+  InputCaptureGuard.release(restoreScreenX, restoreScreenY)
   if not stone then
+    self._aimAccumWorldDX = 0
+    self._aimAccumWorldDY = 0
+    self._aimLastMouseWorldX = nil
+    self._aimLastMouseWorldY = nil
     self:setStatus(t("match.status.shot_stone_missing"), Constants.COLOR_DANGER)
     return
   end
 
   local stoneLocalX, stoneLocalY = self:canonicalToLocal(stone.x, stone.y)
-  local mouseLocalX, mouseLocalY = self:toBoardLocalNoClamp(worldX, worldY)
-
-  local dirLocalX = stoneLocalX - mouseLocalX
-  local dirLocalY = stoneLocalY - mouseLocalY
+  local stoneWorldX = self._boardX + stoneLocalX
+  local stoneWorldY = self._boardY + stoneLocalY
+  local dirLocalX = stoneWorldX - aimWorldX
+  local dirLocalY = stoneWorldY - aimWorldY
+  self._aimAccumWorldDX = 0
+  self._aimAccumWorldDY = 0
+  self._aimLastMouseWorldX = nil
+  self._aimLastMouseWorldY = nil
   local dragLength = math.sqrt(dirLocalX * dirLocalX + dirLocalY * dirLocalY)
   if dragLength < 1 then
     self:setStatus(t("match.status.shot_drag_too_short"), Constants.COLOR_DANGER)
@@ -1230,8 +1406,7 @@ function MatchScene:applyRoomState(payload)
       self._isPlayingAwaitingSnapshot = playing.awaitingSnapshot
       if playing.awaitingSnapshot then
         self._isTurnShotPending = false
-        self._isAimDragging = false
-        self._aimStoneId = nil
+        self:cancelAimDrag(true)
       end
     end
     if canOverwriteStoneList and type(playing.stones) == "table" then
@@ -1253,6 +1428,7 @@ function MatchScene:applyRoomState(payload)
     self._lockedStoneIdSet = {}
     self._pendingCardTargetId = nil
     self._isSurrenderPending = false
+    self:cancelAimDrag(true)
     if self._effectManager then
       self._effectManager:clear()
     end
@@ -1303,6 +1479,8 @@ function MatchScene:applyRoomState(payload)
 end
 
 function MatchScene:update(dt)
+  self:updateAimDragInput()
+
   if self:isCardSelectPhase() and (not self._cardAnimator) then
     self:ensureCardAnimator()
   end
@@ -1499,14 +1677,15 @@ function MatchScene:drawAimGuide(mouseX, mouseY)
   local localX, localY = self:canonicalToLocal(stone.x, stone.y)
   local stoneWorldX = self._boardX + localX
   local stoneWorldY = self._boardY + localY
-  local dirX = stoneWorldX - mouseX
-  local dirY = stoneWorldY - mouseY
+  local aimWorldX, aimWorldY = self:getAimCursorWorldPosition()
+  local dirX = stoneWorldX - aimWorldX
+  local dirY = stoneWorldY - aimWorldY
   local distance = math.sqrt(dirX * dirX + dirY * dirY)
   local power = math.min(Constants.MAX_SHOT_POWER, distance * Constants.POWER_PER_PIXEL)
 
   love.graphics.setColor(0.95, 0.92, 0.35, 0.95)
   love.graphics.setLineWidth(2)
-  love.graphics.line(stoneWorldX, stoneWorldY, mouseX, mouseY)
+  love.graphics.line(stoneWorldX, stoneWorldY, aimWorldX, aimWorldY)
   love.graphics.setLineWidth(1)
 
   love.graphics.setFont(FontManager.getFont("small"))
@@ -1514,6 +1693,37 @@ function MatchScene:drawAimGuide(mouseX, mouseY)
   love.graphics.printf(t("match.power_label", {
     power = string.format("%.0f", power)
   }), stoneWorldX - 50, stoneWorldY - 30, 100, "center")
+end
+
+function MatchScene:drawSelectedStoneHighlight()
+  if not self._isAimDragging then
+    return
+  end
+
+  local stone = self:getAliveStoneById(self._aimStoneId)
+  if not stone then
+    return
+  end
+
+  local localX, localY = self:canonicalToLocal(stone.x, stone.y)
+  local stoneWorldX = self._boardX + localX
+  local stoneWorldY = self._boardY + localY
+  local timeSec = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+  local pulse = math.sin(timeSec * 7.0) * 2.2
+  local baseRadius = Constants.STONE_RADIUS + 4
+
+  love.graphics.setColor(0.96, 0.88, 0.35, 0.12)
+  love.graphics.circle("fill", stoneWorldX, stoneWorldY, baseRadius + 5 + pulse)
+
+  love.graphics.setColor(0.98, 0.95, 0.65, 0.90)
+  love.graphics.setLineWidth(2.6)
+  love.graphics.circle("line", stoneWorldX, stoneWorldY, baseRadius + pulse)
+
+  love.graphics.setColor(0.98, 0.95, 0.65, 0.45)
+  love.graphics.setLineWidth(1.6)
+  love.graphics.circle("line", stoneWorldX, stoneWorldY, baseRadius + 6 + pulse * 0.7)
+
+  love.graphics.setLineWidth(1)
 end
 
 function MatchScene:drawPendingCardPreview(mouseX, mouseY)
@@ -1697,6 +1907,7 @@ function MatchScene:draw()
   end
 
   self:drawPendingCardPreview(mouseX, mouseY)
+  self:drawSelectedStoneHighlight()
   self:drawAimGuide(mouseX, mouseY)
   if self._effectManager then
     self._effectManager:draw(self._boardX, self._boardY, function(canonicalX, canonicalY)
@@ -1969,8 +2180,7 @@ function MatchScene:onWsEnvelope(envelope)
     self._isCardUsePending = false
     self._pendingCardTargetId = nil
     self._isSurrenderPending = false
-    self._isAimDragging = false
-    self._aimStoneId = nil
+    self:cancelAimDrag(true)
     if self._effectManager then
       self._effectManager:clear()
     end
@@ -2032,8 +2242,7 @@ function MatchScene:onWsEnvelope(envelope)
     self._isTurnShotPending = false
     self._isCardUsePending = false
     self._pendingCardTargetId = nil
-    self._isAimDragging = false
-    self._aimStoneId = nil
+    self:cancelAimDrag(true)
     if self._playingShotUsed >= self._playingShotBudget then
       self:setStatus(t("match.status.shot_accepted_wait_snapshot"), Constants.COLOR_TEXT_SUB)
     else
@@ -2051,8 +2260,7 @@ function MatchScene:onWsEnvelope(envelope)
     self._turnEndsAtMs = nil
     self._isTurnShotPending = false
     self._isCardUsePending = false
-    self._isAimDragging = false
-    self._aimStoneId = nil
+    self:cancelAimDrag(true)
     self:setStatus(t("match.status.snapshot_requested"), Constants.COLOR_TEXT_SUB)
     self:sendHostSnapshotIfNeeded(payload.turnIndex, payload.reason)
     return
@@ -2116,8 +2324,7 @@ function MatchScene:onWsEnvelope(envelope)
     if payload.code == "invalid_shot_power" or payload.code == "invalid_shot_dir" or payload.code == "invalid_shot_stone" or payload.code == "not_your_turn" or payload.code == "timeout" or payload.code == "turn_mismatch" or payload.code == "already_shot" or payload.code == "shot_budget_exceeded" or payload.code == "stone_locked_this_turn" then
       self._isTurnShotPending = false
       self._isPlayingShotCommitted = false
-      self._isAimDragging = false
-      self._aimStoneId = nil
+      self:cancelAimDrag(true)
       self._shouldSendSnapshotAfterSim = false
       self:stopShotSimulation()
       self:resetStoneVelocities()
@@ -2135,6 +2342,14 @@ function MatchScene:onWsEnvelope(envelope)
       statusColor = Constants.COLOR_DANGER
     }, Config.TRANSITION_BACK)
   end
+end
+
+function MatchScene:onSceneWillChange(_event)
+  self:cancelAimDrag(true)
+end
+
+function MatchScene:exit()
+  self:cancelAimDrag(true)
 end
 
 function MatchScene:onAppEvent(event)
@@ -2159,6 +2374,11 @@ function MatchScene:onAppEvent(event)
     self:setStatus(t("match.status.ws_error", {
       message = tostring(event.message)
     }), Constants.COLOR_DANGER)
+    return
+  end
+
+  if event.type == "focus_lost" then
+    self:cancelAimDrag(true)
   end
 end
 

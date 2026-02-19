@@ -12,7 +12,9 @@
 - App:draw()
 - App:mousepressed(x, y, button)
 - App:mousereleased(x, y, button)
+- App:mousemoved(x, y, dx, dy)
 - App:keypressed(key)
+- App:worldToScreen(worldX, worldY)
 - App:textinput(text)
 - App:textedited(text, start, length)
 
@@ -32,6 +34,7 @@ local SettingsManager = require("managers.settings_manager")
 local SoundManager = require("managers.sound_manager")
 local HttpClient = require("net.http_client")
 local WsClient = require("net.ws_client")
+local InputCaptureGuard = require("utils.input_capture_guard")
 
 local App = {}
 App.__index = App
@@ -274,6 +277,14 @@ function App:updateMouseFromScreen(screenX, screenY)
   self._worldMouseX, self._worldMouseY = self._renderScale:toWorld(screenX, screenY)
 end
 
+function App:screenDeltaToWorldDelta(screenDx, screenDy)
+  return self._renderScale:toWorldDelta(screenDx, screenDy)
+end
+
+function App:worldToScreen(worldX, worldY)
+  return self._renderScale:toScreen(worldX, worldY)
+end
+
 function App:goLobby(params, transitionDirection, transitionOpts)
   self:goScene("lobby", params, transitionDirection, transitionOpts)
 end
@@ -319,6 +330,11 @@ function App:goMatch(params, transitionDirection, transitionOpts)
 end
 
 function App:goScene(sceneName, params, transitionDirection, transitionOpts)
+  self._sceneManager:dispatch("onSceneWillChange", {
+    toScene = sceneName,
+    params = params
+  })
+  InputCaptureGuard.release()
   self._sceneManager:change(sceneName, params, transitionDirection, transitionOpts)
 end
 
@@ -589,6 +605,14 @@ function App:mousereleased(screenX, screenY, button)
   self._sceneManager:dispatch("mousereleased", worldX, worldY, button)
 end
 
+function App:mousemoved(screenX, screenY, screenDx, screenDy)
+  self:updateMouseFromScreen(screenX, screenY)
+  InputCaptureGuard.onMouseMoved(screenDx, screenDy)
+  if self:isTransitioningScene() then
+    return true
+  end
+end
+
 function App:keypressed(key)
   if self:isTransitioningScene() then
     return true
@@ -634,7 +658,18 @@ function App:resize(screenW, screenH)
   self._renderScale:update(screenW, screenH)
 end
 
+function App:focus(isFocused)
+  if isFocused then
+    return
+  end
+  InputCaptureGuard.release()
+  self._sceneManager:dispatch("onAppEvent", {
+    type = "focus_lost"
+  })
+end
+
 function App:shutdown()
+  InputCaptureGuard.release()
   if self._soundManager then
     self._soundManager:stopAll()
   end

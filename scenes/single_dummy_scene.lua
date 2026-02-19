@@ -21,12 +21,72 @@ local Button = require("ui.button")
 local EffectManager = require("effects.effect_manager")
 local Abilities = require("abilities")
 local GameMechanics = require("game_mechanics")
+local InputCaptureGuard = require("utils.input_capture_guard")
 
 local SingleDummyScene = {}
 SingleDummyScene.__index = SingleDummyScene
 
 local function t(key, vars)
   return I18n.t(key, vars)
+end
+
+local function clamp(value, minValue, maxValue)
+  if value < minValue then
+    return minValue
+  end
+  if value > maxValue then
+    return maxValue
+  end
+  return value
+end
+
+local function intersectSegmentWithWorldRect(fromX, fromY, toX, toY)
+  local minX = 0
+  local minY = 0
+  local maxX = Constants.BASE_WORLD_W
+  local maxY = Constants.BASE_WORLD_H
+
+  if toX >= minX and toX <= maxX and toY >= minY and toY <= maxY then
+    return toX, toY
+  end
+
+  local dx = toX - fromX
+  local dy = toY - fromY
+  local bestT = nil
+  local bestX = nil
+  local bestY = nil
+
+  local function tryHit(t, x, y)
+    if t < 0 or t > 1 then
+      return
+    end
+    if x < minX or x > maxX or y < minY or y > maxY then
+      return
+    end
+    if bestT == nil or t < bestT then
+      bestT = t
+      bestX = x
+      bestY = y
+    end
+  end
+
+  if dx ~= 0 then
+    local tLeft = (minX - fromX) / dx
+    tryHit(tLeft, minX, fromY + dy * tLeft)
+    local tRight = (maxX - fromX) / dx
+    tryHit(tRight, maxX, fromY + dy * tRight)
+  end
+  if dy ~= 0 then
+    local tTop = (minY - fromY) / dy
+    tryHit(tTop, fromX + dx * tTop, minY)
+    local tBottom = (maxY - fromY) / dy
+    tryHit(tBottom, fromX + dx * tBottom, maxY)
+  end
+
+  if bestX and bestY then
+    return bestX, bestY
+  end
+  return clamp(toX, minX, maxX), clamp(toY, minY, maxY)
 end
 
 local function createDummyStoneList()
@@ -85,7 +145,14 @@ function SingleDummyScene.new(app)
     _isShotSimulating = false,
     _shouldSendSnapshotAfterSim = false,
     _isAimDragging = false,
+    _isAimRelativeMode = false,
     _aimStoneId = nil,
+    _aimStartWorldX = nil,
+    _aimStartWorldY = nil,
+    _aimAccumWorldDX = 0,
+    _aimAccumWorldDY = 0,
+    _aimLastMouseWorldX = nil,
+    _aimLastMouseWorldY = nil,
     _playingTurnIndex = 1,
     _invincibleTurnByPlayer = { [1] = nil, [2] = nil },
     _shockwaveOwnerPlayerIndex = nil,
@@ -125,8 +192,9 @@ function SingleDummyScene:resetDummyState()
   self._simElapsedSec = 0
   self._isShotSimulating = false
   self._shouldSendSnapshotAfterSim = false
-  self._isAimDragging = false
-  self._aimStoneId = nil
+  self:cancelAimDrag(true)
+  self._aimStartWorldX = nil
+  self._aimStartWorldY = nil
   self._shockwaveSourceStoneId = nil
   self._shockwaveOwnerPlayerIndex = nil
   self._invincibleTurnByPlayer = { [1] = nil, [2] = nil }
@@ -221,28 +289,132 @@ function SingleDummyScene:beginAimDrag(worldX, worldY)
   end
   self._isAimDragging = true
   self._aimStoneId = stone.id
+  self._aimStartWorldX = worldX
+  self._aimStartWorldY = worldY
+  self._aimAccumWorldDX = 0
+  self._aimAccumWorldDY = 0
+  self._aimLastMouseWorldX = worldX
+  self._aimLastMouseWorldY = worldY
+  self._isAimRelativeMode = InputCaptureGuard.captureRelativeMouse()
+  if self._isAimRelativeMode then
+    self._aimLastMouseWorldX = nil
+    self._aimLastMouseWorldY = nil
+  end
 end
 
-function SingleDummyScene:cancelAimDrag()
+function SingleDummyScene:getAimCursorWorldPosition()
+  local startWorldX = self._aimStartWorldX or 0
+  local startWorldY = self._aimStartWorldY or 0
+  return startWorldX + self._aimAccumWorldDX, startWorldY + self._aimAccumWorldDY
+end
+
+function SingleDummyScene:resolveAimRestoreScreenPosition(stoneWorldX, stoneWorldY)
+  local aimWorldX, aimWorldY = self:getAimCursorWorldPosition()
+  local restoreWorldX, restoreWorldY = intersectSegmentWithWorldRect(stoneWorldX, stoneWorldY, aimWorldX, aimWorldY)
+  return self._app:worldToScreen(restoreWorldX, restoreWorldY)
+end
+
+function SingleDummyScene:cancelAimDrag(_silent)
+  local restoreScreenX = nil
+  local restoreScreenY = nil
+  if self._isAimDragging then
+    self:updateAimDragInput()
+    local stone = self:getPlayingStoneById(self._aimStoneId)
+    if stone and stone.alive ~= false then
+      local stoneWorldX = self._boardX + stone.x
+      local stoneWorldY = self._boardY + stone.y
+      restoreScreenX, restoreScreenY = self:resolveAimRestoreScreenPosition(stoneWorldX, stoneWorldY)
+    end
+  end
+
+  if (not self._isAimDragging) and (not self._aimStoneId) then
+    InputCaptureGuard.release(restoreScreenX, restoreScreenY)
+    self._isAimRelativeMode = false
+    self._aimStartWorldX = nil
+    self._aimStartWorldY = nil
+    self._aimAccumWorldDX = 0
+    self._aimAccumWorldDY = 0
+    self._aimLastMouseWorldX = nil
+    self._aimLastMouseWorldY = nil
+    return
+  end
+
   self._isAimDragging = false
+  self._isAimRelativeMode = false
   self._aimStoneId = nil
+  self._aimStartWorldX = nil
+  self._aimStartWorldY = nil
+  self._aimAccumWorldDX = 0
+  self._aimAccumWorldDY = 0
+  self._aimLastMouseWorldX = nil
+  self._aimLastMouseWorldY = nil
+  InputCaptureGuard.release(restoreScreenX, restoreScreenY)
 end
 
-function SingleDummyScene:commitAimDrag(worldX, worldY)
+function SingleDummyScene:updateAimDragInput()
   if not self._isAimDragging then
     return
   end
 
-  local stone = self:getPlayingStoneById(self._aimStoneId)
-  self._isAimDragging = false
-  self._aimStoneId = nil
-  if not stone or stone.alive == false then
+  if self._isAimRelativeMode then
+    local relativeDx, relativeDy, isRelative = InputCaptureGuard.consumeRelativeDelta()
+    if isRelative then
+      local worldDx, worldDy = self._app:screenDeltaToWorldDelta(relativeDx, relativeDy)
+      self._aimAccumWorldDX = self._aimAccumWorldDX + worldDx
+      self._aimAccumWorldDY = self._aimAccumWorldDY + worldDy
+      return
+    end
+    self._isAimRelativeMode = false
+    InputCaptureGuard.release()
+  end
+
+  local mouseWorldX, mouseWorldY = self._app:getMouseWorldPosition()
+  if self._aimLastMouseWorldX ~= nil and self._aimLastMouseWorldY ~= nil then
+    self._aimAccumWorldDX = self._aimAccumWorldDX + (mouseWorldX - self._aimLastMouseWorldX)
+    self._aimAccumWorldDY = self._aimAccumWorldDY + (mouseWorldY - self._aimLastMouseWorldY)
+  end
+  self._aimLastMouseWorldX = mouseWorldX
+  self._aimLastMouseWorldY = mouseWorldY
+end
+
+function SingleDummyScene:commitAimDrag(_worldX, _worldY)
+  if not self._isAimDragging then
     return
   end
 
-  local mouseLocalX, mouseLocalY = self:toBoardLocalNoClamp(worldX, worldY)
-  local dirX = stone.x - mouseLocalX
-  local dirY = stone.y - mouseLocalY
+  self:updateAimDragInput()
+
+  local stone = self:getPlayingStoneById(self._aimStoneId)
+  local aimWorldX, aimWorldY = self:getAimCursorWorldPosition()
+  local restoreScreenX = nil
+  local restoreScreenY = nil
+  if stone and stone.alive ~= false then
+    local stoneWorldX = self._boardX + stone.x
+    local stoneWorldY = self._boardY + stone.y
+    restoreScreenX, restoreScreenY = self:resolveAimRestoreScreenPosition(stoneWorldX, stoneWorldY)
+  end
+  self._isAimDragging = false
+  self._isAimRelativeMode = false
+  self._aimStoneId = nil
+  self._aimStartWorldX = nil
+  self._aimStartWorldY = nil
+  InputCaptureGuard.release(restoreScreenX, restoreScreenY)
+  if not stone or stone.alive == false then
+    self._aimAccumWorldDX = 0
+    self._aimAccumWorldDY = 0
+    self._aimLastMouseWorldX = nil
+    self._aimLastMouseWorldY = nil
+    return
+  end
+
+  local stoneWorldX = self._boardX + stone.x
+  local stoneWorldY = self._boardY + stone.y
+  local dirX = stoneWorldX - aimWorldX
+  local dirY = stoneWorldY - aimWorldY
+  self._aimAccumWorldDX = 0
+  self._aimAccumWorldDY = 0
+  self._aimLastMouseWorldX = nil
+  self._aimLastMouseWorldY = nil
   local dragLength = math.sqrt(dirX * dirX + dirY * dirY)
   if dragLength < 1 then
     self:setStatus(t("single_dummy.status.drag_too_short"), Constants.COLOR_DANGER)
@@ -265,6 +437,7 @@ function SingleDummyScene:commitAimDrag(worldX, worldY)
 end
 
 function SingleDummyScene:update(dt)
+  self:updateAimDragInput()
   GameMechanics.updateShotSimulation(self, dt)
   if self._effectManager then
     self._effectManager:update(dt)
@@ -319,20 +492,51 @@ function SingleDummyScene:drawAimGuide(mouseX, mouseY)
 
   local stoneWorldX = self._boardX + stone.x
   local stoneWorldY = self._boardY + stone.y
-  local dirX = stoneWorldX - mouseX
-  local dirY = stoneWorldY - mouseY
+  local aimWorldX, aimWorldY = self:getAimCursorWorldPosition()
+  local dirX = stoneWorldX - aimWorldX
+  local dirY = stoneWorldY - aimWorldY
   local distance = math.sqrt(dirX * dirX + dirY * dirY)
   local power = math.min(Constants.MAX_SHOT_POWER, distance * Constants.POWER_PER_PIXEL)
 
   love.graphics.setColor(0.95, 0.92, 0.35, 0.95)
   love.graphics.setLineWidth(2)
-  love.graphics.line(stoneWorldX, stoneWorldY, mouseX, mouseY)
+  love.graphics.line(stoneWorldX, stoneWorldY, aimWorldX, aimWorldY)
   love.graphics.setLineWidth(1)
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT)
   love.graphics.printf(t("match.power_label", {
     power = string.format("%.0f", power)
   }), stoneWorldX - 50, stoneWorldY - 30, 100, "center")
+end
+
+function SingleDummyScene:drawSelectedStoneHighlight()
+  if not self._isAimDragging then
+    return
+  end
+
+  local stone = self:getPlayingStoneById(self._aimStoneId)
+  if not stone or stone.alive == false then
+    return
+  end
+
+  local stoneWorldX = self._boardX + stone.x
+  local stoneWorldY = self._boardY + stone.y
+  local timeSec = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+  local pulse = math.sin(timeSec * 7.0) * 2.2
+  local baseRadius = Constants.STONE_RADIUS + 4
+
+  love.graphics.setColor(0.96, 0.88, 0.35, 0.12)
+  love.graphics.circle("fill", stoneWorldX, stoneWorldY, baseRadius + 5 + pulse)
+
+  love.graphics.setColor(0.98, 0.95, 0.65, 0.90)
+  love.graphics.setLineWidth(2.6)
+  love.graphics.circle("line", stoneWorldX, stoneWorldY, baseRadius + pulse)
+
+  love.graphics.setColor(0.98, 0.95, 0.65, 0.45)
+  love.graphics.setLineWidth(1.6)
+  love.graphics.circle("line", stoneWorldX, stoneWorldY, baseRadius + 6 + pulse * 0.7)
+
+  love.graphics.setLineWidth(1)
 end
 
 function SingleDummyScene:draw()
@@ -354,6 +558,7 @@ function SingleDummyScene:draw()
   self:drawBoard()
   self:drawObstacles()
   self:drawStones()
+  self:drawSelectedStoneHighlight()
   self:drawAimGuide(mouseX, mouseY)
 
   if self._effectManager then
@@ -425,7 +630,18 @@ function SingleDummyScene:keypressed(key)
   end
 end
 
-function SingleDummyScene:onAppEvent(_event)
+function SingleDummyScene:onSceneWillChange(_event)
+  self:cancelAimDrag(true)
+end
+
+function SingleDummyScene:exit()
+  self:cancelAimDrag(true)
+end
+
+function SingleDummyScene:onAppEvent(event)
+  if event.type == "focus_lost" then
+    self:cancelAimDrag(true)
+  end
 end
 
 return SingleDummyScene
