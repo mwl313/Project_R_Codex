@@ -11,6 +11,7 @@
 ]]
 
 local Constants = require("constants")
+local Config = require("config")
 local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
@@ -43,7 +44,7 @@ function MultiplayerScene:rebuildLocalizedUi()
   self._lastLanguage = self._app:getLanguage()
 
   self._backButton = BackButton.new(t("common.button.back"), function()
-    self._app:goScene(self._backScene)
+    self._app:goScene(self._backScene, nil, Config.TRANSITION_BACK)
   end)
 
   self._createButton = Button.new({
@@ -64,7 +65,7 @@ function MultiplayerScene:rebuildLocalizedUi()
     onClick = function()
       self._app:goRoomSearch({
         backScene = "multiplayer"
-      })
+      }, Config.TRANSITION_FORWARD)
     end
   })
 end
@@ -121,7 +122,7 @@ end
 
 function MultiplayerScene:keypressed(key)
   if key == "escape" then
-    self._app:goScene(self._backScene)
+    self._app:goScene(self._backScene, nil, Config.TRANSITION_BACK)
   end
 end
 

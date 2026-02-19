@@ -171,11 +171,18 @@ local LocaleKo = {
     online = "online",
     offline = "offline",
     chat_placeholder = "채팅 입력 (Enter 전송)",
+    button = {
+      ready = "준비완료",
+      waiting = "대기중"
+    },
     status = {
       ws_waiting = "WS 연결 대기 중...",
       left_room = "대기방에서 나왔습니다.",
       start_condition_not_met = "게임 시작 조건이 충족되지 않았습니다.",
       start_request_sent = "게임 시작 요청 전송...",
+      ready_request_sent = "준비 완료 요청 전송...",
+      guest_not_ready = "게스트가 준비되지 않았습니다.",
+      already_ready = "이미 준비 완료 상태입니다.",
       no_room_code = "복사할 룸 코드가 없습니다.",
       clipboard_not_available = "클립보드 기능을 사용할 수 없습니다.",
       room_copy_failed = "룸 코드 복사 실패: {error}",
@@ -191,7 +198,8 @@ local LocaleKo = {
     },
     system = {
       player_joined = "[SYSTEM] player {playerIndex} joined",
-      player_left = "[SYSTEM] player {playerIndex} left ({reason})"
+      player_left = "[SYSTEM] player {playerIndex} left ({reason})",
+      guest_ready = "{nickname}님이 준비완료되었습니다."
     },
     chat_line = "[{nickname}] {text}"
   },

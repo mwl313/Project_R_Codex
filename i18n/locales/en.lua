@@ -171,11 +171,18 @@ local LocaleEn = {
     online = "online",
     offline = "offline",
     chat_placeholder = "Type chat (Enter to send)",
+    button = {
+      ready = "Ready",
+      waiting = "Waiting"
+    },
     status = {
       ws_waiting = "Waiting for WS connection...",
       left_room = "Left waiting room.",
       start_condition_not_met = "Match start conditions are not met.",
       start_request_sent = "Match start request sent...",
+      ready_request_sent = "Ready request sent...",
+      guest_not_ready = "Guest is not ready.",
+      already_ready = "Already marked as ready.",
       no_room_code = "No room code to copy.",
       clipboard_not_available = "Clipboard is not available.",
       room_copy_failed = "Failed to copy room code: {error}",
@@ -191,7 +198,8 @@ local LocaleEn = {
     },
     system = {
       player_joined = "[SYSTEM] player {playerIndex} joined",
-      player_left = "[SYSTEM] player {playerIndex} left ({reason})"
+      player_left = "[SYSTEM] player {playerIndex} left ({reason})",
+      guest_ready = "{nickname} is ready."
     },
     chat_line = "[{nickname}] {text}"
   },

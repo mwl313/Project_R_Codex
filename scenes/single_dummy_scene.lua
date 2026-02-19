@@ -14,6 +14,7 @@
 ]]
 
 local Constants = require("constants")
+local Config = require("config")
 local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
@@ -105,7 +106,7 @@ function SingleDummyScene.new(app)
       instance._app:goScene(instance._backScene, {
         statusText = t("single_dummy.status.exited"),
         statusColor = Constants.COLOR_TEXT_SUB
-      })
+      }, Config.TRANSITION_BACK)
     end
   })
   return instance
@@ -396,7 +397,7 @@ function SingleDummyScene:keypressed(key)
     self._app:goScene(self._backScene, {
       statusText = t("single_dummy.status.exited"),
       statusColor = Constants.COLOR_TEXT_SUB
-    })
+    }, Config.TRANSITION_BACK)
     return
   end
   if key == "r" then

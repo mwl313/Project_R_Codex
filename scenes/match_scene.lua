@@ -14,6 +14,7 @@
 ]]
 
 local Constants = require("constants")
+local Config = require("config")
 local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
@@ -990,7 +991,7 @@ function MatchScene:applyRoomState(payload)
       roomState = payload,
       statusText = t("match.status.back_to_waiting_after_result"),
       statusColor = Constants.COLOR_TEXT_SUB
-    })
+    }, Config.TRANSITION_BACK)
     return
   end
 
@@ -1962,7 +1963,7 @@ function MatchScene:onWsEnvelope(envelope)
       backScene = "play",
       statusText = t("match.status.room_closed"),
       statusColor = Constants.COLOR_DANGER
-    })
+    }, Config.TRANSITION_BACK)
   end
 end
 

@@ -8,8 +8,10 @@
 
 외부에서 사용 가능한 함수:
 - SceneManager.new(sceneFactoryTable, app)
-- SceneManager:setScene(sceneName, params)
+- SceneManager:change(sceneName, params, transitionDirection, transitionOpts)
+- SceneManager:setScene(sceneName, params, transitionDirection, transitionOpts)
 - SceneManager:getCurrentScene()
+- SceneManager:isTransitioning()
 - SceneManager:update(dt)
 - SceneManager:draw()
 - SceneManager:dispatch(functionName, ...)
@@ -20,30 +22,92 @@
 
 local SceneManager = {}
 SceneManager.__index = SceneManager
+local TransitionManager = require("managers.transition_manager")
 
 function SceneManager.new(sceneFactoryTable, app)
   local instance = {
     _sceneFactoryTable = sceneFactoryTable or {},
     _app = app,
-    _currentScene = nil
+    _currentScene = nil,
+    _transitionManager = TransitionManager.new(),
+    _pendingScene = nil
   }
   return setmetatable(instance, SceneManager)
 end
 
-function SceneManager:setScene(sceneName, params)
-  if self._currentScene and self._currentScene.exit then
-    self._currentScene:exit()
-  end
-
-  local sceneFactory = self._sceneFactoryTable[sceneName]
+local function createScene(sceneManager, sceneName)
+  local sceneFactory = sceneManager._sceneFactoryTable[sceneName]
   if not sceneFactory then
     error("Unknown scene: " .. tostring(sceneName))
   end
+  return sceneFactory(sceneManager._app)
+end
 
-  self._currentScene = sceneFactory(self._app)
-  if self._currentScene.enter then
-    self._currentScene:enter(params)
+local function exitScene(scene)
+  if scene and scene.exit then
+    scene:exit()
   end
+end
+
+local function enterScene(scene, params)
+  if scene and scene.enter then
+    scene:enter(params)
+  end
+end
+
+function SceneManager:change(sceneName, params, transitionDirection, transitionOpts)
+  if self._transitionManager:isActive() then
+    local settledScene = self._pendingScene or self._currentScene
+    if settledScene ~= self._currentScene then
+      exitScene(self._currentScene)
+    end
+    self._currentScene = settledScene
+    self._pendingScene = nil
+    self._transitionManager:clear()
+  end
+
+  if not self._currentScene or not transitionDirection then
+    self._transitionManager:clear()
+    exitScene(self._currentScene)
+
+    local nextScene = createScene(self, sceneName)
+    self._currentScene = nextScene
+    self._pendingScene = nil
+    enterScene(self._currentScene, params)
+    return
+  end
+
+  local nextScene = createScene(self, sceneName)
+  enterScene(nextScene, params)
+
+  self._pendingScene = nextScene
+  local isStarted = self._transitionManager:start(self._currentScene, nextScene, transitionDirection, transitionOpts)
+  if not isStarted then
+    exitScene(self._currentScene)
+    self._currentScene = self._pendingScene
+    self._pendingScene = nil
+  end
+end
+
+-- 하위 호환: 기존 호출부(setScene)를 유지한다.
+function SceneManager:setScene(sceneName, params, transitionDirection, transitionOpts)
+  self:change(sceneName, params, transitionDirection, transitionOpts)
+end
+
+function SceneManager:isTransitioning()
+  return self._transitionManager:isActive()
+end
+
+function SceneManager:completeTransitionIfNeeded()
+  if not self._pendingScene then
+    return
+  end
+
+  local fromScene = self._currentScene
+  self._currentScene = self._pendingScene
+  self._pendingScene = nil
+
+  exitScene(fromScene)
 end
 
 function SceneManager:getCurrentScene()
@@ -51,12 +115,26 @@ function SceneManager:getCurrentScene()
 end
 
 function SceneManager:update(dt)
+  if self._transitionManager:isActive() then
+    self._transitionManager:update(dt)
+    return
+  end
+
   if self._currentScene and self._currentScene.update then
     self._currentScene:update(dt)
   end
 end
 
 function SceneManager:draw()
+  if self._transitionManager:isActive() then
+    self._transitionManager:draw()
+    if self._transitionManager:isDone() then
+      self:completeTransitionIfNeeded()
+      self._transitionManager:clear()
+    end
+    return
+  end
+
   if self._currentScene and self._currentScene.draw then
     self._currentScene:draw()
   end

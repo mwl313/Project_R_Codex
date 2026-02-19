@@ -14,6 +14,7 @@
 ]]
 
 local Constants = require("constants")
+local Config = require("config")
 local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
@@ -30,7 +31,8 @@ local function createDefaultRoomState()
   return {
     phase = Constants.PHASE_WAITING,
     host = { connected = false, nickname = t("waiting_room.default_host_name") },
-    guest = nil
+    guest = nil,
+    guestReady = false
   }
 end
 
@@ -56,7 +58,8 @@ function WaitingRoomScene.new(app)
     _startButton = nil,
     _copyCodeButton = nil,
     _sendButton = nil,
-    _leaveButton = nil
+    _leaveButton = nil,
+    _lastLanguage = app:getLanguage()
   }
   setmetatable(instance, WaitingRoomScene)
 
@@ -109,7 +112,16 @@ function WaitingRoomScene.new(app)
     instance:sendChat()
   end
 
+  instance:rebuildLocalizedUi()
   return instance
+end
+
+function WaitingRoomScene:rebuildLocalizedUi()
+  self._lastLanguage = self._app:getLanguage()
+  self._chatInput.placeholder = t("waiting_room.chat_placeholder")
+  self._copyCodeButton.label = t("common.button.copy")
+  self._sendButton.label = t("common.button.send")
+  self._leaveButton.label = t("common.button.leave")
 end
 
 function WaitingRoomScene:enter(params)
@@ -123,6 +135,7 @@ function WaitingRoomScene:enter(params)
   if params and params.statusText then
     self:setStatus(params.statusText, params.statusColor)
   end
+  self:rebuildLocalizedUi()
 end
 
 function WaitingRoomScene:addChatLine(line)
@@ -153,7 +166,7 @@ function WaitingRoomScene:leaveRoom()
     backScene = "play",
     statusText = t("waiting_room.status.left_room"),
     statusColor = Constants.COLOR_TEXT_SUB
-  })
+  }, Config.TRANSITION_BACK)
 end
 
 function WaitingRoomScene:canRequestMatchStart()
@@ -167,13 +180,75 @@ function WaitingRoomScene:canRequestMatchStart()
   return self._roomState.host and self._roomState.host.connected and self._roomState.guest and self._roomState.guest.connected
 end
 
+function WaitingRoomScene:canRequestGuestReady()
+  local session = self._app:getSession()
+  if not session or session.role ~= "guest" then
+    return false
+  end
+  if self._roomState.phase ~= Constants.PHASE_WAITING then
+    return false
+  end
+  if self._roomState.guestReady == true then
+    return false
+  end
+  return self._roomState.host and self._roomState.host.connected and self._roomState.guest and self._roomState.guest.connected
+end
+
+function WaitingRoomScene:isGuestReady()
+  return self._roomState and self._roomState.guestReady == true
+end
+
+function WaitingRoomScene:updateStartButtonState()
+  local session = self._app:getSession()
+  local role = session and session.role or nil
+  self._startButton.isPressed = false
+  self._startButton.color = Constants.COLOR_BUTTON
+  self._startButton.hoverColor = nil
+
+  if role == "guest" then
+    if self:isGuestReady() then
+      self._startButton.label = t("waiting_room.button.waiting")
+      self._startButton.isEnabled = true
+      self._startButton.isPressed = true
+      self._startButton.color = Constants.COLOR_BUTTON_SELECTED
+      self._startButton.hoverColor = Constants.COLOR_BUTTON_SELECTED
+      return
+    end
+    self._startButton.label = t("waiting_room.button.ready")
+    self._startButton.isEnabled = self:canRequestGuestReady()
+    return
+  end
+
+  self._startButton.label = t("common.button.start_game")
+  self._startButton.isEnabled = self:canRequestMatchStart()
+end
+
 function WaitingRoomScene:requestMatchStart()
+  local session = self._app:getSession()
+  if session and session.role == "guest" then
+    self:requestGuestReady()
+    return
+  end
+
   if not self:canRequestMatchStart() then
     self:setStatus(t("waiting_room.status.start_condition_not_met"), Constants.COLOR_DANGER)
     return
   end
   self._app:sendWsEnvelope("client.match.start", {})
   self:setStatus(t("waiting_room.status.start_request_sent"), Constants.COLOR_TEXT_SUB)
+end
+
+function WaitingRoomScene:requestGuestReady()
+  if not self:canRequestGuestReady() then
+    if self:isGuestReady() then
+      self:setStatus(t("waiting_room.status.already_ready"), Constants.COLOR_TEXT_SUB)
+    else
+      self:setStatus(t("waiting_room.status.start_condition_not_met"), Constants.COLOR_DANGER)
+    end
+    return
+  end
+  self._app:sendWsEnvelope("client.room.ready", {})
+  self:setStatus(t("waiting_room.status.ready_request_sent"), Constants.COLOR_TEXT_SUB)
 end
 
 function WaitingRoomScene:copyRoomCode()
@@ -203,6 +278,9 @@ function WaitingRoomScene:copyRoomCode()
 end
 
 function WaitingRoomScene:update(_dt)
+  if self._lastLanguage ~= self._app:getLanguage() then
+    self:rebuildLocalizedUi()
+  end
 end
 
 function WaitingRoomScene:draw()
@@ -230,7 +308,7 @@ function WaitingRoomScene:draw()
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
   love.graphics.printf(roleText, 80, 108, 400, "left")
 
-  self._startButton.isEnabled = self:canRequestMatchStart()
+  self:updateStartButtonState()
   self._startButton:draw(mouseX, mouseY)
   self._leaveButton:draw(mouseX, mouseY)
 
@@ -290,6 +368,10 @@ function WaitingRoomScene:mousepressed(mouseX, mouseY, button)
     self._copyCodeButton:onClick()
     return
   end
+  local session = self._app:getSession()
+  if session and session.role == "guest" and self:isGuestReady() and self._startButton:isHovered(mouseX, mouseY) then
+    return
+  end
   if self._startButton:isHovered(mouseX, mouseY) and self._startButton.isEnabled then
     self._startButton:onClick()
     return
@@ -328,7 +410,7 @@ function WaitingRoomScene:onWsEnvelope(envelope)
       if self._roomState.phase and self._roomState.phase ~= Constants.PHASE_WAITING then
         self._app:goMatch({
           roomState = self._roomState
-        })
+        }, Config.TRANSITION_FORWARD)
         return
       end
     end
@@ -347,6 +429,16 @@ function WaitingRoomScene:onWsEnvelope(envelope)
       playerIndex = tostring(envelope.payload.playerIndex),
       reason = tostring(envelope.payload.reason)
     }))
+    return
+  end
+
+  if envelope.type == "room.ready" then
+    local payload = envelope.payload or {}
+    if payload.ready == true then
+      self:addChatLine(t("waiting_room.system.guest_ready", {
+        nickname = tostring(payload.nickname or t("waiting_room.default_guest_name"))
+      }))
+    end
     return
   end
 
@@ -390,13 +482,22 @@ function WaitingRoomScene:onWsEnvelope(envelope)
         reason = tostring(envelope.payload and envelope.payload.reason or "closed")
       }),
       statusColor = Constants.COLOR_DANGER
-    })
+    }, Config.TRANSITION_BACK)
     return
   end
 
   if envelope.type == "error.generic" then
+    local code = tostring(envelope.payload and envelope.payload.code or t("common.unknown"))
+    if code == "guest_not_ready" then
+      self:setStatus(t("waiting_room.status.guest_not_ready"), Constants.COLOR_DANGER)
+      return
+    end
+    if code == "already_ready" then
+      self:setStatus(t("waiting_room.status.already_ready"), Constants.COLOR_TEXT_SUB)
+      return
+    end
     self:setStatus(t("waiting_room.status.server_error", {
-      code = tostring(envelope.payload and envelope.payload.code or t("common.unknown"))
+      code = code
     }), Constants.COLOR_DANGER)
   end
 end

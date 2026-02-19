@@ -15,6 +15,7 @@
 ]]
 
 local Constants = require("constants")
+local Config = require("config")
 local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
@@ -341,7 +342,7 @@ function LobbyScene:handleMenuClick(menuId)
   if menuId == "play" then
     self._app:goPlay({
       backScene = "lobby"
-    })
+    }, Config.TRANSITION_FORWARD)
     return
   end
   if menuId == "change_nickname" then
@@ -357,19 +358,19 @@ function LobbyScene:handleMenuClick(menuId)
   if menuId == "guide" then
     self._app:goGuide({
       backScene = "lobby"
-    })
+    }, Config.TRANSITION_FORWARD)
     return
   end
   if menuId == "skin" then
     self._app:goSkin({
       backScene = "lobby"
-    })
+    }, Config.TRANSITION_FORWARD)
     return
   end
   if menuId == "credits" then
     self._app:goCredits({
       backScene = "lobby"
-    })
+    }, Config.TRANSITION_FORWARD)
     return
   end
   if menuId == "quit" then

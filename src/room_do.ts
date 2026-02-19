@@ -154,6 +154,7 @@ interface RoomState {
   phase: Phase;
   host: PlayerSlot;
   guest: PlayerSlot;
+  guestReady: boolean;
   timers: {
     phaseEndsAtMs?: number;
     turnEndsAtMs?: number;
@@ -187,6 +188,7 @@ function createDefaultRoomState(): RoomState {
     phase: DEFAULT_PHASE as Phase,
     host: createEmptySlot(),
     guest: createEmptySlot(),
+    guestReady: false,
     timers: {},
     chatLimiter: {},
     isClosed: false,
@@ -305,6 +307,9 @@ export class RoomDO {
     }
     if (!this.room.chatLimiter) {
       this.room.chatLimiter = {};
+    }
+    if (typeof this.room.guestReady !== "boolean") {
+      this.room.guestReady = false;
     }
 
     if (!this.room.match) {
@@ -481,6 +486,15 @@ export class RoomDO {
     return role === "host" ? this.room.match.placement.hostSubmitted : this.room.match.placement.guestSubmitted;
   }
 
+  private isFirstTurnRole(role: Role): boolean {
+    const firstPlayerIndex = this.room.match.firstPlayerIndex ?? 1;
+    return this.getPlayerIndex(role) === firstPlayerIndex;
+  }
+
+  private getDealCountByRole(role: Role): number {
+    return this.isFirstTurnRole(role) ? HOST_DEAL_COUNT : GUEST_DEAL_COUNT;
+  }
+
   private getDealtCardsByRole(role: Role): string[] {
     return role === "host" ? this.room.match.cardSelect.hostDealtCards : this.room.match.cardSelect.guestDealtCards;
   }
@@ -510,7 +524,7 @@ export class RoomDO {
   }
 
   private getPickCountByRole(role: Role): number {
-    return role === "host" ? HOST_PICK_COUNT : GUEST_PICK_COUNT;
+    return this.isFirstTurnRole(role) ? HOST_PICK_COUNT : GUEST_PICK_COUNT;
   }
 
   private getResultVoteByRole(role: Role): ResultVoteChoice | null {
@@ -650,6 +664,7 @@ export class RoomDO {
             nickname: this.room.guest.nickname ?? "Guest"
           }
         : null,
+      guestReady: this.room.guestReady,
       timers: this.room.timers,
       match: {
         firstPlayerIndex: this.room.match.firstPlayerIndex,
@@ -742,6 +757,10 @@ export class RoomDO {
     return role === "host" ? 1 : 2;
   }
 
+  private getRoleByPlayerIndex(playerIndex: 1 | 2): Role {
+    return playerIndex === 1 ? "host" : "guest";
+  }
+
   private async handleInternalCreate(request: Request): Promise<Response> {
     let body: unknown;
     try {
@@ -771,6 +790,7 @@ export class RoomDO {
         connected: false
       },
       guest: createEmptySlot(),
+      guestReady: false,
       timers: {},
       chatLimiter: {},
       isClosed: false,
@@ -850,6 +870,7 @@ export class RoomDO {
       nickname,
       connected: false
     };
+    this.room.guestReady = false;
 
     await this.saveState();
 
@@ -948,6 +969,7 @@ export class RoomDO {
 
   private resetMatchStateForNewRound(): void {
     this.room.result = null;
+    this.room.guestReady = false;
     this.room.match.firstPlayerIndex = null;
 
     this.room.match.placement.hostStones = [];
@@ -987,6 +1009,9 @@ export class RoomDO {
       return;
     }
     if (!this.room.host.connected || !this.room.guest.connected) {
+      return;
+    }
+    if (!this.room.guestReady) {
       return;
     }
 
@@ -1054,6 +1079,10 @@ export class RoomDO {
       await this.handleMatchStart(token, session);
       return;
     }
+    if (envelope.type === "client.room.ready") {
+      await this.handleGuestReady(token, session);
+      return;
+    }
     if (envelope.type === "client.match.placement.submit") {
       await this.handlePlacementSubmit(token, session, envelope.payload);
       return;
@@ -1099,8 +1128,46 @@ export class RoomDO {
       this.sendToToken(token, "error.generic", errorPayload("player_not_ready"));
       return;
     }
+    if (!this.room.guestReady) {
+      this.sendToToken(token, "error.generic", errorPayload("guest_not_ready"));
+      return;
+    }
 
     await this.startMatchFlow();
+  }
+
+  private async handleGuestReady(token: string, session: Session): Promise<void> {
+    if (this.room.phase !== PHASE_WAITING) {
+      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      return;
+    }
+    if (session.role !== "guest") {
+      this.sendToToken(token, "error.generic", errorPayload("guest_only"));
+      return;
+    }
+
+    const slot = this.getSlotByRole("guest");
+    if (!slot.token || slot.token !== token) {
+      this.sendToToken(token, "error.generic", errorPayload("invalid_token"));
+      return;
+    }
+    if (!slot.connected || !this.room.host.connected) {
+      this.sendToToken(token, "error.generic", errorPayload("player_not_ready"));
+      return;
+    }
+    if (this.room.guestReady) {
+      this.sendToToken(token, "error.generic", errorPayload("already_ready"));
+      return;
+    }
+
+    this.room.guestReady = true;
+    await this.saveState();
+    this.broadcast("room.ready", {
+      playerIndex: 2,
+      nickname: slot.nickname ?? "Guest",
+      ready: true
+    });
+    this.broadcastRoomState();
   }
 
   private async handleSurrender(token: string, session: Session): Promise<void> {
@@ -1765,9 +1832,22 @@ export class RoomDO {
       return;
     }
 
+    const firstPlayerRole = this.getRoleByPlayerIndex(this.room.match.firstPlayerIndex ?? 1);
+    const secondPlayerRole: Role = firstPlayerRole === "host" ? "guest" : "host";
+    const firstDealCount = this.getDealCountByRole(firstPlayerRole);
+    const secondDealCount = this.getDealCountByRole(secondPlayerRole);
+
     const shuffledPool = shuffleCards([...CARD_POOL]);
-    this.room.match.cardSelect.hostDealtCards = shuffledPool.slice(0, HOST_DEAL_COUNT);
-    this.room.match.cardSelect.guestDealtCards = shuffledPool.slice(HOST_DEAL_COUNT, HOST_DEAL_COUNT + GUEST_DEAL_COUNT);
+    const firstDealCards = shuffledPool.slice(0, firstDealCount);
+    const secondDealCards = shuffledPool.slice(firstDealCount, firstDealCount + secondDealCount);
+
+    if (firstPlayerRole === "host") {
+      this.room.match.cardSelect.hostDealtCards = firstDealCards;
+      this.room.match.cardSelect.guestDealtCards = secondDealCards;
+    } else {
+      this.room.match.cardSelect.hostDealtCards = secondDealCards;
+      this.room.match.cardSelect.guestDealtCards = firstDealCards;
+    }
     this.room.match.cardSelect.hostPickedCards = [];
     this.room.match.cardSelect.guestPickedCards = [];
     this.room.match.cardSelect.hostLocked = false;
@@ -1966,6 +2046,7 @@ export class RoomDO {
 
     this.room.host = createEmptySlot();
     this.room.guest = createEmptySlot();
+    this.room.guestReady = false;
     this.room.isClosed = true;
     this.room.phase = DEFAULT_PHASE as Phase;
     this.room.timers = {};
@@ -1994,6 +2075,7 @@ export class RoomDO {
     }
 
     this.room.guest = createEmptySlot();
+    this.room.guestReady = false;
     await this.saveState();
 
     this.broadcastRoomState();

@@ -264,48 +264,52 @@ function App:updateMouseFromScreen(screenX, screenY)
   self._worldMouseX, self._worldMouseY = self._renderScale:toWorld(screenX, screenY)
 end
 
-function App:goLobby(params)
-  self:goScene("lobby", params)
+function App:goLobby(params, transitionDirection, transitionOpts)
+  self:goScene("lobby", params, transitionDirection, transitionOpts)
 end
 
-function App:goPlay(params)
-  self:goScene("play", params)
+function App:goPlay(params, transitionDirection, transitionOpts)
+  self:goScene("play", params, transitionDirection, transitionOpts)
 end
 
-function App:goMultiplayer(params)
-  self:goScene("multiplayer", params)
+function App:goMultiplayer(params, transitionDirection, transitionOpts)
+  self:goScene("multiplayer", params, transitionDirection, transitionOpts)
 end
 
-function App:goGuide(params)
-  self:goScene("guide", params)
+function App:goGuide(params, transitionDirection, transitionOpts)
+  self:goScene("guide", params, transitionDirection, transitionOpts)
 end
 
-function App:goSkin(params)
-  self:goScene("skin", params)
+function App:goSkin(params, transitionDirection, transitionOpts)
+  self:goScene("skin", params, transitionDirection, transitionOpts)
 end
 
-function App:goCredits(params)
-  self:goScene("credits", params)
+function App:goCredits(params, transitionDirection, transitionOpts)
+  self:goScene("credits", params, transitionDirection, transitionOpts)
 end
 
-function App:goRoomSearch(params)
-  self:goScene("roomSearch", params)
+function App:goRoomSearch(params, transitionDirection, transitionOpts)
+  self:goScene("roomSearch", params, transitionDirection, transitionOpts)
 end
 
-function App:goSingleDummy(params)
-  self:goScene("singleDummy", params)
+function App:goSingleDummy(params, transitionDirection, transitionOpts)
+  self:goScene("singleDummy", params, transitionDirection, transitionOpts)
 end
 
-function App:goWaitingRoom(params)
-  self:goScene("waitingRoom", params)
+function App:goWaitingRoom(params, transitionDirection, transitionOpts)
+  self:goScene("waitingRoom", params, transitionDirection, transitionOpts)
 end
 
-function App:goMatch(params)
-  self:goScene("match", params)
+function App:goMatch(params, transitionDirection, transitionOpts)
+  self:goScene("match", params, transitionDirection, transitionOpts)
 end
 
-function App:goScene(sceneName, params)
-  self._sceneManager:setScene(sceneName, params)
+function App:goScene(sceneName, params, transitionDirection, transitionOpts)
+  self._sceneManager:change(sceneName, params, transitionDirection, transitionOpts)
+end
+
+function App:isTransitioningScene()
+  return self._sceneManager and self._sceneManager.isTransitioning and self._sceneManager:isTransitioning()
 end
 
 function App:emitUiStatus(text, color)
@@ -445,7 +449,7 @@ function App:handleHttpResponse(event)
     else
       self:playSoundHook("room_join_success")
     end
-    self:goWaitingRoom()
+    self:goWaitingRoom(nil, Config.TRANSITION_FORWARD)
     self:connectWebSocket()
   end
 end
@@ -536,16 +540,25 @@ function App:drawFontWarning()
 end
 
 function App:mousepressed(screenX, screenY, button)
+  if self:isTransitioningScene() then
+    return true
+  end
   local worldX, worldY = self._renderScale:toWorld(screenX, screenY)
   self._sceneManager:dispatch("mousepressed", worldX, worldY, button)
 end
 
 function App:mousereleased(screenX, screenY, button)
+  if self:isTransitioningScene() then
+    return true
+  end
   local worldX, worldY = self._renderScale:toWorld(screenX, screenY)
   self._sceneManager:dispatch("mousereleased", worldX, worldY, button)
 end
 
 function App:keypressed(key)
+  if self:isTransitioningScene() then
+    return true
+  end
   if key == "f6" then
     Config.UI_USE_NINESLICE = not Config.UI_USE_NINESLICE
     self:emitUiStatus(t("app.ui.ui_skin_toggle", {
@@ -557,10 +570,16 @@ function App:keypressed(key)
 end
 
 function App:textinput(text)
+  if self:isTransitioningScene() then
+    return true
+  end
   self._sceneManager:dispatch("textinput", text)
 end
 
 function App:textedited(text, start, length)
+  if self:isTransitioningScene() then
+    return true
+  end
   self._sceneManager:dispatch("textedited", text, start, length)
 end
 
