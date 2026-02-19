@@ -157,7 +157,8 @@ function App.new(renderScale)
     _worldMouseY = 0,
     _pendingBootWarningText = nil,
     _lastRulesVersionWarningKey = nil,
-    _uiSkin = nil
+    _uiSkin = nil,
+    _queuedSceneIntent = nil
   }
   setmetatable(instance, App)
 
@@ -330,12 +331,34 @@ function App:goMatch(params, transitionDirection, transitionOpts)
 end
 
 function App:goScene(sceneName, params, transitionDirection, transitionOpts)
+  if self:isTransitioningScene() then
+    self._queuedSceneIntent = {
+      sceneName = sceneName,
+      params = params,
+      transitionDirection = transitionDirection,
+      transitionOpts = transitionOpts
+    }
+    return
+  end
+
   self._sceneManager:dispatch("onSceneWillChange", {
     toScene = sceneName,
     params = params
   })
   InputCaptureGuard.release()
   self._sceneManager:change(sceneName, params, transitionDirection, transitionOpts)
+end
+
+function App:flushQueuedSceneIntent()
+  if self:isTransitioningScene() then
+    return
+  end
+  local intent = self._queuedSceneIntent
+  if not intent then
+    return
+  end
+  self._queuedSceneIntent = nil
+  self:goScene(intent.sceneName, intent.params, intent.transitionDirection, intent.transitionOpts)
 end
 
 function App:isTransitioningScene()
@@ -566,6 +589,7 @@ function App:update(dt)
   self:updateMouseFromScreen(mouseX, mouseY)
   self:pollNetworkEvents()
   self._sceneManager:update(dt)
+  self:flushQueuedSceneIntent()
 end
 
 function App:drawBackground()
@@ -590,17 +614,11 @@ function App:drawFontWarning()
 end
 
 function App:mousepressed(screenX, screenY, button)
-  if self:isTransitioningScene() then
-    return true
-  end
   local worldX, worldY = self._renderScale:toWorld(screenX, screenY)
   self._sceneManager:dispatch("mousepressed", worldX, worldY, button)
 end
 
 function App:mousereleased(screenX, screenY, button)
-  if self:isTransitioningScene() then
-    return true
-  end
   local worldX, worldY = self._renderScale:toWorld(screenX, screenY)
   self._sceneManager:dispatch("mousereleased", worldX, worldY, button)
 end
@@ -608,15 +626,9 @@ end
 function App:mousemoved(screenX, screenY, screenDx, screenDy)
   self:updateMouseFromScreen(screenX, screenY)
   InputCaptureGuard.onMouseMoved(screenDx, screenDy)
-  if self:isTransitioningScene() then
-    return true
-  end
 end
 
 function App:keypressed(key)
-  if self:isTransitioningScene() then
-    return true
-  end
   if key == "f7" then
     local currentSceneName = self:getCurrentSceneName() or "lobby"
     if currentSceneName ~= "debugMenu" then
@@ -641,16 +653,10 @@ function App:keypressed(key)
 end
 
 function App:textinput(text)
-  if self:isTransitioningScene() then
-    return true
-  end
   self._sceneManager:dispatch("textinput", text)
 end
 
 function App:textedited(text, start, length)
-  if self:isTransitioningScene() then
-    return true
-  end
   self._sceneManager:dispatch("textedited", text, start, length)
 end
 

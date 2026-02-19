@@ -24,6 +24,15 @@ local SceneManager = {}
 SceneManager.__index = SceneManager
 local TransitionManager = require("managers.transition_manager")
 
+local INPUT_EVENT_NAME_SET = {
+  mousepressed = true,
+  mousereleased = true,
+  mousemoved = true,
+  keypressed = true,
+  textinput = true,
+  textedited = true
+}
+
 function SceneManager.new(sceneFactoryTable, app)
   local instance = {
     _sceneFactoryTable = sceneFactoryTable or {},
@@ -160,9 +169,20 @@ function SceneManager:dispatch(functionName, ...)
   if not self._currentScene then
     return
   end
-  local sceneFunction = self._currentScene[functionName]
+
+  local targetScene = self._currentScene
+  if self._transitionManager:isActive() and INPUT_EVENT_NAME_SET[functionName] and self._pendingScene then
+    targetScene = self._pendingScene
+  end
+
+  local sceneFunction = targetScene[functionName]
+  if (not sceneFunction) and targetScene ~= self._currentScene then
+    targetScene = self._currentScene
+    sceneFunction = targetScene[functionName]
+  end
+
   if sceneFunction then
-    sceneFunction(self._currentScene, ...)
+    sceneFunction(targetScene, ...)
   end
 end
 
