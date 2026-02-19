@@ -22,6 +22,7 @@ local Button = require("ui.button")
 local Dropdown = require("ui.dropdown")
 local TextInput = require("ui.text_input")
 local UIDraw = require("ui.ui_draw")
+local OverlayTransition = require("ui.overlay_transition")
 
 local LobbyScene = {}
 LobbyScene.__index = LobbyScene
@@ -110,6 +111,19 @@ local function getSettingsDropdownList(overlay)
   }
 end
 
+local function createOverlayTransition(panelY, panelH)
+  local transition = OverlayTransition.new({
+    targetY = panelY,
+    panelH = panelH,
+    worldH = Constants.BASE_WORLD_H,
+    maxDimAlpha = Constants.COLOR_OVERLAY_DIM[4] or 0.56,
+    enterDurationSec = Constants.OVERLAY_ENTER_SEC,
+    exitDurationSec = Constants.OVERLAY_EXIT_SEC
+  })
+  transition:open()
+  return transition
+end
+
 function LobbyScene.new(app)
   local instance = {
     _app = app,
@@ -161,6 +175,13 @@ function LobbyScene:getOverlayRect()
   return panelX, panelY, panelW, panelH
 end
 
+function LobbyScene:getOverlayOffsetY()
+  if not self._overlay or not self._overlay.transition then
+    return 0
+  end
+  return self._overlay.transition:getPanelY() - self._overlay.panelY
+end
+
 function LobbyScene:openNicknameOverlay()
   local panelX, panelY, panelW, panelH = self:getOverlayRect()
   local nicknameInput = TextInput.new({
@@ -183,6 +204,7 @@ function LobbyScene:openNicknameOverlay()
     panelY = panelY,
     panelW = panelW,
     panelH = panelH,
+    transition = createOverlayTransition(panelY, panelH),
     nicknameInput = nicknameInput,
     saveButton = Button.new({
       x = panelX + panelW * 0.5 - 180,
@@ -223,6 +245,7 @@ function LobbyScene:openSettingsOverlay()
     panelY = panelY,
     panelW = panelW,
     panelH = panelH,
+    transition = createOverlayTransition(panelY, panelH),
     selectedDisplayMode = selectedDisplayMode,
     selectedLanguage = selectedLanguage,
     labelX = labelX,
@@ -276,6 +299,13 @@ function LobbyScene:openSettingsOverlay()
 end
 
 function LobbyScene:closeOverlay()
+  if not self._overlay then
+    return
+  end
+  if self._overlay.transition then
+    self._overlay.transition:close()
+    return
+  end
   self._overlay = nil
 end
 
@@ -383,7 +413,14 @@ function LobbyScene:setStatus(statusText, statusColor)
   self._statusColor = statusColor or Constants.COLOR_TEXT_SUB
 end
 
-function LobbyScene:update(_dt)
+function LobbyScene:update(dt)
+  if self._overlay and self._overlay.transition then
+    self._overlay.transition:update(dt)
+    if self._overlay.transition:isClosed() then
+      self._overlay = nil
+    end
+  end
+
   if self._lastLanguage ~= self._app:getLanguage() then
     self:rebuildLocalizedUi()
   end
@@ -394,8 +431,19 @@ function LobbyScene:drawOverlay(mouseX, mouseY)
     return
   end
 
-  love.graphics.setColor(Constants.COLOR_OVERLAY_DIM)
+  local dimColor = Constants.COLOR_OVERLAY_DIM
+  local dimAlpha = dimColor[4] or 0.56
+  if self._overlay.transition then
+    dimAlpha = self._overlay.transition:getDimAlpha()
+  end
+  love.graphics.setColor(dimColor[1], dimColor[2], dimColor[3], dimAlpha)
   love.graphics.rectangle("fill", 0, 0, Constants.BASE_WORLD_W, Constants.BASE_WORLD_H)
+
+  local overlayOffsetY = self:getOverlayOffsetY()
+  local adjustedMouseY = mouseY - overlayOffsetY
+
+  love.graphics.push()
+  love.graphics.translate(0, overlayOffsetY)
 
   UIDraw.drawPanel({
     x = self._overlay.panelX,
@@ -414,8 +462,9 @@ function LobbyScene:drawOverlay(mouseX, mouseY)
     love.graphics.printf(t("lobby.overlay.nickname.subtitle"), self._overlay.panelX, self._overlay.panelY + 150, self._overlay.panelW, "center")
 
     self._overlay.nicknameInput:draw()
-    self._overlay.saveButton:draw(mouseX, mouseY)
-    self._overlay.cancelButton:draw(mouseX, mouseY)
+    self._overlay.saveButton:draw(mouseX, adjustedMouseY)
+    self._overlay.cancelButton:draw(mouseX, adjustedMouseY)
+    love.graphics.pop()
     return
   end
 
@@ -443,8 +492,8 @@ function LobbyScene:drawOverlay(mouseX, mouseY)
       "left"
     )
 
-    self._overlay.displayModeDropdown:draw(mouseX, mouseY, "collapsed")
-    self._overlay.languageDropdown:draw(mouseX, mouseY, "collapsed")
+    self._overlay.displayModeDropdown:draw(mouseX, adjustedMouseY, "collapsed")
+    self._overlay.languageDropdown:draw(mouseX, adjustedMouseY, "collapsed")
 
     love.graphics.setFont(FontManager.getFont("small"))
     love.graphics.setColor(Constants.COLOR_TEXT_SUB)
@@ -458,11 +507,13 @@ function LobbyScene:drawOverlay(mouseX, mouseY)
       "center"
     )
 
-    self._overlay.saveButton:draw(mouseX, mouseY)
-    self._overlay.cancelButton:draw(mouseX, mouseY)
+    self._overlay.saveButton:draw(mouseX, adjustedMouseY)
+    self._overlay.cancelButton:draw(mouseX, adjustedMouseY)
     -- Expanded dropdown list is rendered in a dedicated top layer.
-    Dropdown.drawExpandedLayer(getSettingsDropdownList(self._overlay), mouseX, mouseY)
+    Dropdown.drawExpandedLayer(getSettingsDropdownList(self._overlay), mouseX, adjustedMouseY)
   end
+
+  love.graphics.pop()
 end
 
 function LobbyScene:draw()
@@ -493,16 +544,22 @@ function LobbyScene:handleOverlayMousePressed(mouseX, mouseY, button)
   if not self._overlay then
     return false
   end
+  if self._overlay.transition and (not self._overlay.transition:isInteractive()) then
+    return true
+  end
+
+  local overlayOffsetY = self:getOverlayOffsetY()
+  local adjustedMouseY = mouseY - overlayOffsetY
 
   if self._overlay.kind == "nickname" then
-    if self._overlay.nicknameInput:mousepressed(mouseX, mouseY, button) then
+    if self._overlay.nicknameInput:mousepressed(mouseX, adjustedMouseY, button) then
       return true
     end
-    if self._overlay.saveButton:isHovered(mouseX, mouseY) then
+    if self._overlay.saveButton:isHovered(mouseX, adjustedMouseY) then
       self._overlay.saveButton:onClick()
       return true
     end
-    if self._overlay.cancelButton:isHovered(mouseX, mouseY) then
+    if self._overlay.cancelButton:isHovered(mouseX, adjustedMouseY) then
       self._overlay.cancelButton:onClick()
       return true
     end
@@ -514,7 +571,7 @@ function LobbyScene:handleOverlayMousePressed(mouseX, mouseY, button)
     local clickedDropdown = Dropdown.handleExclusiveMousePressed(
       getSettingsDropdownList(self._overlay),
       mouseX,
-      mouseY,
+      adjustedMouseY,
       button
     )
     if clickedDropdown then
@@ -522,11 +579,11 @@ function LobbyScene:handleOverlayMousePressed(mouseX, mouseY, button)
       self._overlay.selectedLanguage = self._overlay.languageDropdown:getSelectedValue()
       return true
     end
-    if self._overlay.saveButton:isHovered(mouseX, mouseY) then
+    if self._overlay.saveButton:isHovered(mouseX, adjustedMouseY) then
       self._overlay.saveButton:onClick()
       return true
     end
-    if self._overlay.cancelButton:isHovered(mouseX, mouseY) then
+    if self._overlay.cancelButton:isHovered(mouseX, adjustedMouseY) then
       self._overlay.cancelButton:onClick()
       return true
     end
@@ -554,13 +611,13 @@ function LobbyScene:mousepressed(mouseX, mouseY, button)
 end
 
 function LobbyScene:textinput(text)
-  if self._overlay and self._overlay.kind == "nickname" then
+  if self._overlay and self._overlay.kind == "nickname" and (not self._overlay.transition or self._overlay.transition:isInteractive()) then
     self._overlay.nicknameInput:textinput(text)
   end
 end
 
 function LobbyScene:textedited(text, start, length)
-  if self._overlay and self._overlay.kind == "nickname" then
+  if self._overlay and self._overlay.kind == "nickname" and (not self._overlay.transition or self._overlay.transition:isInteractive()) then
     self._overlay.nicknameInput:textedited(text, start, length)
   end
 end
@@ -569,6 +626,10 @@ function LobbyScene:keypressed(key)
   if self._overlay then
     if key == "escape" then
       self:closeOverlay()
+      return
+    end
+
+    if self._overlay.transition and (not self._overlay.transition:isInteractive()) then
       return
     end
 
