@@ -69,6 +69,12 @@ local function createSceneFactoryTable()
     waitingRoom = function(app)
       return require("scenes.waiting_room_scene").new(app)
     end,
+    coinTossFirst = function(app)
+      return require("scenes.coin_toss_first_scene").new(app)
+    end,
+    coinTossSecond = function(app)
+      return require("scenes.coin_toss_second_scene").new(app)
+    end,
     match = function(app)
       return require("scenes.match_scene").new(app)
     end
@@ -134,7 +140,8 @@ function App.new(renderScale)
       token = nil,
       wsUrl = nil,
       role = nil,
-      serverRulesVersion = nil
+      serverRulesVersion = nil,
+      lastRoomState = nil
     },
     _nickname = "Player",
     _displayMode = Constants.DISPLAY_MODE_WINDOWED,
@@ -405,7 +412,8 @@ function App:leaveRoom()
     token = nil,
     wsUrl = nil,
     role = nil,
-    serverRulesVersion = nil
+    serverRulesVersion = nil,
+    lastRoomState = nil
   }
 end
 
@@ -441,6 +449,7 @@ function App:handleHttpResponse(event)
   self._session.token = bodyTable.token
   self._session.wsUrl = bodyTable.wsUrl
   self._session.role = nil
+  self._session.lastRoomState = nil
   self:checkRulesVersion(bodyTable.rulesVersion)
 
   if requestMeta.kind == "createRoom" or requestMeta.kind == "joinRoom" then
@@ -467,6 +476,7 @@ function App:handleWsEnvelope(envelope)
     self:checkRulesVersion(payload.rulesVersion)
   elseif envelope.type == "room.state" then
     local payload = envelope.payload or {}
+    self._session.lastRoomState = payload
     local sessionRoomCode = self._session.roomCode
     local payloadRoomCode = payload.roomCode
     if sessionRoomCode and payloadRoomCode and tostring(sessionRoomCode) ~= tostring(payloadRoomCode) then
@@ -480,7 +490,8 @@ function App:handleWsEnvelope(envelope)
       token = nil,
       wsUrl = nil,
       role = nil,
-      serverRulesVersion = nil
+      serverRulesVersion = nil,
+      lastRoomState = nil
     }
   end
   if not shouldDispatch then

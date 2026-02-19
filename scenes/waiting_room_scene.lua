@@ -59,7 +59,8 @@ function WaitingRoomScene.new(app)
     _copyCodeButton = nil,
     _sendButton = nil,
     _leaveButton = nil,
-    _lastLanguage = app:getLanguage()
+    _lastLanguage = app:getLanguage(),
+    _isCoinTossFlowStarted = false
   }
   setmetatable(instance, WaitingRoomScene)
 
@@ -132,6 +133,7 @@ function WaitingRoomScene:enter(params)
     self._roomState = createDefaultRoomState()
   end
   self._chatMessageList = {}
+  self._isCoinTossFlowStarted = false
   if params and params.statusText then
     self:setStatus(params.statusText, params.statusColor)
   end
@@ -411,6 +413,9 @@ function WaitingRoomScene:onWsEnvelope(envelope)
   if envelope.type == "room.state" then
     if type(envelope.payload) == "table" then
       self._roomState = envelope.payload
+      if self._isCoinTossFlowStarted then
+        return
+      end
       if self._roomState.phase and self._roomState.phase ~= Constants.PHASE_WAITING then
         self._app:goMatch({
           roomState = self._roomState
@@ -477,6 +482,25 @@ function WaitingRoomScene:onWsEnvelope(envelope)
 
   if envelope.type == "match.turnOrder" then
     local payload = envelope.payload or {}
+    local firstPlayerIndex = payload.firstPlayerIndex
+    local session = self._app:getSession()
+    local myPlayerIndex = nil
+    if session and session.role == "host" then
+      myPlayerIndex = 1
+    elseif session and session.role == "guest" then
+      myPlayerIndex = 2
+    end
+
+    if (firstPlayerIndex == 1 or firstPlayerIndex == 2) and myPlayerIndex then
+      self._isCoinTossFlowStarted = true
+      local sceneName = myPlayerIndex == firstPlayerIndex and "coinTossFirst" or "coinTossSecond"
+      self._app:goScene(sceneName, {
+        roomState = self._roomState,
+        nextSceneName = "match"
+      }, Config.TRANSITION_FORWARD)
+      return
+    end
+
     self:setStatus(t("waiting_room.status.turn_order", {
       playerIndex = tostring(payload.firstPlayerIndex or "?")
     }), Constants.COLOR_TEXT_SUB)
