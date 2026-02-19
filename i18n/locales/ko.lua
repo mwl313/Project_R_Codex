@@ -63,6 +63,7 @@ local LocaleKo = {
     current_nickname = "현재 닉네임: {nickname}",
     menu = {
       play = "플레이",
+      debug_menu = "디버그 메뉴",
       single_player = "싱글플레이어",
       create_room = "방 생성",
       search_room = "방 찾기",
@@ -127,6 +128,30 @@ local LocaleKo = {
     },
     status = {
       creating_room = "방 생성 요청 중..."
+    }
+  },
+  debug_menu = {
+    title = "Debug Menu",
+    subtitle = "씬/연출 수동 테스트",
+    action = {
+      go_lobby = "로비 씬",
+      go_play = "플레이 씬",
+      go_multiplayer = "멀티플레이어 씬",
+      go_room_search = "방 찾기 씬",
+      waiting_mock = "대기방(모의 상태)",
+      coin_first = "코인토스(선공)",
+      coin_second = "코인토스(후공)",
+      match_placement = "매치: 배치 단계",
+      match_card_first = "매치: 카드선택(1장 선택)",
+      match_card_second = "매치: 카드선택(2장 선택)",
+      match_playing = "매치: 턴 플레이 단계",
+      match_result = "매치: 결과 단계",
+      single_dummy = "싱글 더미 씬"
+    },
+    status = {
+      default = "디버그 메뉴 준비 완료 (F7 단축키 지원)",
+      opened_from = "디버그 메뉴 열림: {scene}",
+      waiting_mock = "모의 대기방 상태로 진입"
     }
   },
   guide = {
@@ -235,6 +260,9 @@ local LocaleKo = {
     phase_label = "현재 Phase: {phase}",
     turn_card_title = "TURN 카드",
     card_select_title = "카드 선택",
+    card_select_prompt = "초능력 카드를 {pickCount}장 고르세요",
+    card_select_waiting = "상대 선택 대기중...",
+    card_select_selected = "{selectedCount}/{pickCount} 선택",
     power_label = "Power {power}",
     button = {
       submit_placement = "배치 제출",

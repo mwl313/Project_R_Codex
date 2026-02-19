@@ -63,6 +63,7 @@ local LocaleEn = {
     current_nickname = "Nickname: {nickname}",
     menu = {
       play = "Play",
+      debug_menu = "Debug Menu",
       single_player = "Single Player",
       create_room = "Create Room",
       search_room = "Find Room",
@@ -127,6 +128,30 @@ local LocaleEn = {
     },
     status = {
       creating_room = "Creating room..."
+    }
+  },
+  debug_menu = {
+    title = "Debug Menu",
+    subtitle = "Manual scene/effect test launcher",
+    action = {
+      go_lobby = "Lobby Scene",
+      go_play = "Play Scene",
+      go_multiplayer = "Multiplayer Scene",
+      go_room_search = "Room Search Scene",
+      waiting_mock = "Waiting Room (Mock)",
+      coin_first = "Coin Toss (First)",
+      coin_second = "Coin Toss (Second)",
+      match_placement = "Match: Placement Phase",
+      match_card_first = "Match: Card Select (Pick 1)",
+      match_card_second = "Match: Card Select (Pick 2)",
+      match_playing = "Match: Playing Phase",
+      match_result = "Match: Result Phase",
+      single_dummy = "Single Dummy Scene"
+    },
+    status = {
+      default = "Debug menu ready (F7 shortcut available)",
+      opened_from = "Opened debug menu from: {scene}",
+      waiting_mock = "Entered waiting room mock state"
     }
   },
   guide = {
@@ -235,6 +260,9 @@ local LocaleEn = {
     phase_label = "Current Phase: {phase}",
     turn_card_title = "TURN Card",
     card_select_title = "Card Selection",
+    card_select_prompt = "Choose {pickCount} ability card(s)",
+    card_select_waiting = "Waiting for opponent card lock...",
+    card_select_selected = "Selected {selectedCount}/{pickCount}",
     power_label = "Power {power}",
     button = {
       submit_placement = "Submit Placement",

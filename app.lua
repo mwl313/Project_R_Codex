@@ -51,6 +51,9 @@ local function createSceneFactoryTable()
     multiplayer = function(app)
       return require("scenes.multiplayer_scene").new(app)
     end,
+    debugMenu = function(app)
+      return require("scenes.debug_menu_scene").new(app)
+    end,
     guide = function(app)
       return require("scenes.guide_scene").new(app)
     end,
@@ -283,6 +286,10 @@ function App:goMultiplayer(params, transitionDirection, transitionOpts)
   self:goScene("multiplayer", params, transitionDirection, transitionOpts)
 end
 
+function App:goDebugMenu(params, transitionDirection, transitionOpts)
+  self:goScene("debugMenu", params, transitionDirection, transitionOpts)
+end
+
 function App:goGuide(params, transitionDirection, transitionOpts)
   self:goScene("guide", params, transitionDirection, transitionOpts)
 end
@@ -317,6 +324,13 @@ end
 
 function App:isTransitioningScene()
   return self._sceneManager and self._sceneManager.isTransitioning and self._sceneManager:isTransitioning()
+end
+
+function App:getCurrentSceneName()
+  if not self._sceneManager or not self._sceneManager.getCurrentSceneName then
+    return nil
+  end
+  return self._sceneManager:getCurrentSceneName()
 end
 
 function App:emitUiStatus(text, color)
@@ -578,6 +592,19 @@ end
 function App:keypressed(key)
   if self:isTransitioningScene() then
     return true
+  end
+  if key == "f7" then
+    local currentSceneName = self:getCurrentSceneName() or "lobby"
+    if currentSceneName ~= "debugMenu" then
+      self:goDebugMenu({
+        backScene = currentSceneName,
+        statusText = t("debug_menu.status.opened_from", {
+          scene = tostring(currentSceneName)
+        }),
+        statusColor = Constants.COLOR_TEXT_SUB
+      }, Config.TRANSITION_FORWARD)
+    end
+    return
   end
   if key == "f6" then
     Config.UI_USE_NINESLICE = not Config.UI_USE_NINESLICE

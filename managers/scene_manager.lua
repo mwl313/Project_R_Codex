@@ -29,8 +29,10 @@ function SceneManager.new(sceneFactoryTable, app)
     _sceneFactoryTable = sceneFactoryTable or {},
     _app = app,
     _currentScene = nil,
+    _currentSceneName = nil,
     _transitionManager = TransitionManager.new(),
-    _pendingScene = nil
+    _pendingScene = nil,
+    _pendingSceneName = nil
   }
   return setmetatable(instance, SceneManager)
 end
@@ -58,11 +60,14 @@ end
 function SceneManager:change(sceneName, params, transitionDirection, transitionOpts)
   if self._transitionManager:isActive() then
     local settledScene = self._pendingScene or self._currentScene
+    local settledSceneName = self._pendingSceneName or self._currentSceneName
     if settledScene ~= self._currentScene then
       exitScene(self._currentScene)
     end
     self._currentScene = settledScene
+    self._currentSceneName = settledSceneName
     self._pendingScene = nil
+    self._pendingSceneName = nil
     self._transitionManager:clear()
   end
 
@@ -72,7 +77,9 @@ function SceneManager:change(sceneName, params, transitionDirection, transitionO
 
     local nextScene = createScene(self, sceneName)
     self._currentScene = nextScene
+    self._currentSceneName = sceneName
     self._pendingScene = nil
+    self._pendingSceneName = nil
     enterScene(self._currentScene, params)
     return
   end
@@ -81,11 +88,14 @@ function SceneManager:change(sceneName, params, transitionDirection, transitionO
   enterScene(nextScene, params)
 
   self._pendingScene = nextScene
+  self._pendingSceneName = sceneName
   local isStarted = self._transitionManager:start(self._currentScene, nextScene, transitionDirection, transitionOpts)
   if not isStarted then
     exitScene(self._currentScene)
     self._currentScene = self._pendingScene
+    self._currentSceneName = self._pendingSceneName
     self._pendingScene = nil
+    self._pendingSceneName = nil
   end
 end
 
@@ -105,13 +115,19 @@ function SceneManager:completeTransitionIfNeeded()
 
   local fromScene = self._currentScene
   self._currentScene = self._pendingScene
+  self._currentSceneName = self._pendingSceneName
   self._pendingScene = nil
+  self._pendingSceneName = nil
 
   exitScene(fromScene)
 end
 
 function SceneManager:getCurrentScene()
   return self._currentScene
+end
+
+function SceneManager:getCurrentSceneName()
+  return self._currentSceneName
 end
 
 function SceneManager:update(dt)

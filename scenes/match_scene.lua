@@ -19,6 +19,7 @@ local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
 local UIDraw = require("ui.ui_draw")
+local CardAnimator = require("ui.card_animator")
 local EffectManager = require("effects.effect_manager")
 local Abilities = require("abilities")
 local GameMechanics = require("game_mechanics")
@@ -194,6 +195,7 @@ function MatchScene.new(app)
     _cardSelectEndsAtMs = nil,
     _cardOptionButtonList = {},
     _cardConfirmButton = nil,
+    _cardAnimator = nil,
 
     _playingStoneList = {},
     _playingTurnIndex = 1,
@@ -311,6 +313,7 @@ function MatchScene:enter(params)
   self._isCardPickPending = false
   self._cardSelectEndsAtMs = nil
   self._cardOptionButtonList = {}
+  self._cardAnimator = nil
 
   self._playingStoneList = {}
   self._playingTurnIndex = 1
@@ -624,32 +627,77 @@ end
 
 function MatchScene:rebuildCardOptionButtons()
   self._cardOptionButtonList = {}
+  self:ensureCardAnimator()
+end
 
-  local rect = getCardSelectPanelRect(self._boardX, self._boardY)
-  local panelX = rect.x
-  local panelY = rect.y
-  local panelW = rect.w
-  local panelH = rect.h
+function MatchScene:getOpponentDealtCardCount()
+  local myDealCount = #self._myDealtCardList
+  if myDealCount > 0 then
+    return math.max(0, 5 - myDealCount)
+  end
+  if self._myPickCount == 1 then
+    return 3
+  end
+  if self._myPickCount == 2 then
+    return 2
+  end
+  return 0
+end
 
-  for index, cardId in ipairs(self._myDealtCardList) do
-    local button = Button.new({
-      x = panelX + 36,
-      y = panelY + 122 + (index - 1) * 58,
-      w = panelW - 72,
-      h = 44,
-      label = getCardLabel(cardId),
-      onClick = function()
-        self:toggleCardSelection(cardId)
-      end
-    })
-    self._cardOptionButtonList[#self._cardOptionButtonList + 1] = {
-      cardId = cardId,
-      button = button
-    }
+function MatchScene:syncCardAnimatorSelection()
+  if self._cardAnimator then
+    self._cardAnimator:setSelectedCardList(self._selectedCardList)
+  end
+end
+
+function MatchScene:syncCardAnimatorLockState()
+  if not self._cardAnimator then
+    return
   end
 
-  self._cardConfirmButton.x = panelX + (panelW - self._cardConfirmButton.w) * 0.5
-  self._cardConfirmButton.y = panelY + panelH - 108
+  self._cardAnimator:setLockState(self._isMyCardLocked, self._isOpponentCardLocked)
+  if self._isCardPickPending then
+    self._cardAnimator:setWaitingLock(true)
+  end
+  if self._isMyCardLocked and self._isOpponentCardLocked then
+    self._cardAnimator:startCleanup()
+  end
+end
+
+function MatchScene:ensureCardAnimator()
+  if self._cardAnimator then
+    self:syncCardAnimatorSelection()
+    self:syncCardAnimatorLockState()
+    return
+  end
+  if not self:isCardSelectPhase() then
+    return
+  end
+  if self._isMyCardLocked and self._isOpponentCardLocked then
+    return
+  end
+  if #self._myDealtCardList <= 0 then
+    return
+  end
+
+  local myCardDisplayList = {}
+  for _, cardId in ipairs(self._myDealtCardList) do
+    myCardDisplayList[#myCardDisplayList + 1] = {
+      id = cardId,
+      label = getCardLabel(cardId)
+    }
+  end
+  local opponentDealCount = self:getOpponentDealtCardCount()
+
+  self._cardAnimator = CardAnimator.new({
+    boardX = self._boardX,
+    boardY = self._boardY,
+    boardW = Constants.BOARD_W,
+    boardH = Constants.BOARD_H
+  })
+  self._cardAnimator:begin(myCardDisplayList, self._myPickCount, opponentDealCount)
+  self:syncCardAnimatorSelection()
+  self:syncCardAnimatorLockState()
 end
 
 function MatchScene:toggleCardSelection(cardId)
@@ -661,6 +709,7 @@ function MatchScene:toggleCardSelection(cardId)
   end
 
   if removeString(self._selectedCardList, cardId) then
+    self:syncCardAnimatorSelection()
     return
   end
 
@@ -672,6 +721,7 @@ function MatchScene:toggleCardSelection(cardId)
   end
 
   self._selectedCardList[#self._selectedCardList + 1] = cardId
+  self:syncCardAnimatorSelection()
 end
 
 function MatchScene:submitCardPick()
@@ -693,6 +743,9 @@ function MatchScene:submitCardPick()
     picks = cloneStringList(self._selectedCardList)
   })
   self._isCardPickPending = true
+  if self._cardAnimator then
+    self._cardAnimator:setWaitingLock(true)
+  end
   self:setStatus(t("match.status.card_pick_submit"), Constants.COLOR_TEXT_SUB)
 end
 
@@ -1071,6 +1124,8 @@ function MatchScene:applyRoomState(payload)
     end
 
     self:rebuildCardOptionButtons()
+    self:syncCardAnimatorSelection()
+    self:syncCardAnimatorLockState()
   end
 
   local playing = payload.match and payload.match.playing or nil
@@ -1166,6 +1221,16 @@ function MatchScene:applyRoomState(payload)
     self._opponentResultVote = nil
   end
 
+  if payload.phase == Constants.PHASE_CARD_SELECT then
+    self:ensureCardAnimator()
+  elseif payload.phase == Constants.PHASE_PLAYING then
+    if self._cardAnimator and (not self._cardAnimator:isOverlayVisible()) then
+      self._cardAnimator = nil
+    end
+  else
+    self._cardAnimator = nil
+  end
+
   if payload.phase == Constants.PHASE_PLACEMENT_PRIVATE then
     self:setStatus(t("match.status.placement_phase_guide"), Constants.COLOR_TEXT_SUB)
   elseif payload.phase == Constants.PHASE_PLACEMENT_REVEAL then
@@ -1196,6 +1261,16 @@ function MatchScene:applyRoomState(payload)
 end
 
 function MatchScene:update(dt)
+  if self:isCardSelectPhase() and (not self._cardAnimator) then
+    self:ensureCardAnimator()
+  end
+  if self._cardAnimator then
+    self._cardAnimator:update(dt)
+    if not self._cardAnimator:isOverlayVisible() then
+      self._cardAnimator = nil
+    end
+  end
+
   if self._effectManager then
     self._effectManager:update(dt)
   end
@@ -1413,51 +1488,76 @@ function MatchScene:drawCardSelectPanel(mouseX, mouseY)
   love.graphics.setColor(Constants.COLOR_OVERLAY_DIM)
   love.graphics.rectangle("fill", self._boardX, self._boardY, Constants.BOARD_W, Constants.BOARD_H, 8, 8)
 
-  UIDraw.drawPanel({
-    x = panelX,
-    y = panelY,
-    w = panelW,
-    h = panelH
-  }, Constants.COLOR_PANEL, Constants.COLOR_PANEL_BORDER, nil)
+  self:ensureCardAnimator()
+  local cardStage = self._cardAnimator and self._cardAnimator:getStage() or nil
+  if self._cardAnimator and self._cardAnimator:isSelectionInteractive() then
+    self._cardAnimator:setHoverCardId(self._cardAnimator:getCardIdAtPoint(mouseX, mouseY))
+  elseif self._cardAnimator then
+    self._cardAnimator:setHoverCardId(nil)
+  end
 
-  love.graphics.setFont(FontManager.getFont("ui"))
-  love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf(t("match.card_select_title"), panelX, panelY + 22, panelW, "center")
-
-  love.graphics.setFont(FontManager.getFont("small"))
-  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+  if self._cardAnimator then
+    self._cardAnimator:draw()
+  end
 
   local remainSec = 0
   if self._cardSelectEndsAtMs then
     remainSec = TimeUtils.getRemainingSeconds(self._cardSelectEndsAtMs)
   end
 
-  love.graphics.printf(
-    t("match.info.card_select_line", {
-      pickCount = self._myPickCount,
-      selectedCount = #self._selectedCardList,
-      remainSec = remainSec
-    }),
-    panelX,
-    panelY + 56,
-    panelW,
-    "center"
-  )
+  local messagePanelW = math.min(panelW - 70, 460)
+  local messagePanelH = 88
+  local messagePanelX = panelX + (panelW - messagePanelW) * 0.5
+  local messagePanelY = panelY + 16
+  UIDraw.drawPanel({
+    x = messagePanelX,
+    y = messagePanelY,
+    w = messagePanelW,
+    h = messagePanelH
+  }, Constants.COLOR_PANEL, Constants.COLOR_PANEL_BORDER, nil)
 
-  for _, entry in ipairs(self._cardOptionButtonList) do
-    local isSelected = containsString(self._selectedCardList, entry.cardId)
-    entry.button.color = isSelected and Constants.COLOR_BUTTON_SELECTED_ALT or Constants.COLOR_BUTTON
-    entry.button.isEnabled = not self._isMyCardLocked and not self._isCardPickPending
-    entry.button:draw(mouseX, mouseY)
+  local titleText = t("match.card_select_title")
+  if cardStage == "SELECT" or cardStage == "WAIT_LOCK" or cardStage == "CLEANUP" then
+    titleText = t("match.card_select_prompt", {
+      pickCount = self._myPickCount
+    })
+  end
+  if self._isMyCardLocked or self._isCardPickPending then
+    titleText = t("match.card_select_waiting")
   end
 
-  self._cardConfirmButton.isEnabled = (not self._isMyCardLocked) and (not self._isCardPickPending) and (#self._selectedCardList == self._myPickCount)
-  self._cardConfirmButton:draw(mouseX, mouseY)
+  love.graphics.setFont(FontManager.getFont("ui"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.printf(titleText, messagePanelX + 12, messagePanelY + 18, messagePanelW - 24, "center")
+
+  love.graphics.setFont(FontManager.getFont("small"))
+  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+  love.graphics.printf(t("match.card_select_selected", {
+    selectedCount = #self._selectedCardList,
+    pickCount = self._myPickCount
+  }), messagePanelX + 12, messagePanelY + 50, messagePanelW - 24, "left")
+  love.graphics.printf(t("match.info.card_select_line", {
+    pickCount = self._myPickCount,
+    selectedCount = #self._selectedCardList,
+    remainSec = remainSec
+  }), messagePanelX + 12, messagePanelY + 50, messagePanelW - 24, "right")
+
+  local shouldShowConfirm = cardStage == "SELECT" or cardStage == "WAIT_LOCK"
+  if shouldShowConfirm then
+    self._cardConfirmButton.x = self._boardX + Constants.BOARD_W - self._cardConfirmButton.w - 20
+    self._cardConfirmButton.y = self._boardY + Constants.BOARD_H - self._cardConfirmButton.h - 16
+    self._cardConfirmButton.isEnabled = (not self._isMyCardLocked)
+      and (not self._isCardPickPending)
+      and (#self._selectedCardList == self._myPickCount)
+      and self._cardAnimator
+      and self._cardAnimator:isSelectionInteractive()
+    self._cardConfirmButton:draw(mouseX, mouseY)
+  end
 
   local lockText = self._isMyCardLocked and t("match.info.lock_done") or t("match.info.lock_wait")
   local opponentText = self._isOpponentCardLocked and t("match.info.opponent_done") or t("match.info.opponent_selecting")
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
-  love.graphics.printf(lockText .. " | " .. opponentText, panelX, panelY + panelH - 40, panelW, "center")
+  love.graphics.printf(lockText .. " | " .. opponentText, panelX, panelY + panelH - 72, panelW, "center")
 end
 
 function MatchScene:drawResultPanel(mouseX, mouseY)
@@ -1590,12 +1690,20 @@ function MatchScene:draw()
     self:drawPlacementInfo()
   end
 
+  if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
+    self:drawCardSelectPanel(mouseX, mouseY)
+  end
+
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(self._statusColor)
   love.graphics.printf(self._statusText, 0, 690, Constants.BASE_WORLD_W, "center")
 end
 
 function MatchScene:mousepressed(mouseX, mouseY, button)
+  if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
+    return
+  end
+
   if self:isPlayingPhase() and button == 2 then
     if self._pendingCardTargetId then
       self:cancelPendingCardTarget()
@@ -1610,9 +1718,11 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
   end
 
   if self:isCardSelectPhase() then
-    for _, entry in ipairs(self._cardOptionButtonList) do
-      if entry.button:isHovered(mouseX, mouseY) and entry.button.isEnabled then
-        entry.button:onClick()
+    self:ensureCardAnimator()
+    if self._cardAnimator and self._cardAnimator:isSelectionInteractive() then
+      local clickedCardId = self._cardAnimator:getCardIdAtPoint(mouseX, mouseY)
+      if clickedCardId then
+        self:toggleCardSelection(clickedCardId)
         return
       end
     end
@@ -1665,6 +1775,9 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
 end
 
 function MatchScene:mousereleased(mouseX, mouseY, button)
+  if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
+    return
+  end
   if button ~= 1 then
     return
   end
@@ -1680,6 +1793,9 @@ function MatchScene:textedited(_text, _start, _length)
 end
 
 function MatchScene:keypressed(key)
+  if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
+    return
+  end
   if key == "escape" and self._pendingCardTargetId then
     self:cancelPendingCardTarget()
     return
@@ -1743,6 +1859,8 @@ function MatchScene:onWsEnvelope(envelope)
     if type(payload.selectEndsAtMs) == "number" then
       self._cardSelectEndsAtMs = payload.selectEndsAtMs
     end
+    self:syncCardAnimatorSelection()
+    self:syncCardAnimatorLockState()
     self:setStatus(t("match.status.cards_dealt"), Constants.COLOR_TEXT_SUB)
     return
   end
@@ -1756,12 +1874,18 @@ function MatchScene:onWsEnvelope(envelope)
       if type(payload.pickedCards) == "table" then
         self._myPickedCardList = cloneStringList(payload.pickedCards)
         self._selectedCardList = cloneStringList(payload.pickedCards)
+        self:syncCardAnimatorSelection()
         self:rebuildPlayingCardButtons()
       end
+      self:syncCardAnimatorLockState()
       self:setStatus(t("match.status.my_cards_locked"), Constants.COLOR_TEXT_SUB)
     else
       self._isOpponentCardLocked = true
+      self:syncCardAnimatorLockState()
       self:setStatus(t("match.status.opponent_cards_locked"), Constants.COLOR_TEXT_SUB)
+    end
+    if self._isMyCardLocked and self._isOpponentCardLocked then
+      self:syncCardAnimatorLockState()
     end
     return
   end
@@ -1939,6 +2063,9 @@ function MatchScene:onWsEnvelope(envelope)
     end
     if payload.code == "invalid_card_pick" or payload.code == "already_locked" then
       self._isCardPickPending = false
+      if self._cardAnimator then
+        self._cardAnimator:setWaitingLock(false)
+      end
     end
     if payload.code == "card_already_used" or payload.code == "card_use_window_closed" or payload.code == "card_not_owned" or payload.code == "card_not_implemented" or payload.code == "invalid_card_id" or payload.code == "invalid_card_target" then
       self._isCardUsePending = false
