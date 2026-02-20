@@ -33,6 +33,7 @@ interface AgileCardRule {
 
 interface CardRules {
   RULES_VERSION: number;
+  card_pool: string[];
   cards: {
     reinforcement: ReinforcementCardRule;
     shockwave: ShockwaveCardRule;
@@ -44,6 +45,7 @@ interface CardRules {
 
 const DEFAULT_CARD_RULES: CardRules = {
   RULES_VERSION: 1,
+  card_pool: ["reinforcement", "shockwave", "invincible", "rockfall", "agile"],
   cards: {
     reinforcement: {
       enabled: true,
@@ -95,6 +97,32 @@ function readObject(source: unknown): Record<string, unknown> {
   return source as Record<string, unknown>;
 }
 
+function readStringList(source: Record<string, unknown>, key: string, fallback: string[]): string[] {
+  const rawValue = source[key];
+  if (!Array.isArray(rawValue)) {
+    return [...fallback];
+  }
+
+  const sanitized: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of rawValue) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const normalized = entry.trim();
+    if (normalized.length === 0 || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    sanitized.push(normalized);
+  }
+
+  if (sanitized.length <= 0) {
+    return [...fallback];
+  }
+  return sanitized;
+}
+
 function sanitizeCardRules(raw: unknown): CardRules {
   const source = readObject(raw);
   const cards = readObject(source.cards);
@@ -107,6 +135,7 @@ function sanitizeCardRules(raw: unknown): CardRules {
 
   return {
     RULES_VERSION: readNumber(source, "RULES_VERSION", DEFAULT_CARD_RULES.RULES_VERSION),
+    card_pool: readStringList(source, "card_pool", DEFAULT_CARD_RULES.card_pool),
     cards: {
       reinforcement: {
         enabled: readBoolean(reinforcementRaw, "enabled", DEFAULT_CARD_RULES.cards.reinforcement.enabled),
@@ -163,6 +192,8 @@ function sanitizeCardRules(raw: unknown): CardRules {
 }
 
 export const CARD_RULES = sanitizeCardRules(sharedCardRulesJson);
+export const CARD_POOL = [...CARD_RULES.card_pool];
+export const CARD_POOL_SET = new Set<string>(CARD_POOL);
 
 export function isTurnCardEnabled(cardId: string): boolean {
   if (cardId === "reinforcement") {

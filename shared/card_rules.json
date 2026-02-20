@@ -1,5 +1,12 @@
 {
   "RULES_VERSION": 1,
+  "card_pool": [
+    "reinforcement",
+    "shockwave",
+    "invincible",
+    "rockfall",
+    "agile"
+  ],
   "cards": {
     "reinforcement": {
       "enabled": true,

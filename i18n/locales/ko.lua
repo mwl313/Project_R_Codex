@@ -63,6 +63,7 @@ local LocaleKo = {
     current_nickname = "현재 닉네임: {nickname}",
     menu = {
       play = "플레이",
+      debug_menu = "디버그 메뉴",
       single_player = "싱글플레이어",
       create_room = "방 생성",
       search_room = "방 찾기",
@@ -129,6 +130,31 @@ local LocaleKo = {
       creating_room = "방 생성 요청 중..."
     }
   },
+  debug_menu = {
+    title = "Debug Menu",
+    subtitle = "씬/연출 수동 테스트",
+    action = {
+      go_lobby = "로비 씬",
+      go_play = "플레이 씬",
+      go_multiplayer = "멀티플레이어 씬",
+      go_room_search = "방 찾기 씬",
+      waiting_mock = "대기방(모의 상태)",
+      coin_first = "코인토스(선공)",
+      coin_second = "코인토스(후공)",
+      match_placement = "매치: 배치 단계",
+      match_card_first = "매치: 카드선택(1장 선택)",
+      match_card_second = "매치: 카드선택(2장 선택)",
+      match_playing = "매치: 턴 플레이 단계",
+      match_card_zone = "매치: 카드존 테스트",
+      match_result = "매치: 결과 단계",
+      single_dummy = "싱글 더미 씬"
+    },
+    status = {
+      default = "디버그 메뉴 준비 완료 (F7 단축키 지원)",
+      opened_from = "디버그 메뉴 열림: {scene}",
+      waiting_mock = "모의 대기방 상태로 진입"
+    }
+  },
   guide = {
     title = "가이드"
   },
@@ -171,11 +197,18 @@ local LocaleKo = {
     online = "online",
     offline = "offline",
     chat_placeholder = "채팅 입력 (Enter 전송)",
+    button = {
+      ready = "준비하기",
+      waiting = "대기중"
+    },
     status = {
       ws_waiting = "WS 연결 대기 중...",
       left_room = "대기방에서 나왔습니다.",
       start_condition_not_met = "게임 시작 조건이 충족되지 않았습니다.",
       start_request_sent = "게임 시작 요청 전송...",
+      ready_request_sent = "준비 완료 요청 전송...",
+      guest_not_ready = "게스트가 준비되지 않았습니다.",
+      already_ready = "이미 준비 완료 상태입니다.",
       no_room_code = "복사할 룸 코드가 없습니다.",
       clipboard_not_available = "클립보드 기능을 사용할 수 없습니다.",
       room_copy_failed = "룸 코드 복사 실패: {error}",
@@ -191,7 +224,8 @@ local LocaleKo = {
     },
     system = {
       player_joined = "[SYSTEM] player {playerIndex} joined",
-      player_left = "[SYSTEM] player {playerIndex} left ({reason})"
+      player_left = "[SYSTEM] player {playerIndex} left ({reason})",
+      guest_ready = "{nickname}님이 준비완료되었습니다."
     },
     chat_line = "[{nickname}] {text}"
   },
@@ -227,7 +261,20 @@ local LocaleKo = {
     phase_label = "현재 Phase: {phase}",
     turn_card_title = "TURN 카드",
     card_select_title = "카드 선택",
+    card_select_prompt = "초능력 카드를 {pickCount}장 고르세요",
+    card_select_waiting = "상대 선택 대기중...",
+    card_select_selected = "{selectedCount}/{pickCount} 선택",
     power_label = "Power {power}",
+    hand = {
+      drop_prompt = "가운데 영역에 카드를 내려놓아 사용"
+    },
+    chat = {
+      toggle_label = "채팅",
+      panel_title = "인게임 채팅",
+      input_placeholder = "메시지를 입력하세요 (Enter 전송)",
+      line = "[{nickname}] {text}",
+      system_denied = "[SYSTEM] 채팅 거부: {reason}"
+    },
     button = {
       submit_placement = "배치 제출",
       confirm_selection = "선택 확정",
@@ -251,6 +298,7 @@ local LocaleKo = {
       card_pick_need_exact = "{count}장을 선택 후 확정하세요.",
       card_pick_submit = "카드 선택 확정 요청 전송...",
       cannot_use_card_now = "지금은 카드를 사용할 수 없습니다.",
+      card_already_used_turn = "이번 턴에는 이미 카드를 사용했습니다.",
       card_use_submit = "카드 사용 요청 전송...",
       card_target_cancel = "카드 대상 선택을 취소했습니다.",
       card_target_cannot_place = "해당 위치에는 배치할 수 없습니다.",
@@ -328,6 +376,7 @@ local LocaleKo = {
       state_shot_pending = "발사 요청 전송 중",
       turn_line = "턴 {turnIndex} | {turnOwner} | 남은 시간: {remainSec}s | 샷 {shotUsed}/{shotBudget} | 카드사용:{hasCardUsed} | 상태: {stateText}",
       card_select_line = "선택 수: {pickCount}장 / 선택됨: {selectedCount}장 / 남은 시간: {remainSec}s",
+      card_select_remaining_only = "남은 시간: {remainSec}s",
       lock_done = "내 선택 확정 완료",
       lock_wait = "내 선택 대기중",
       opponent_done = "상대 확정 완료",

@@ -12,10 +12,13 @@
 - love.draw()
 - love.mousepressed(x, y, button)
 - love.mousereleased(x, y, button)
+- love.mousemoved(x, y, dx, dy)
+- love.wheelmoved(x, y)
 - love.keypressed(key)
 - love.textinput(text)
 - love.textedited(text, start, length)
 - love.resize(w, h)
+- love.focus(focused)
 - love.quit()
 
 주의:
@@ -59,6 +62,18 @@ function love.mousereleased(x, y, button)
   app:mousereleased(x, y, button)
 end
 
+function love.mousemoved(x, y, dx, dy)
+  if app and app.mousemoved then
+    app:mousemoved(x, y, dx, dy)
+  end
+end
+
+function love.wheelmoved(x, y)
+  if app and app.wheelmoved then
+    app:wheelmoved(x, y)
+  end
+end
+
 function love.keypressed(key)
   app:keypressed(key)
 end
@@ -73,6 +88,12 @@ end
 
 function love.resize(w, h)
   app:resize(w, h)
+end
+
+function love.focus(focused)
+  if app and app.focus then
+    app:focus(focused)
+  end
 end
 
 function love.quit()

@@ -10,6 +10,8 @@
 외부에서 사용 가능한 함수:
 - Utf8Utils.removeLast(text)
 - Utf8Utils.truncateToLength(text, maxChars)
+- Utf8Utils.length(text)
+- Utf8Utils.splitAt(text, charIndex)
 
 주의:
 - utf8 모듈이 없는 환경에서도 절대 크래시하지 않아야 한다
@@ -82,6 +84,44 @@ function Utf8Utils.truncateToLength(text, maxChars)
   end
 
   return truncateWithFallback(textValue, safeMax)
+end
+
+function Utf8Utils.length(text)
+  local textValue = type(text) == "string" and text or ""
+  if textValue == "" then
+    return 0
+  end
+
+  if utfModule and type(utfModule.len) == "function" then
+    local isOk, lengthValue = pcall(utfModule.len, textValue)
+    if isOk and type(lengthValue) == "number" then
+      return math.max(0, lengthValue)
+    end
+  end
+
+  return #textValue
+end
+
+function Utf8Utils.splitAt(text, charIndex)
+  local textValue = type(text) == "string" and text or ""
+  local totalLength = Utf8Utils.length(textValue)
+  local safeIndex = tonumber(charIndex) or 0
+  safeIndex = math.floor(safeIndex)
+  if safeIndex <= 0 then
+    return "", textValue
+  end
+  if safeIndex >= totalLength then
+    return textValue, ""
+  end
+
+  if utfModule and type(utfModule.offset) == "function" then
+    local isOk, byteOffset = pcall(utfModule.offset, textValue, safeIndex + 1)
+    if isOk and type(byteOffset) == "number" then
+      return string.sub(textValue, 1, byteOffset - 1), string.sub(textValue, byteOffset)
+    end
+  end
+
+  return string.sub(textValue, 1, safeIndex), string.sub(textValue, safeIndex + 1)
 end
 
 return Utf8Utils

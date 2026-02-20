@@ -8,6 +8,8 @@
 
 외부에서 사용 가능한 함수:
 - CardRules.getRulesVersion()
+- CardRules.getCardPool()
+- CardRules.getCardPoolCount()
 - CardRules.isTurnCardEnabled(cardId)
 - CardRules.getReinforcementRule()
 - CardRules.getShockwaveRule()
@@ -22,6 +24,7 @@ local CardRules = {}
 
 local DEFAULT_RULES = {
   RULES_VERSION = 1,
+  card_pool = { "reinforcement", "shockwave", "invincible", "rockfall", "agile" },
   cards = {
     reinforcement = {
       enabled = true,
@@ -88,6 +91,25 @@ local function toTable(value)
   return {}
 end
 
+local function toStringList(value, fallback)
+  if type(value) ~= "table" then
+    return fallback
+  end
+
+  local seen = {}
+  local sanitized = {}
+  for _, entry in ipairs(value) do
+    if type(entry) == "string" and entry ~= "" and not seen[entry] then
+      seen[entry] = true
+      sanitized[#sanitized + 1] = entry
+    end
+  end
+  if #sanitized <= 0 then
+    return fallback
+  end
+  return sanitized
+end
+
 local function sanitizeRules(raw)
   local source = toTable(raw)
   local cards = toTable(source.cards)
@@ -100,6 +122,7 @@ local function sanitizeRules(raw)
 
   return {
     RULES_VERSION = toFiniteNumber(source.RULES_VERSION, DEFAULT_RULES.RULES_VERSION),
+    card_pool = toStringList(source.card_pool, DEFAULT_RULES.card_pool),
     cards = {
       reinforcement = {
         enabled = toBoolean(reinforcement.enabled, DEFAULT_RULES.cards.reinforcement.enabled),
@@ -154,6 +177,18 @@ local SANITIZED_RULES = sanitizeRules(loaded)
 
 function CardRules.getRulesVersion()
   return SANITIZED_RULES.RULES_VERSION
+end
+
+function CardRules.getCardPool()
+  local copied = {}
+  for _, cardId in ipairs(SANITIZED_RULES.card_pool or {}) do
+    copied[#copied + 1] = cardId
+  end
+  return copied
+end
+
+function CardRules.getCardPoolCount()
+  return #(SANITIZED_RULES.card_pool or {})
 end
 
 function CardRules.isTurnCardEnabled(cardId)

@@ -12,6 +12,8 @@
 - RenderScale:beginDraw()
 - RenderScale:endDraw()
 - RenderScale:toWorld(screenX, screenY)
+- RenderScale:toWorldDelta(screenDx, screenDy)
+- RenderScale:toScreen(worldX, worldY)
 
 주의:
 - UI hit-test는 반드시 toWorld 결과를 사용한다
@@ -55,6 +57,16 @@ function RenderScale:toWorld(screenX, screenY)
   local worldX = (screenX - self._offsetX) / self._scale
   local worldY = (screenY - self._offsetY) / self._scale
   return worldX, worldY
+end
+
+function RenderScale:toWorldDelta(screenDx, screenDy)
+  return screenDx / self._scale, screenDy / self._scale
+end
+
+function RenderScale:toScreen(worldX, worldY)
+  local screenX = self._offsetX + worldX * self._scale
+  local screenY = self._offsetY + worldY * self._scale
+  return screenX, screenY
 end
 
 return RenderScale

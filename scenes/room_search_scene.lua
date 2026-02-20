@@ -14,6 +14,7 @@
 ]]
 
 local Constants = require("constants")
+local Config = require("config")
 local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
@@ -83,7 +84,7 @@ function RoomSearchScene.new(app)
     end
   })
   instance._backButton = BackButton.new(t("common.button.back"), function()
-    instance._app:goScene(instance._backScene)
+    instance._app:goScene(instance._backScene, nil, Config.TRANSITION_BACK)
   end)
 
   instance._roomCodeInput.onEnter = function()
@@ -220,7 +221,7 @@ function RoomSearchScene:keypressed(key)
     return
   end
   if key == "escape" then
-    self._app:goScene(self._backScene)
+    self._app:goScene(self._backScene, nil, Config.TRANSITION_BACK)
   end
 end
 

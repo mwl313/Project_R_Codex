@@ -63,6 +63,7 @@ local LocaleEn = {
     current_nickname = "Nickname: {nickname}",
     menu = {
       play = "Play",
+      debug_menu = "Debug Menu",
       single_player = "Single Player",
       create_room = "Create Room",
       search_room = "Find Room",
@@ -129,6 +130,31 @@ local LocaleEn = {
       creating_room = "Creating room..."
     }
   },
+  debug_menu = {
+    title = "Debug Menu",
+    subtitle = "Manual scene/effect test launcher",
+    action = {
+      go_lobby = "Lobby Scene",
+      go_play = "Play Scene",
+      go_multiplayer = "Multiplayer Scene",
+      go_room_search = "Room Search Scene",
+      waiting_mock = "Waiting Room (Mock)",
+      coin_first = "Coin Toss (First)",
+      coin_second = "Coin Toss (Second)",
+      match_placement = "Match: Placement Phase",
+      match_card_first = "Match: Card Select (Pick 1)",
+      match_card_second = "Match: Card Select (Pick 2)",
+      match_playing = "Match: Playing Phase",
+      match_card_zone = "Match: Card Zone Test",
+      match_result = "Match: Result Phase",
+      single_dummy = "Single Dummy Scene"
+    },
+    status = {
+      default = "Debug menu ready (F7 shortcut available)",
+      opened_from = "Opened debug menu from: {scene}",
+      waiting_mock = "Entered waiting room mock state"
+    }
+  },
   guide = {
     title = "Guide"
   },
@@ -171,11 +197,18 @@ local LocaleEn = {
     online = "online",
     offline = "offline",
     chat_placeholder = "Type chat (Enter to send)",
+    button = {
+      ready = "Ready",
+      waiting = "Waiting"
+    },
     status = {
       ws_waiting = "Waiting for WS connection...",
       left_room = "Left waiting room.",
       start_condition_not_met = "Match start conditions are not met.",
       start_request_sent = "Match start request sent...",
+      ready_request_sent = "Ready request sent...",
+      guest_not_ready = "Guest is not ready.",
+      already_ready = "Already marked as ready.",
       no_room_code = "No room code to copy.",
       clipboard_not_available = "Clipboard is not available.",
       room_copy_failed = "Failed to copy room code: {error}",
@@ -191,7 +224,8 @@ local LocaleEn = {
     },
     system = {
       player_joined = "[SYSTEM] player {playerIndex} joined",
-      player_left = "[SYSTEM] player {playerIndex} left ({reason})"
+      player_left = "[SYSTEM] player {playerIndex} left ({reason})",
+      guest_ready = "{nickname} is ready."
     },
     chat_line = "[{nickname}] {text}"
   },
@@ -227,7 +261,20 @@ local LocaleEn = {
     phase_label = "Current Phase: {phase}",
     turn_card_title = "TURN Card",
     card_select_title = "Card Selection",
+    card_select_prompt = "Choose {pickCount} ability card(s)",
+    card_select_waiting = "Waiting for opponent card lock...",
+    card_select_selected = "Selected {selectedCount}/{pickCount}",
     power_label = "Power {power}",
+    hand = {
+      drop_prompt = "Drop a card in the center zone to use it"
+    },
+    chat = {
+      toggle_label = "Chat",
+      panel_title = "In-Game Chat",
+      input_placeholder = "Type a message (Enter to send)",
+      line = "[{nickname}] {text}",
+      system_denied = "[SYSTEM] Chat denied: {reason}"
+    },
     button = {
       submit_placement = "Submit Placement",
       confirm_selection = "Confirm Selection",
@@ -251,6 +298,7 @@ local LocaleEn = {
       card_pick_need_exact = "Select exactly {count} card(s) before confirming.",
       card_pick_submit = "Sending card selection...",
       cannot_use_card_now = "Cannot use card right now.",
+      card_already_used_turn = "You already used a card this turn.",
       card_use_submit = "Sending card use request...",
       card_target_cancel = "Card target selection cancelled.",
       card_target_cannot_place = "Cannot place card target at this position.",
@@ -328,6 +376,7 @@ local LocaleEn = {
       state_shot_pending = "Sending shot request",
       turn_line = "Turn {turnIndex} | {turnOwner} | Remaining: {remainSec}s | Shot {shotUsed}/{shotBudget} | Card used:{hasCardUsed} | State: {stateText}",
       card_select_line = "Need {pickCount} card(s) / Selected {selectedCount} / Remaining {remainSec}s",
+      card_select_remaining_only = "Remaining: {remainSec}s",
       lock_done = "My selection locked",
       lock_wait = "Waiting to lock my selection",
       opponent_done = "Opponent locked",

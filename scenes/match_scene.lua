@@ -14,14 +14,19 @@
 ]]
 
 local Constants = require("constants")
+local Config = require("config")
 local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
 local UIDraw = require("ui.ui_draw")
+local CardAnimator = require("ui.card_animator")
+local CardHandBar = require("ui.card_hand_bar")
+local InGameChat = require("ui.in_game_chat")
 local EffectManager = require("effects.effect_manager")
 local Abilities = require("abilities")
 local GameMechanics = require("game_mechanics")
 local TimeUtils = require("utils.time_utils")
+local InputCaptureGuard = require("utils.input_capture_guard")
 
 local MatchScene = {}
 MatchScene.__index = MatchScene
@@ -118,6 +123,9 @@ local function createDefaultRoomState()
         myDealtCards = {},
         myPickedCards = {},
         myPickCount = 0,
+        myDealtCount = 0,
+        opponentDealtCount = 0,
+        totalPoolCount = 0,
         myLocked = false,
         opponentLocked = false,
         selectEndsAtMs = nil
@@ -165,6 +173,65 @@ local function getCardLabel(cardId)
   return Abilities.getCardLabel(cardId)
 end
 
+local function clamp(value, minValue, maxValue)
+  if value < minValue then
+    return minValue
+  end
+  if value > maxValue then
+    return maxValue
+  end
+  return value
+end
+
+local function intersectSegmentWithWorldRect(fromX, fromY, toX, toY)
+  local minX = 0
+  local minY = 0
+  local maxX = Constants.BASE_WORLD_W
+  local maxY = Constants.BASE_WORLD_H
+
+  if toX >= minX and toX <= maxX and toY >= minY and toY <= maxY then
+    return toX, toY
+  end
+
+  local dx = toX - fromX
+  local dy = toY - fromY
+  local bestT = nil
+  local bestX = nil
+  local bestY = nil
+
+  local function tryHit(t, x, y)
+    if t < 0 or t > 1 then
+      return
+    end
+    if x < minX or x > maxX or y < minY or y > maxY then
+      return
+    end
+    if bestT == nil or t < bestT then
+      bestT = t
+      bestX = x
+      bestY = y
+    end
+  end
+
+  if dx ~= 0 then
+    local tLeft = (minX - fromX) / dx
+    tryHit(tLeft, minX, fromY + dy * tLeft)
+    local tRight = (maxX - fromX) / dx
+    tryHit(tRight, maxX, fromY + dy * tRight)
+  end
+  if dy ~= 0 then
+    local tTop = (minY - fromY) / dy
+    tryHit(tTop, fromX + dx * tTop, minY)
+    local tBottom = (maxY - fromY) / dy
+    tryHit(tBottom, fromX + dx * tBottom, maxY)
+  end
+
+  if bestX and bestY then
+    return bestX, bestY
+  end
+  return clamp(toX, minX, maxX), clamp(toY, minY, maxY)
+end
+
 function MatchScene.new(app)
   local boardX = (Constants.BASE_WORLD_W - Constants.BOARD_W) * 0.5
   local boardY = (Constants.BASE_WORLD_H - Constants.BOARD_H) * 0.5
@@ -176,6 +243,7 @@ function MatchScene.new(app)
     _statusColor = Constants.COLOR_TEXT_SUB,
     _boardX = boardX,
     _boardY = boardY,
+    _forcedLocalRole = nil,
 
     _myStoneList = {},
     _isPlacementSubmitted = false,
@@ -187,12 +255,16 @@ function MatchScene.new(app)
     _myPickedCardList = {},
     _selectedCardList = {},
     _myPickCount = 0,
+    _myDealtCardCount = 0,
+    _opponentDealtCardCount = 0,
+    _cardPoolCount = 0,
     _isMyCardLocked = false,
     _isOpponentCardLocked = false,
     _isCardPickPending = false,
     _cardSelectEndsAtMs = nil,
     _cardOptionButtonList = {},
     _cardConfirmButton = nil,
+    _cardAnimator = nil,
 
     _playingStoneList = {},
     _playingTurnIndex = 1,
@@ -213,7 +285,14 @@ function MatchScene.new(app)
     _pendingCardTargetId = nil,
     _isSurrenderPending = false,
     _isAimDragging = false,
+    _isAimRelativeMode = false,
     _aimStoneId = nil,
+    _aimStartWorldX = nil,
+    _aimStartWorldY = nil,
+    _aimAccumWorldDX = 0,
+    _aimAccumWorldDY = 0,
+    _aimLastMouseWorldX = nil,
+    _aimLastMouseWorldY = nil,
     _lastAutoSnapshotTurnIndex = nil,
     _stoneVelocityMap = {},
     _simAccumulatorSec = 0,
@@ -221,6 +300,10 @@ function MatchScene.new(app)
     _isShotSimulating = false,
     _shouldSendSnapshotAfterSim = false,
     _playingCardButtonList = {},
+    _playingCardHandBar = nil,
+    _inGameChat = nil,
+    _optimisticConsumedCardIdSet = {},
+    _pendingDeclaredTargetCardId = nil,
     _surrenderButton = nil,
     _resultRematchButton = nil,
     _resultLobbyButton = nil,
@@ -289,12 +372,27 @@ function MatchScene.new(app)
       instance:requestResultVote("to_lobby")
     end
   })
+  instance._playingCardHandBar = CardHandBar.new({
+    boardCenterX = boardX + Constants.BOARD_W * 0.5,
+    boardCenterY = boardY + Constants.BOARD_H * 0.5,
+    canUseCard = function(cardId)
+      return instance:canUseCardInTurn(cardId)
+    end,
+    onCardDeclared = function(cardId)
+      return instance:handleHandCardDeclared(cardId)
+    end,
+    onCardBlocked = function(_cardId)
+      instance:handleHandCardBlocked()
+    end
+  })
+  instance._inGameChat = InGameChat.new(app)
 
   return instance
 end
 
 function MatchScene:enter(params)
   self._roomState = createDefaultRoomState()
+  self._forcedLocalRole = params and params.localRole or nil
 
   self._myStoneList = {}
   self._isPlacementSubmitted = false
@@ -305,11 +403,15 @@ function MatchScene:enter(params)
   self._myPickedCardList = {}
   self._selectedCardList = {}
   self._myPickCount = 0
+  self._myDealtCardCount = 0
+  self._opponentDealtCardCount = 0
+  self._cardPoolCount = 0
   self._isMyCardLocked = false
   self._isOpponentCardLocked = false
   self._isCardPickPending = false
   self._cardSelectEndsAtMs = nil
   self._cardOptionButtonList = {}
+  self._cardAnimator = nil
 
   self._playingStoneList = {}
   self._playingTurnIndex = 1
@@ -330,7 +432,14 @@ function MatchScene:enter(params)
   self._pendingCardTargetId = nil
   self._isSurrenderPending = false
   self._isAimDragging = false
+  self._isAimRelativeMode = false
   self._aimStoneId = nil
+  self._aimStartWorldX = nil
+  self._aimStartWorldY = nil
+  self._aimAccumWorldDX = 0
+  self._aimAccumWorldDY = 0
+  self._aimLastMouseWorldX = nil
+  self._aimLastMouseWorldY = nil
   self._lastAutoSnapshotTurnIndex = nil
   self._stoneVelocityMap = {}
   self._simAccumulatorSec = 0
@@ -338,9 +447,14 @@ function MatchScene:enter(params)
   self._isShotSimulating = false
   self._shouldSendSnapshotAfterSim = false
   self._playingCardButtonList = {}
+  self._optimisticConsumedCardIdSet = {}
+  self._pendingDeclaredTargetCardId = nil
   self._isResultVotePending = false
   self._myResultVote = nil
   self._opponentResultVote = nil
+  if self._inGameChat then
+    self._inGameChat:reset()
+  end
   if self._effectManager then
     self._effectManager:clear()
   end
@@ -348,6 +462,7 @@ function MatchScene:enter(params)
   if params and type(params.roomState) == "table" then
     self:applyRoomState(params.roomState)
   end
+  self:refreshPlayingCardHand()
 end
 
 function MatchScene:setStatus(statusText, statusColor)
@@ -356,6 +471,9 @@ function MatchScene:setStatus(statusText, statusColor)
 end
 
 function MatchScene:getMyRole()
+  if self._forcedLocalRole == "host" or self._forcedLocalRole == "guest" then
+    return self._forcedLocalRole
+  end
   local session = self._app:getSession()
   return session and session.role or nil
 end
@@ -381,6 +499,11 @@ end
 
 function MatchScene:isPlayingPhase()
   return self._roomState.phase == Constants.PHASE_PLAYING
+end
+
+function MatchScene:isInGameChatAvailable()
+  local phase = self._roomState.phase
+  return phase == Constants.PHASE_PLAYING or phase == Constants.PHASE_RESULT
 end
 
 function MatchScene:isMyTurn()
@@ -623,32 +746,92 @@ end
 
 function MatchScene:rebuildCardOptionButtons()
   self._cardOptionButtonList = {}
+  self:ensureCardAnimator()
+end
 
-  local rect = getCardSelectPanelRect(self._boardX, self._boardY)
-  local panelX = rect.x
-  local panelY = rect.y
-  local panelW = rect.w
-  local panelH = rect.h
-
-  for index, cardId in ipairs(self._myDealtCardList) do
-    local button = Button.new({
-      x = panelX + 36,
-      y = panelY + 122 + (index - 1) * 58,
-      w = panelW - 72,
-      h = 44,
-      label = getCardLabel(cardId),
-      onClick = function()
-        self:toggleCardSelection(cardId)
-      end
-    })
-    self._cardOptionButtonList[#self._cardOptionButtonList + 1] = {
-      cardId = cardId,
-      button = button
-    }
+function MatchScene:getOpponentDealtCardCount()
+  if type(self._opponentDealtCardCount) == "number" and self._opponentDealtCardCount >= 0 then
+    return self._opponentDealtCardCount
   end
 
-  self._cardConfirmButton.x = panelX + (panelW - self._cardConfirmButton.w) * 0.5
-  self._cardConfirmButton.y = panelY + panelH - 108
+  local myDealCount = #self._myDealtCardList
+  local totalPoolCount = tonumber(self._cardPoolCount) or 0
+  if totalPoolCount > 0 then
+    return math.max(0, math.floor(totalPoolCount) - myDealCount)
+  end
+
+  if myDealCount == 2 then
+    return 3
+  end
+  if myDealCount == 3 then
+    return 2
+  end
+  return math.max(0, myDealCount)
+end
+
+function MatchScene:getCardPoolCount()
+  if type(self._cardPoolCount) == "number" and self._cardPoolCount > 0 then
+    return self._cardPoolCount
+  end
+  local myDealCount = #self._myDealtCardList
+  local opponentDealCount = self:getOpponentDealtCardCount()
+  return math.max(myDealCount + opponentDealCount, 0)
+end
+
+function MatchScene:syncCardAnimatorSelection()
+  if self._cardAnimator then
+    self._cardAnimator:setSelectedCardList(self._selectedCardList)
+  end
+end
+
+function MatchScene:syncCardAnimatorLockState()
+  if not self._cardAnimator then
+    return
+  end
+
+  self._cardAnimator:setLockState(self._isMyCardLocked, self._isOpponentCardLocked)
+  if self._isCardPickPending then
+    self._cardAnimator:setWaitingLock(true)
+  end
+  if self._isMyCardLocked and self._isOpponentCardLocked then
+    self._cardAnimator:startCleanup()
+  end
+end
+
+function MatchScene:ensureCardAnimator()
+  if self._cardAnimator then
+    self:syncCardAnimatorSelection()
+    self:syncCardAnimatorLockState()
+    return
+  end
+  if not self:isCardSelectPhase() then
+    return
+  end
+  if self._isMyCardLocked and self._isOpponentCardLocked then
+    return
+  end
+  if #self._myDealtCardList <= 0 then
+    return
+  end
+
+  local myCardDisplayList = {}
+  for _, cardId in ipairs(self._myDealtCardList) do
+    myCardDisplayList[#myCardDisplayList + 1] = {
+      id = cardId,
+      label = getCardLabel(cardId)
+    }
+  end
+  local opponentDealCount = self:getOpponentDealtCardCount()
+
+  self._cardAnimator = CardAnimator.new({
+    boardX = self._boardX,
+    boardY = self._boardY,
+    boardW = Constants.BOARD_W,
+    boardH = Constants.BOARD_H
+  })
+  self._cardAnimator:begin(myCardDisplayList, self._myPickCount, opponentDealCount, self:getCardPoolCount())
+  self:syncCardAnimatorSelection()
+  self:syncCardAnimatorLockState()
 end
 
 function MatchScene:toggleCardSelection(cardId)
@@ -660,6 +843,7 @@ function MatchScene:toggleCardSelection(cardId)
   end
 
   if removeString(self._selectedCardList, cardId) then
+    self:syncCardAnimatorSelection()
     return
   end
 
@@ -671,6 +855,7 @@ function MatchScene:toggleCardSelection(cardId)
   end
 
   self._selectedCardList[#self._selectedCardList + 1] = cardId
+  self:syncCardAnimatorSelection()
 end
 
 function MatchScene:submitCardPick()
@@ -692,6 +877,9 @@ function MatchScene:submitCardPick()
     picks = cloneStringList(self._selectedCardList)
   })
   self._isCardPickPending = true
+  if self._cardAnimator then
+    self._cardAnimator:setWaitingLock(true)
+  end
   self:setStatus(t("match.status.card_pick_submit"), Constants.COLOR_TEXT_SUB)
 end
 
@@ -739,39 +927,77 @@ function MatchScene:canUseCardInTurn(cardId)
   return Abilities.isSupportedTurnCard(cardId)
 end
 
+function MatchScene:refreshPlayingCardHand()
+  if not self._playingCardHandBar then
+    return
+  end
+
+  local cardDisplayList = {}
+  for _, cardId in ipairs(self._myPickedCardList) do
+    if not self._optimisticConsumedCardIdSet[cardId] then
+      cardDisplayList[#cardDisplayList + 1] = {
+        id = cardId,
+        label = getCardLabel(cardId)
+      }
+    end
+  end
+  self._playingCardHandBar:setCards(cardDisplayList)
+end
+
+function MatchScene:restoreOptimisticConsumedCard(cardId)
+  if not cardId then
+    return
+  end
+  if not self._optimisticConsumedCardIdSet[cardId] then
+    return
+  end
+  self._optimisticConsumedCardIdSet[cardId] = nil
+  if self._pendingDeclaredTargetCardId == cardId then
+    self._pendingDeclaredTargetCardId = nil
+  end
+  self:refreshPlayingCardHand()
+end
+
+function MatchScene:handleHandCardBlocked()
+  if self._hasUsedCardThisTurn then
+    self:setStatus(t("match.status.card_already_used_turn"), Constants.COLOR_TEXT_SUB)
+    return
+  end
+  self:setStatus(t("match.status.cannot_use_card_now"), Constants.COLOR_DANGER)
+end
+
+function MatchScene:handleHandCardDeclared(cardId)
+  local isAccepted = self:requestTurnCardUse(cardId)
+  if not isAccepted then
+    return false
+  end
+
+  self._optimisticConsumedCardIdSet[cardId] = true
+  if cardId == "rockfall" or cardId == "reinforcement" then
+    self._pendingDeclaredTargetCardId = cardId
+  else
+    self._pendingDeclaredTargetCardId = nil
+  end
+  self:refreshPlayingCardHand()
+  return true
+end
+
 function MatchScene:rebuildPlayingCardButtons()
   self._playingCardButtonList = {}
-  local rect = self:getPlayingCardPanelRect()
-  for index, cardId in ipairs(self._myPickedCardList) do
-    local button = Button.new({
-      x = rect.x + 12,
-      y = rect.y + 34 + (index - 1) * 40,
-      w = rect.w - 24,
-      h = 34,
-      label = getCardLabel(cardId),
-      onClick = function()
-        self:requestTurnCardUse(cardId)
-      end
-    })
-    self._playingCardButtonList[#self._playingCardButtonList + 1] = {
-      cardId = cardId,
-      button = button
-    }
-  end
+  self:refreshPlayingCardHand()
 end
 
 function MatchScene:requestTurnCardUse(cardId)
   if not self:canUseCardInTurn(cardId) then
     self:setStatus(t("match.status.cannot_use_card_now"), Constants.COLOR_DANGER)
-    return
+    return false
   end
 
   if cardId == "rockfall" or cardId == "reinforcement" then
     self._pendingCardTargetId = cardId
-    self._isAimDragging = false
-    self._aimStoneId = nil
+    self:cancelAimDrag(true)
     self:setStatus(Abilities.getPendingTargetStartStatus(cardId), Constants.COLOR_TEXT_SUB)
-    return
+    return true
   end
 
   local payload = {
@@ -782,13 +1008,18 @@ function MatchScene:requestTurnCardUse(cardId)
   self._app:sendWsEnvelope("client.match.turn.cardUse", payload)
   self._isCardUsePending = true
   self:setStatus(t("match.status.card_use_submit"), Constants.COLOR_TEXT_SUB)
+  return true
 end
 
 function MatchScene:cancelPendingCardTarget()
   if not self._pendingCardTargetId then
     return
   end
+  local cancelledCardId = self._pendingCardTargetId
   self._pendingCardTargetId = nil
+  if self._pendingDeclaredTargetCardId == cancelledCardId then
+    self:restoreOptimisticConsumedCard(cancelledCardId)
+  end
   self:setStatus(t("match.status.card_target_cancel"), Constants.COLOR_TEXT_SUB)
 end
 
@@ -807,6 +1038,9 @@ function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
   local pendingCardId = self._pendingCardTargetId
   if not self:isMyTurn() or self._hasUsedCardThisTurn or self._playingShotUsed > 0 then
     self._pendingCardTargetId = nil
+    if self._pendingDeclaredTargetCardId == pendingCardId then
+      self:restoreOptimisticConsumedCard(pendingCardId)
+    end
     self:setStatus(t("match.status.cannot_use_card_now"), Constants.COLOR_DANGER)
     return true
   end
@@ -838,6 +1072,9 @@ function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
     }
   })
   self._pendingCardTargetId = nil
+  if self._pendingDeclaredTargetCardId == pendingCardId then
+    self._pendingDeclaredTargetCardId = nil
+  end
   self._isCardUsePending = true
   self:setStatus(Abilities.getPendingTargetRequestStatus(pendingCardId), Constants.COLOR_TEXT_SUB)
   return true
@@ -852,8 +1089,10 @@ function MatchScene:requestSurrender()
     return
   end
   self._pendingCardTargetId = nil
-  self._isAimDragging = false
-  self._aimStoneId = nil
+  self:cancelAimDrag(true)
+  if self._playingCardHandBar then
+    self._playingCardHandBar:cancelCardDrag(false)
+  end
   self._app:sendWsEnvelope("client.match.surrender", {})
   self._isSurrenderPending = true
   self:setStatus(t("match.status.surrender_submit"), Constants.COLOR_DANGER)
@@ -894,40 +1133,144 @@ function MatchScene:beginAimDrag(worldX, worldY)
 
   self._isAimDragging = true
   self._aimStoneId = stone.id
+  self._aimStartWorldX = worldX
+  self._aimStartWorldY = worldY
+  self._aimAccumWorldDX = 0
+  self._aimAccumWorldDY = 0
+  self._aimLastMouseWorldX = worldX
+  self._aimLastMouseWorldY = worldY
+  self._isAimRelativeMode = InputCaptureGuard.captureRelativeMouse()
+  if self._isAimRelativeMode then
+    self._aimLastMouseWorldX = nil
+    self._aimLastMouseWorldY = nil
+  end
   self:setStatus(t("match.status.aiming"), Constants.COLOR_TEXT_SUB)
 end
 
-function MatchScene:cancelAimDrag()
+function MatchScene:getAimCursorWorldPosition()
+  local startWorldX = self._aimStartWorldX or 0
+  local startWorldY = self._aimStartWorldY or 0
+  return startWorldX + self._aimAccumWorldDX, startWorldY + self._aimAccumWorldDY
+end
+
+function MatchScene:resolveAimRestoreScreenPosition(stoneWorldX, stoneWorldY)
+  local aimWorldX, aimWorldY = self:getAimCursorWorldPosition()
+  local restoreWorldX, restoreWorldY = intersectSegmentWithWorldRect(stoneWorldX, stoneWorldY, aimWorldX, aimWorldY)
+  return self._app:worldToScreen(restoreWorldX, restoreWorldY)
+end
+
+function MatchScene:cancelAimDrag(silent)
+  local restoreScreenX = nil
+  local restoreScreenY = nil
+  if self._isAimDragging then
+    self:updateAimDragInput()
+    local stone = self:getAliveStoneById(self._aimStoneId)
+    if stone then
+      local localX, localY = self:canonicalToLocal(stone.x, stone.y)
+      local stoneWorldX = self._boardX + localX
+      local stoneWorldY = self._boardY + localY
+      restoreScreenX, restoreScreenY = self:resolveAimRestoreScreenPosition(stoneWorldX, stoneWorldY)
+    end
+  end
+
+  if (not self._isAimDragging) and (not self._aimStoneId) then
+    InputCaptureGuard.release(restoreScreenX, restoreScreenY)
+    self._isAimRelativeMode = false
+    self._aimStartWorldX = nil
+    self._aimStartWorldY = nil
+    self._aimAccumWorldDX = 0
+    self._aimAccumWorldDY = 0
+    self._aimLastMouseWorldX = nil
+    self._aimLastMouseWorldY = nil
+    return
+  end
+  local shouldShowStatus = not silent
+  self._isAimDragging = false
+  self._aimStoneId = nil
+  self._aimStartWorldX = nil
+  self._aimStartWorldY = nil
+  self._aimAccumWorldDX = 0
+  self._aimAccumWorldDY = 0
+  self._aimLastMouseWorldX = nil
+  self._aimLastMouseWorldY = nil
+  self._isAimRelativeMode = false
+  InputCaptureGuard.release(restoreScreenX, restoreScreenY)
+  if shouldShowStatus then
+    self:setStatus(t("match.status.shot_cancelled"), Constants.COLOR_TEXT_SUB)
+  end
+end
+
+function MatchScene:updateAimDragInput()
   if not self._isAimDragging then
     return
   end
-  self._isAimDragging = false
-  self._aimStoneId = nil
-  self:setStatus(t("match.status.shot_cancelled"), Constants.COLOR_TEXT_SUB)
+
+  if self._isAimRelativeMode then
+    local relativeDx, relativeDy, isRelative = InputCaptureGuard.consumeRelativeDelta()
+    if isRelative then
+      local worldDx, worldDy = self._app:screenDeltaToWorldDelta(relativeDx, relativeDy)
+      self._aimAccumWorldDX = self._aimAccumWorldDX + worldDx
+      self._aimAccumWorldDY = self._aimAccumWorldDY + worldDy
+      return
+    end
+    self._isAimRelativeMode = false
+    InputCaptureGuard.release()
+  end
+
+  local mouseWorldX, mouseWorldY = self._app:getMouseWorldPosition()
+  if self._aimLastMouseWorldX ~= nil and self._aimLastMouseWorldY ~= nil then
+    self._aimAccumWorldDX = self._aimAccumWorldDX + (mouseWorldX - self._aimLastMouseWorldX)
+    self._aimAccumWorldDY = self._aimAccumWorldDY + (mouseWorldY - self._aimLastMouseWorldY)
+  end
+  self._aimLastMouseWorldX = mouseWorldX
+  self._aimLastMouseWorldY = mouseWorldY
 end
 
-function MatchScene:commitAimDrag(worldX, worldY)
+function MatchScene:commitAimDrag(_worldX, _worldY)
   if not self._isAimDragging then
     return
   end
   if not self:isShotInputEnabled() then
-    self:cancelAimDrag()
+    self:cancelAimDrag(true)
     return
   end
 
+  self:updateAimDragInput()
+
   local stone = self:getAliveStoneById(self._aimStoneId)
+  local restoreScreenX = nil
+  local restoreScreenY = nil
+  local aimWorldX, aimWorldY = self:getAimCursorWorldPosition()
+  if stone then
+    local localX, localY = self:canonicalToLocal(stone.x, stone.y)
+    local stoneWorldX = self._boardX + localX
+    local stoneWorldY = self._boardY + localY
+    restoreScreenX, restoreScreenY = self:resolveAimRestoreScreenPosition(stoneWorldX, stoneWorldY)
+  end
   self._isAimDragging = false
+  self._isAimRelativeMode = false
   self._aimStoneId = nil
+  self._aimStartWorldX = nil
+  self._aimStartWorldY = nil
+  InputCaptureGuard.release(restoreScreenX, restoreScreenY)
   if not stone then
+    self._aimAccumWorldDX = 0
+    self._aimAccumWorldDY = 0
+    self._aimLastMouseWorldX = nil
+    self._aimLastMouseWorldY = nil
     self:setStatus(t("match.status.shot_stone_missing"), Constants.COLOR_DANGER)
     return
   end
 
   local stoneLocalX, stoneLocalY = self:canonicalToLocal(stone.x, stone.y)
-  local mouseLocalX, mouseLocalY = self:toBoardLocalNoClamp(worldX, worldY)
-
-  local dirLocalX = stoneLocalX - mouseLocalX
-  local dirLocalY = stoneLocalY - mouseLocalY
+  local stoneWorldX = self._boardX + stoneLocalX
+  local stoneWorldY = self._boardY + stoneLocalY
+  local dirLocalX = stoneWorldX - aimWorldX
+  local dirLocalY = stoneWorldY - aimWorldY
+  self._aimAccumWorldDX = 0
+  self._aimAccumWorldDY = 0
+  self._aimLastMouseWorldX = nil
+  self._aimLastMouseWorldY = nil
   local dragLength = math.sqrt(dirLocalX * dirLocalX + dirLocalY * dirLocalY)
   if dragLength < 1 then
     self:setStatus(t("match.status.shot_drag_too_short"), Constants.COLOR_DANGER)
@@ -990,7 +1333,7 @@ function MatchScene:applyRoomState(payload)
       roomState = payload,
       statusText = t("match.status.back_to_waiting_after_result"),
       statusColor = Constants.COLOR_TEXT_SUB
-    })
+    }, Config.TRANSITION_BACK)
     return
   end
 
@@ -1040,6 +1383,17 @@ function MatchScene:applyRoomState(payload)
     if type(cardSelect.myPickCount) == "number" then
       self._myPickCount = cardSelect.myPickCount
     end
+    if type(cardSelect.myDealtCount) == "number" then
+      self._myDealtCardCount = math.max(0, math.floor(cardSelect.myDealtCount))
+    else
+      self._myDealtCardCount = #self._myDealtCardList
+    end
+    if type(cardSelect.opponentDealtCount) == "number" then
+      self._opponentDealtCardCount = math.max(0, math.floor(cardSelect.opponentDealtCount))
+    end
+    if type(cardSelect.totalPoolCount) == "number" then
+      self._cardPoolCount = math.max(0, math.floor(cardSelect.totalPoolCount))
+    end
     if type(cardSelect.myLocked) == "boolean" then
       self._isMyCardLocked = cardSelect.myLocked
       if self._isMyCardLocked then
@@ -1069,7 +1423,16 @@ function MatchScene:applyRoomState(payload)
       end
     end
 
+    if self._myDealtCardCount <= 0 then
+      self._myDealtCardCount = #self._myDealtCardList
+    end
+    if self._opponentDealtCardCount <= 0 and self._cardPoolCount > 0 then
+      self._opponentDealtCardCount = math.max(0, self._cardPoolCount - self._myDealtCardCount)
+    end
+
     self:rebuildCardOptionButtons()
+    self:syncCardAnimatorSelection()
+    self:syncCardAnimatorLockState()
   end
 
   local playing = payload.match and payload.match.playing or nil
@@ -1132,8 +1495,7 @@ function MatchScene:applyRoomState(payload)
       self._isPlayingAwaitingSnapshot = playing.awaitingSnapshot
       if playing.awaitingSnapshot then
         self._isTurnShotPending = false
-        self._isAimDragging = false
-        self._aimStoneId = nil
+        self:cancelAimDrag(true)
       end
     end
     if canOverwriteStoneList and type(playing.stones) == "table" then
@@ -1141,6 +1503,9 @@ function MatchScene:applyRoomState(payload)
       self:syncStoneVelocityMap()
     end
     if self._pendingCardTargetId and (not self:isMyTurn() or self._hasUsedCardThisTurn or self._playingShotUsed > 0 or self._isCardUsePending) then
+      if self._pendingDeclaredTargetCardId == self._pendingCardTargetId then
+        self:restoreOptimisticConsumedCard(self._pendingCardTargetId)
+      end
       self._pendingCardTargetId = nil
     end
     self:rebuildPlayingCardButtons()
@@ -1154,7 +1519,14 @@ function MatchScene:applyRoomState(payload)
     self._shockwaveSourceStoneId = nil
     self._lockedStoneIdSet = {}
     self._pendingCardTargetId = nil
+    self._pendingDeclaredTargetCardId = nil
     self._isSurrenderPending = false
+    self:cancelAimDrag(true)
+    if self._playingCardHandBar then
+      self._playingCardHandBar:cancelCardDrag(false)
+    end
+    self._optimisticConsumedCardIdSet = {}
+    self:refreshPlayingCardHand()
     if self._effectManager then
       self._effectManager:clear()
     end
@@ -1163,6 +1535,16 @@ function MatchScene:applyRoomState(payload)
     self._isResultVotePending = false
     self._myResultVote = nil
     self._opponentResultVote = nil
+  end
+
+  if payload.phase == Constants.PHASE_CARD_SELECT then
+    self:ensureCardAnimator()
+  elseif payload.phase == Constants.PHASE_PLAYING then
+    if self._cardAnimator and (not self._cardAnimator:isOverlayVisible()) then
+      self._cardAnimator = nil
+    end
+  else
+    self._cardAnimator = nil
   end
 
   if payload.phase == Constants.PHASE_PLACEMENT_PRIVATE then
@@ -1195,11 +1577,36 @@ function MatchScene:applyRoomState(payload)
 end
 
 function MatchScene:update(dt)
+  self:updateAimDragInput()
+
+  if self:isCardSelectPhase() and (not self._cardAnimator) then
+    self:ensureCardAnimator()
+  end
+  if self._cardAnimator then
+    self._cardAnimator:update(dt)
+    if not self._cardAnimator:isOverlayVisible() then
+      self._cardAnimator = nil
+    end
+  end
+
   if self._effectManager then
     self._effectManager:update(dt)
   end
   if self:isPlayingPhase() then
     self:updateShotSimulation(dt)
+  end
+
+  if self._playingCardHandBar then
+    local mouseX, mouseY = self._app:getMouseWorldPosition()
+    self._playingCardHandBar:update(dt, mouseX, mouseY, {
+      isPlayingPhase = self:isPlayingPhase(),
+      isStoneDragging = self._isAimDragging
+    })
+  end
+  if self._inGameChat and self:isInGameChatAvailable() then
+    self._inGameChat:update(dt)
+  elseif self._inGameChat then
+    self._inGameChat:closeImmediate()
   end
 end
 
@@ -1381,14 +1788,15 @@ function MatchScene:drawAimGuide(mouseX, mouseY)
   local localX, localY = self:canonicalToLocal(stone.x, stone.y)
   local stoneWorldX = self._boardX + localX
   local stoneWorldY = self._boardY + localY
-  local dirX = stoneWorldX - mouseX
-  local dirY = stoneWorldY - mouseY
+  local aimWorldX, aimWorldY = self:getAimCursorWorldPosition()
+  local dirX = stoneWorldX - aimWorldX
+  local dirY = stoneWorldY - aimWorldY
   local distance = math.sqrt(dirX * dirX + dirY * dirY)
   local power = math.min(Constants.MAX_SHOT_POWER, distance * Constants.POWER_PER_PIXEL)
 
   love.graphics.setColor(0.95, 0.92, 0.35, 0.95)
   love.graphics.setLineWidth(2)
-  love.graphics.line(stoneWorldX, stoneWorldY, mouseX, mouseY)
+  love.graphics.line(stoneWorldX, stoneWorldY, aimWorldX, aimWorldY)
   love.graphics.setLineWidth(1)
 
   love.graphics.setFont(FontManager.getFont("small"))
@@ -1396,6 +1804,37 @@ function MatchScene:drawAimGuide(mouseX, mouseY)
   love.graphics.printf(t("match.power_label", {
     power = string.format("%.0f", power)
   }), stoneWorldX - 50, stoneWorldY - 30, 100, "center")
+end
+
+function MatchScene:drawSelectedStoneHighlight()
+  if not self._isAimDragging then
+    return
+  end
+
+  local stone = self:getAliveStoneById(self._aimStoneId)
+  if not stone then
+    return
+  end
+
+  local localX, localY = self:canonicalToLocal(stone.x, stone.y)
+  local stoneWorldX = self._boardX + localX
+  local stoneWorldY = self._boardY + localY
+  local timeSec = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+  local pulse = math.sin(timeSec * 7.0) * 2.2
+  local baseRadius = Constants.STONE_RADIUS + 4
+
+  love.graphics.setColor(0.96, 0.88, 0.35, 0.12)
+  love.graphics.circle("fill", stoneWorldX, stoneWorldY, baseRadius + 5 + pulse)
+
+  love.graphics.setColor(0.98, 0.95, 0.65, 0.90)
+  love.graphics.setLineWidth(2.6)
+  love.graphics.circle("line", stoneWorldX, stoneWorldY, baseRadius + pulse)
+
+  love.graphics.setColor(0.98, 0.95, 0.65, 0.45)
+  love.graphics.setLineWidth(1.6)
+  love.graphics.circle("line", stoneWorldX, stoneWorldY, baseRadius + 6 + pulse * 0.7)
+
+  love.graphics.setLineWidth(1)
 end
 
 function MatchScene:drawPendingCardPreview(mouseX, mouseY)
@@ -1412,51 +1851,67 @@ function MatchScene:drawCardSelectPanel(mouseX, mouseY)
   love.graphics.setColor(Constants.COLOR_OVERLAY_DIM)
   love.graphics.rectangle("fill", self._boardX, self._boardY, Constants.BOARD_W, Constants.BOARD_H, 8, 8)
 
-  UIDraw.drawPanel({
-    x = panelX,
-    y = panelY,
-    w = panelW,
-    h = panelH
-  }, Constants.COLOR_PANEL, Constants.COLOR_PANEL_BORDER, nil)
+  self:ensureCardAnimator()
+  local cardStage = self._cardAnimator and self._cardAnimator:getStage() or nil
+  if self._cardAnimator and self._cardAnimator:isSelectionInteractive() then
+    self._cardAnimator:setHoverCardId(self._cardAnimator:getCardIdAtPoint(mouseX, mouseY))
+  elseif self._cardAnimator then
+    self._cardAnimator:setHoverCardId(nil)
+  end
 
-  love.graphics.setFont(FontManager.getFont("ui"))
-  love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf(t("match.card_select_title"), panelX, panelY + 22, panelW, "center")
-
-  love.graphics.setFont(FontManager.getFont("small"))
-  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+  if self._cardAnimator then
+    self._cardAnimator:draw()
+  end
 
   local remainSec = 0
   if self._cardSelectEndsAtMs then
     remainSec = TimeUtils.getRemainingSeconds(self._cardSelectEndsAtMs)
   end
 
-  love.graphics.printf(
-    t("match.info.card_select_line", {
-      pickCount = self._myPickCount,
-      selectedCount = #self._selectedCardList,
-      remainSec = remainSec
-    }),
-    panelX,
-    panelY + 56,
-    panelW,
-    "center"
-  )
+  local messagePanelW = math.min(panelW - 70, 460)
+  local messagePanelH = 88
+  local messagePanelX = (Constants.BASE_WORLD_W - messagePanelW) * 0.5
+  local messagePanelY = (Constants.BASE_WORLD_H - messagePanelH) * 0.5
+  UIDraw.drawPanel({
+    x = messagePanelX,
+    y = messagePanelY,
+    w = messagePanelW,
+    h = messagePanelH
+  }, Constants.COLOR_PANEL, Constants.COLOR_PANEL_BORDER, nil)
 
-  for _, entry in ipairs(self._cardOptionButtonList) do
-    local isSelected = containsString(self._selectedCardList, entry.cardId)
-    entry.button.color = isSelected and Constants.COLOR_BUTTON_SELECTED_ALT or Constants.COLOR_BUTTON
-    entry.button.isEnabled = not self._isMyCardLocked and not self._isCardPickPending
-    entry.button:draw(mouseX, mouseY)
+  local titleText = t("match.card_select_title")
+  if cardStage == "SELECT" or cardStage == "WAIT_LOCK" or cardStage == "CLEANUP" then
+    titleText = t("match.card_select_prompt", {
+      pickCount = self._myPickCount
+    })
+  end
+  if self._isMyCardLocked or self._isCardPickPending then
+    titleText = t("match.card_select_waiting")
   end
 
-  self._cardConfirmButton.isEnabled = (not self._isMyCardLocked) and (not self._isCardPickPending) and (#self._selectedCardList == self._myPickCount)
-  self._cardConfirmButton:draw(mouseX, mouseY)
+  love.graphics.setFont(FontManager.getFont("ui"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.printf(titleText, messagePanelX + 12, messagePanelY + 18, messagePanelW - 24, "center")
 
-  local lockText = self._isMyCardLocked and t("match.info.lock_done") or t("match.info.lock_wait")
-  local opponentText = self._isOpponentCardLocked and t("match.info.opponent_done") or t("match.info.opponent_selecting")
+  love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
-  love.graphics.printf(lockText .. " | " .. opponentText, panelX, panelY + panelH - 40, panelW, "center")
+  love.graphics.printf(t("match.info.card_select_remaining_only", {
+    remainSec = remainSec
+  }), messagePanelX + 12, messagePanelY + 50, messagePanelW - 24, "center")
+
+  local shouldShowConfirm = cardStage == "SELECT" or cardStage == "WAIT_LOCK"
+  if shouldShowConfirm then
+    local targetX = self._boardX + Constants.BOARD_W + 20
+    self._cardConfirmButton.x = math.min(Constants.BASE_WORLD_W - self._cardConfirmButton.w - 16, targetX)
+    self._cardConfirmButton.y = (Constants.BASE_WORLD_H - self._cardConfirmButton.h) * 0.5
+    self._cardConfirmButton.isEnabled = (not self._isMyCardLocked)
+      and (not self._isCardPickPending)
+      and (#self._selectedCardList == self._myPickCount)
+      and self._cardAnimator
+      and self._cardAnimator:isSelectionInteractive()
+    self._cardConfirmButton:draw(mouseX, mouseY)
+  end
+
 end
 
 function MatchScene:drawResultPanel(mouseX, mouseY)
@@ -1563,6 +2018,7 @@ function MatchScene:draw()
   end
 
   self:drawPendingCardPreview(mouseX, mouseY)
+  self:drawSelectedStoneHighlight()
   self:drawAimGuide(mouseX, mouseY)
   if self._effectManager then
     self._effectManager:draw(self._boardX, self._boardY, function(canonicalX, canonicalY)
@@ -1580,7 +2036,9 @@ function MatchScene:draw()
     self:drawCardSelectPanel(mouseX, mouseY)
   elseif self._roomState.phase == Constants.PHASE_PLAYING then
     self:drawPlayingInfo()
-    self:drawPlayingCardPanel(mouseX, mouseY)
+    if self._playingCardHandBar then
+      self._playingCardHandBar:draw()
+    end
     self._surrenderButton.isEnabled = not self._isSurrenderPending
     self._surrenderButton:draw(mouseX, mouseY)
   elseif self._roomState.phase == Constants.PHASE_RESULT then
@@ -1589,13 +2047,33 @@ function MatchScene:draw()
     self:drawPlacementInfo()
   end
 
+  if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
+    self:drawCardSelectPanel(mouseX, mouseY)
+  end
+
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(self._statusColor)
   love.graphics.printf(self._statusText, 0, 690, Constants.BASE_WORLD_W, "center")
+
+  if self._inGameChat and self:isInGameChatAvailable() then
+    self._inGameChat:draw(mouseX, mouseY)
+  end
 end
 
 function MatchScene:mousepressed(mouseX, mouseY, button)
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:mousepressed(mouseX, mouseY, button) then
+    return
+  end
+
+  if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
+    return
+  end
+
   if self:isPlayingPhase() and button == 2 then
+    if self._playingCardHandBar and self._playingCardHandBar:isDraggingCard() then
+      self._playingCardHandBar:cancelCardDrag(true)
+      return
+    end
     if self._pendingCardTargetId then
       self:cancelPendingCardTarget()
     else
@@ -1609,9 +2087,11 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
   end
 
   if self:isCardSelectPhase() then
-    for _, entry in ipairs(self._cardOptionButtonList) do
-      if entry.button:isHovered(mouseX, mouseY) and entry.button.isEnabled then
-        entry.button:onClick()
+    self:ensureCardAnimator()
+    if self._cardAnimator and self._cardAnimator:isSelectionInteractive() then
+      local clickedCardId = self._cardAnimator:getCardIdAtPoint(mouseX, mouseY)
+      if clickedCardId then
+        self:toggleCardSelection(clickedCardId)
         return
       end
     end
@@ -1631,11 +2111,8 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
       self:commitPendingCardTargetByWorld(mouseX, mouseY)
       return
     end
-    for _, entry in ipairs(self._playingCardButtonList) do
-      if entry.button:isHovered(mouseX, mouseY) and entry.button.isEnabled then
-        entry.button:onClick()
-        return
-      end
+    if self._playingCardHandBar and self._playingCardHandBar:mousepressed(mouseX, mouseY, button) then
+      return
     end
     self:beginAimDrag(mouseX, mouseY)
     return
@@ -1664,7 +2141,21 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
 end
 
 function MatchScene:mousereleased(mouseX, mouseY, button)
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:mousereleased(mouseX, mouseY, button) then
+    return
+  end
+
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:isInputBlocking() then
+    return
+  end
+
+  if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
+    return
+  end
   if button ~= 1 then
+    return
+  end
+  if self:isPlayingPhase() and self._playingCardHandBar and self._playingCardHandBar:mousereleased(mouseX, mouseY, button) then
     return
   end
   if self:isPlayingPhase() and self._isAimDragging then
@@ -1672,13 +2163,42 @@ function MatchScene:mousereleased(mouseX, mouseY, button)
   end
 end
 
-function MatchScene:textinput(_text)
+function MatchScene:mousemoved(mouseX, mouseY, dx, dy)
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:mousemoved(mouseX, mouseY, dx, dy) then
+    return
+  end
 end
 
-function MatchScene:textedited(_text, _start, _length)
+function MatchScene:wheelmoved(mouseX, mouseY, dx, dy)
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:wheelmoved(mouseX, mouseY, dx, dy) then
+    return
+  end
+end
+
+function MatchScene:textinput(text)
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:textinput(text) then
+    return
+  end
+end
+
+function MatchScene:textedited(text, start, length)
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:textedited(text, start, length) then
+    return
+  end
 end
 
 function MatchScene:keypressed(key)
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:keypressed(key) then
+    return
+  end
+
+  if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
+    return
+  end
+  if key == "escape" and self._playingCardHandBar and self._playingCardHandBar:isDraggingCard() then
+    self._playingCardHandBar:cancelCardDrag(true)
+    return
+  end
   if key == "escape" and self._pendingCardTargetId then
     self:cancelPendingCardTarget()
     return
@@ -1737,11 +2257,23 @@ function MatchScene:onWsEnvelope(envelope)
     end
     if type(payload.dealtCards) == "table" then
       self._myDealtCardList = cloneStringList(payload.dealtCards)
+      self._myDealtCardCount = #self._myDealtCardList
       self:rebuildCardOptionButtons()
+    end
+    if type(payload.myDealtCount) == "number" then
+      self._myDealtCardCount = math.max(0, math.floor(payload.myDealtCount))
+    end
+    if type(payload.opponentDealtCount) == "number" then
+      self._opponentDealtCardCount = math.max(0, math.floor(payload.opponentDealtCount))
+    end
+    if type(payload.totalPoolCount) == "number" then
+      self._cardPoolCount = math.max(0, math.floor(payload.totalPoolCount))
     end
     if type(payload.selectEndsAtMs) == "number" then
       self._cardSelectEndsAtMs = payload.selectEndsAtMs
     end
+    self:syncCardAnimatorSelection()
+    self:syncCardAnimatorLockState()
     self:setStatus(t("match.status.cards_dealt"), Constants.COLOR_TEXT_SUB)
     return
   end
@@ -1754,13 +2286,21 @@ function MatchScene:onWsEnvelope(envelope)
       self._isCardPickPending = false
       if type(payload.pickedCards) == "table" then
         self._myPickedCardList = cloneStringList(payload.pickedCards)
+        self._optimisticConsumedCardIdSet = {}
+        self._pendingDeclaredTargetCardId = nil
         self._selectedCardList = cloneStringList(payload.pickedCards)
+        self:syncCardAnimatorSelection()
         self:rebuildPlayingCardButtons()
       end
+      self:syncCardAnimatorLockState()
       self:setStatus(t("match.status.my_cards_locked"), Constants.COLOR_TEXT_SUB)
     else
       self._isOpponentCardLocked = true
+      self:syncCardAnimatorLockState()
       self:setStatus(t("match.status.opponent_cards_locked"), Constants.COLOR_TEXT_SUB)
+    end
+    if self._isMyCardLocked and self._isOpponentCardLocked then
+      self:syncCardAnimatorLockState()
     end
     return
   end
@@ -1800,9 +2340,13 @@ function MatchScene:onWsEnvelope(envelope)
     self._isTurnShotPending = false
     self._isCardUsePending = false
     self._pendingCardTargetId = nil
+    self._pendingDeclaredTargetCardId = nil
+    self._optimisticConsumedCardIdSet = {}
     self._isSurrenderPending = false
-    self._isAimDragging = false
-    self._aimStoneId = nil
+    self:cancelAimDrag(true)
+    if self._playingCardHandBar then
+      self._playingCardHandBar:cancelCardDrag(false)
+    end
     if self._effectManager then
       self._effectManager:clear()
     end
@@ -1835,6 +2379,10 @@ function MatchScene:onWsEnvelope(envelope)
       self._isCardUsePending = false
       self._hasUsedCardThisTurn = true
       if type(payload.cardId) == "string" then
+        self._optimisticConsumedCardIdSet[payload.cardId] = nil
+        if self._pendingDeclaredTargetCardId == payload.cardId then
+          self._pendingDeclaredTargetCardId = nil
+        end
         removeString(self._myPickedCardList, payload.cardId)
       end
       Abilities.applyServerCardEffect(self, payload.effect)
@@ -1864,8 +2412,8 @@ function MatchScene:onWsEnvelope(envelope)
     self._isTurnShotPending = false
     self._isCardUsePending = false
     self._pendingCardTargetId = nil
-    self._isAimDragging = false
-    self._aimStoneId = nil
+    self._pendingDeclaredTargetCardId = nil
+    self:cancelAimDrag(true)
     if self._playingShotUsed >= self._playingShotBudget then
       self:setStatus(t("match.status.shot_accepted_wait_snapshot"), Constants.COLOR_TEXT_SUB)
     else
@@ -1883,8 +2431,8 @@ function MatchScene:onWsEnvelope(envelope)
     self._turnEndsAtMs = nil
     self._isTurnShotPending = false
     self._isCardUsePending = false
-    self._isAimDragging = false
-    self._aimStoneId = nil
+    self._pendingDeclaredTargetCardId = nil
+    self:cancelAimDrag(true)
     self:setStatus(t("match.status.snapshot_requested"), Constants.COLOR_TEXT_SUB)
     self:sendHostSnapshotIfNeeded(payload.turnIndex, payload.reason)
     return
@@ -1910,6 +2458,7 @@ function MatchScene:onWsEnvelope(envelope)
     self._isTurnShotPending = false
     self._isCardUsePending = false
     self._pendingCardTargetId = nil
+    self._pendingDeclaredTargetCardId = nil
     self:setStatus(t("match.status.snapshot_applied"), Constants.COLOR_TEXT_SUB)
     return
   end
@@ -1918,6 +2467,7 @@ function MatchScene:onWsEnvelope(envelope)
     local payload = envelope.payload or {}
     self._isSurrenderPending = false
     self._pendingCardTargetId = nil
+    self._pendingDeclaredTargetCardId = nil
     self._isResultVotePending = false
     self:setStatus(t("match.status.result_winner", {
       winner = tostring(payload.winnerPlayerIndex or "?")
@@ -1938,15 +2488,23 @@ function MatchScene:onWsEnvelope(envelope)
     end
     if payload.code == "invalid_card_pick" or payload.code == "already_locked" then
       self._isCardPickPending = false
+      if self._cardAnimator then
+        self._cardAnimator:setWaitingLock(false)
+      end
     end
     if payload.code == "card_already_used" or payload.code == "card_use_window_closed" or payload.code == "card_not_owned" or payload.code == "card_not_implemented" or payload.code == "invalid_card_id" or payload.code == "invalid_card_target" then
       self._isCardUsePending = false
+      if self._pendingDeclaredTargetCardId and self._pendingCardTargetId == self._pendingDeclaredTargetCardId then
+        self._pendingCardTargetId = nil
+      end
+      self._pendingDeclaredTargetCardId = nil
+      self._optimisticConsumedCardIdSet = {}
+      self:refreshPlayingCardHand()
     end
     if payload.code == "invalid_shot_power" or payload.code == "invalid_shot_dir" or payload.code == "invalid_shot_stone" or payload.code == "not_your_turn" or payload.code == "timeout" or payload.code == "turn_mismatch" or payload.code == "already_shot" or payload.code == "shot_budget_exceeded" or payload.code == "stone_locked_this_turn" then
       self._isTurnShotPending = false
       self._isPlayingShotCommitted = false
-      self._isAimDragging = false
-      self._aimStoneId = nil
+      self:cancelAimDrag(true)
       self._shouldSendSnapshotAfterSim = false
       self:stopShotSimulation()
       self:resetStoneVelocities()
@@ -1962,7 +2520,27 @@ function MatchScene:onWsEnvelope(envelope)
       backScene = "play",
       statusText = t("match.status.room_closed"),
       statusColor = Constants.COLOR_DANGER
-    })
+    }, Config.TRANSITION_BACK)
+  end
+end
+
+function MatchScene:onSceneWillChange(_event)
+  self:cancelAimDrag(true)
+  if self._inGameChat then
+    self._inGameChat:closeImmediate()
+  end
+  if self._playingCardHandBar then
+    self._playingCardHandBar:cancelCardDrag(false)
+  end
+end
+
+function MatchScene:exit()
+  self:cancelAimDrag(true)
+  if self._inGameChat then
+    self._inGameChat:closeImmediate()
+  end
+  if self._playingCardHandBar then
+    self._playingCardHandBar:cancelCardDrag(false)
   end
 end
 
@@ -1973,6 +2551,9 @@ function MatchScene:onAppEvent(event)
   end
 
   if event.type == "ws_envelope" then
+    if self._inGameChat then
+      self._inGameChat:onWsEnvelope(event.envelope)
+    end
     self:onWsEnvelope(event.envelope)
     return
   end
@@ -1988,6 +2569,17 @@ function MatchScene:onAppEvent(event)
     self:setStatus(t("match.status.ws_error", {
       message = tostring(event.message)
     }), Constants.COLOR_DANGER)
+    return
+  end
+
+  if event.type == "focus_lost" then
+    self:cancelAimDrag(true)
+    if self._inGameChat then
+      self._inGameChat:onFocusLost()
+    end
+    if self._playingCardHandBar then
+      self._playingCardHandBar:cancelCardDrag(false)
+    end
   end
 end
 

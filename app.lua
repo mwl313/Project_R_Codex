@@ -12,7 +12,10 @@
 - App:draw()
 - App:mousepressed(x, y, button)
 - App:mousereleased(x, y, button)
+- App:mousemoved(x, y, dx, dy)
+- App:wheelmoved(x, y)
 - App:keypressed(key)
+- App:worldToScreen(worldX, worldY)
 - App:textinput(text)
 - App:textedited(text, start, length)
 
@@ -32,6 +35,7 @@ local SettingsManager = require("managers.settings_manager")
 local SoundManager = require("managers.sound_manager")
 local HttpClient = require("net.http_client")
 local WsClient = require("net.ws_client")
+local InputCaptureGuard = require("utils.input_capture_guard")
 
 local App = {}
 App.__index = App
@@ -51,6 +55,9 @@ local function createSceneFactoryTable()
     multiplayer = function(app)
       return require("scenes.multiplayer_scene").new(app)
     end,
+    debugMenu = function(app)
+      return require("scenes.debug_menu_scene").new(app)
+    end,
     guide = function(app)
       return require("scenes.guide_scene").new(app)
     end,
@@ -68,6 +75,12 @@ local function createSceneFactoryTable()
     end,
     waitingRoom = function(app)
       return require("scenes.waiting_room_scene").new(app)
+    end,
+    coinTossFirst = function(app)
+      return require("scenes.coin_toss_first_scene").new(app)
+    end,
+    coinTossSecond = function(app)
+      return require("scenes.coin_toss_second_scene").new(app)
     end,
     match = function(app)
       return require("scenes.match_scene").new(app)
@@ -134,7 +147,8 @@ function App.new(renderScale)
       token = nil,
       wsUrl = nil,
       role = nil,
-      serverRulesVersion = nil
+      serverRulesVersion = nil,
+      lastRoomState = nil
     },
     _nickname = "Player",
     _displayMode = Constants.DISPLAY_MODE_WINDOWED,
@@ -144,7 +158,8 @@ function App.new(renderScale)
     _worldMouseY = 0,
     _pendingBootWarningText = nil,
     _lastRulesVersionWarningKey = nil,
-    _uiSkin = nil
+    _uiSkin = nil,
+    _queuedSceneIntent = nil
   }
   setmetatable(instance, App)
 
@@ -264,48 +279,98 @@ function App:updateMouseFromScreen(screenX, screenY)
   self._worldMouseX, self._worldMouseY = self._renderScale:toWorld(screenX, screenY)
 end
 
-function App:goLobby(params)
-  self:goScene("lobby", params)
+function App:screenDeltaToWorldDelta(screenDx, screenDy)
+  return self._renderScale:toWorldDelta(screenDx, screenDy)
 end
 
-function App:goPlay(params)
-  self:goScene("play", params)
+function App:worldToScreen(worldX, worldY)
+  return self._renderScale:toScreen(worldX, worldY)
 end
 
-function App:goMultiplayer(params)
-  self:goScene("multiplayer", params)
+function App:goLobby(params, transitionDirection, transitionOpts)
+  self:goScene("lobby", params, transitionDirection, transitionOpts)
 end
 
-function App:goGuide(params)
-  self:goScene("guide", params)
+function App:goPlay(params, transitionDirection, transitionOpts)
+  self:goScene("play", params, transitionDirection, transitionOpts)
 end
 
-function App:goSkin(params)
-  self:goScene("skin", params)
+function App:goMultiplayer(params, transitionDirection, transitionOpts)
+  self:goScene("multiplayer", params, transitionDirection, transitionOpts)
 end
 
-function App:goCredits(params)
-  self:goScene("credits", params)
+function App:goDebugMenu(params, transitionDirection, transitionOpts)
+  self:goScene("debugMenu", params, transitionDirection, transitionOpts)
 end
 
-function App:goRoomSearch(params)
-  self:goScene("roomSearch", params)
+function App:goGuide(params, transitionDirection, transitionOpts)
+  self:goScene("guide", params, transitionDirection, transitionOpts)
 end
 
-function App:goSingleDummy(params)
-  self:goScene("singleDummy", params)
+function App:goSkin(params, transitionDirection, transitionOpts)
+  self:goScene("skin", params, transitionDirection, transitionOpts)
 end
 
-function App:goWaitingRoom(params)
-  self:goScene("waitingRoom", params)
+function App:goCredits(params, transitionDirection, transitionOpts)
+  self:goScene("credits", params, transitionDirection, transitionOpts)
 end
 
-function App:goMatch(params)
-  self:goScene("match", params)
+function App:goRoomSearch(params, transitionDirection, transitionOpts)
+  self:goScene("roomSearch", params, transitionDirection, transitionOpts)
 end
 
-function App:goScene(sceneName, params)
-  self._sceneManager:setScene(sceneName, params)
+function App:goSingleDummy(params, transitionDirection, transitionOpts)
+  self:goScene("singleDummy", params, transitionDirection, transitionOpts)
+end
+
+function App:goWaitingRoom(params, transitionDirection, transitionOpts)
+  self:goScene("waitingRoom", params, transitionDirection, transitionOpts)
+end
+
+function App:goMatch(params, transitionDirection, transitionOpts)
+  self:goScene("match", params, transitionDirection, transitionOpts)
+end
+
+function App:goScene(sceneName, params, transitionDirection, transitionOpts)
+  if self:isTransitioningScene() then
+    self._queuedSceneIntent = {
+      sceneName = sceneName,
+      params = params,
+      transitionDirection = transitionDirection,
+      transitionOpts = transitionOpts
+    }
+    return
+  end
+
+  self._sceneManager:dispatch("onSceneWillChange", {
+    toScene = sceneName,
+    params = params
+  })
+  InputCaptureGuard.release()
+  self._sceneManager:change(sceneName, params, transitionDirection, transitionOpts)
+end
+
+function App:flushQueuedSceneIntent()
+  if self:isTransitioningScene() then
+    return
+  end
+  local intent = self._queuedSceneIntent
+  if not intent then
+    return
+  end
+  self._queuedSceneIntent = nil
+  self:goScene(intent.sceneName, intent.params, intent.transitionDirection, intent.transitionOpts)
+end
+
+function App:isTransitioningScene()
+  return self._sceneManager and self._sceneManager.isTransitioning and self._sceneManager:isTransitioning()
+end
+
+function App:getCurrentSceneName()
+  if not self._sceneManager or not self._sceneManager.getCurrentSceneName then
+    return nil
+  end
+  return self._sceneManager:getCurrentSceneName()
 end
 
 function App:emitUiStatus(text, color)
@@ -401,7 +466,8 @@ function App:leaveRoom()
     token = nil,
     wsUrl = nil,
     role = nil,
-    serverRulesVersion = nil
+    serverRulesVersion = nil,
+    lastRoomState = nil
   }
 end
 
@@ -437,6 +503,7 @@ function App:handleHttpResponse(event)
   self._session.token = bodyTable.token
   self._session.wsUrl = bodyTable.wsUrl
   self._session.role = nil
+  self._session.lastRoomState = nil
   self:checkRulesVersion(bodyTable.rulesVersion)
 
   if requestMeta.kind == "createRoom" or requestMeta.kind == "joinRoom" then
@@ -445,12 +512,13 @@ function App:handleHttpResponse(event)
     else
       self:playSoundHook("room_join_success")
     end
-    self:goWaitingRoom()
+    self:goWaitingRoom(nil, Config.TRANSITION_FORWARD)
     self:connectWebSocket()
   end
 end
 
 function App:handleWsEnvelope(envelope)
+  local shouldDispatch = true
   local hookId = SERVER_ENVELOPE_SOUND_HOOK_MAP[envelope.type]
   if hookId then
     self:playSoundHook(hookId)
@@ -462,6 +530,12 @@ function App:handleWsEnvelope(envelope)
     self:checkRulesVersion(payload.rulesVersion)
   elseif envelope.type == "room.state" then
     local payload = envelope.payload or {}
+    self._session.lastRoomState = payload
+    local sessionRoomCode = self._session.roomCode
+    local payloadRoomCode = payload.roomCode
+    if sessionRoomCode and payloadRoomCode and tostring(sessionRoomCode) ~= tostring(payloadRoomCode) then
+      shouldDispatch = false
+    end
     self:checkRulesVersion(payload.rulesVersion)
   elseif envelope.type == "room.closed" then
     self._wsClient:disconnect()
@@ -470,8 +544,12 @@ function App:handleWsEnvelope(envelope)
       token = nil,
       wsUrl = nil,
       role = nil,
-      serverRulesVersion = nil
+      serverRulesVersion = nil,
+      lastRoomState = nil
     }
+  end
+  if not shouldDispatch then
+    return
   end
   self._sceneManager:dispatch("onAppEvent", {
     type = "ws_envelope",
@@ -512,6 +590,7 @@ function App:update(dt)
   self:updateMouseFromScreen(mouseX, mouseY)
   self:pollNetworkEvents()
   self._sceneManager:update(dt)
+  self:flushQueuedSceneIntent()
 end
 
 function App:drawBackground()
@@ -545,7 +624,33 @@ function App:mousereleased(screenX, screenY, button)
   self._sceneManager:dispatch("mousereleased", worldX, worldY, button)
 end
 
+function App:mousemoved(screenX, screenY, screenDx, screenDy)
+  self:updateMouseFromScreen(screenX, screenY)
+  InputCaptureGuard.onMouseMoved(screenDx, screenDy)
+  local worldDx, worldDy = self._renderScale:toWorldDelta(screenDx, screenDy)
+  self._sceneManager:dispatch("mousemoved", self._worldMouseX, self._worldMouseY, worldDx, worldDy)
+end
+
+function App:wheelmoved(screenDx, screenDy)
+  local mouseX, mouseY = love.mouse.getPosition()
+  local worldX, worldY = self._renderScale:toWorld(mouseX, mouseY)
+  self._sceneManager:dispatch("wheelmoved", worldX, worldY, screenDx, screenDy)
+end
+
 function App:keypressed(key)
+  if key == "f7" then
+    local currentSceneName = self:getCurrentSceneName() or "lobby"
+    if currentSceneName ~= "debugMenu" then
+      self:goDebugMenu({
+        backScene = currentSceneName,
+        statusText = t("debug_menu.status.opened_from", {
+          scene = tostring(currentSceneName)
+        }),
+        statusColor = Constants.COLOR_TEXT_SUB
+      }, Config.TRANSITION_FORWARD)
+    end
+    return
+  end
   if key == "f6" then
     Config.UI_USE_NINESLICE = not Config.UI_USE_NINESLICE
     self:emitUiStatus(t("app.ui.ui_skin_toggle", {
@@ -568,7 +673,18 @@ function App:resize(screenW, screenH)
   self._renderScale:update(screenW, screenH)
 end
 
+function App:focus(isFocused)
+  if isFocused then
+    return
+  end
+  InputCaptureGuard.release()
+  self._sceneManager:dispatch("onAppEvent", {
+    type = "focus_lost"
+  })
+end
+
 function App:shutdown()
+  InputCaptureGuard.release()
   if self._soundManager then
     self._soundManager:stopAll()
   end
