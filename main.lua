@@ -13,6 +13,7 @@
 - love.mousepressed(x, y, button)
 - love.mousereleased(x, y, button)
 - love.mousemoved(x, y, dx, dy)
+- love.wheelmoved(x, y)
 - love.keypressed(key)
 - love.textinput(text)
 - love.textedited(text, start, length)
@@ -64,6 +65,12 @@ end
 function love.mousemoved(x, y, dx, dy)
   if app and app.mousemoved then
     app:mousemoved(x, y, dx, dy)
+  end
+end
+
+function love.wheelmoved(x, y)
+  if app and app.wheelmoved then
+    app:wheelmoved(x, y)
   end
 end
 

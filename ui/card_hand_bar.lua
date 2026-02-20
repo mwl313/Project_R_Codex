@@ -189,7 +189,7 @@ function CardHandBar:updateInteractionRects()
   local peekHalfWidth = ((count - 1) * Constants.CARD_HAND_CLOSED_SPACING) * 0.5 + Constants.CARD_W * 0.5 + 24
   self._peekRect = {
     x = Constants.BASE_WORLD_W * 0.5 - peekHalfWidth,
-    y = Constants.BASE_WORLD_H - Constants.CARD_HAND_PEEK_HEIGHT - 5,
+    y = Constants.BASE_WORLD_H - Constants.CARD_HAND_PEEK_HEIGHT - 15,
     w = peekHalfWidth * 2,
     h = Constants.CARD_HAND_PEEK_HEIGHT + 5
   }

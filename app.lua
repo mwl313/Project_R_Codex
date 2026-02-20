@@ -13,6 +13,7 @@
 - App:mousepressed(x, y, button)
 - App:mousereleased(x, y, button)
 - App:mousemoved(x, y, dx, dy)
+- App:wheelmoved(x, y)
 - App:keypressed(key)
 - App:worldToScreen(worldX, worldY)
 - App:textinput(text)
@@ -626,6 +627,14 @@ end
 function App:mousemoved(screenX, screenY, screenDx, screenDy)
   self:updateMouseFromScreen(screenX, screenY)
   InputCaptureGuard.onMouseMoved(screenDx, screenDy)
+  local worldDx, worldDy = self._renderScale:toWorldDelta(screenDx, screenDy)
+  self._sceneManager:dispatch("mousemoved", self._worldMouseX, self._worldMouseY, worldDx, worldDy)
+end
+
+function App:wheelmoved(screenDx, screenDy)
+  local mouseX, mouseY = love.mouse.getPosition()
+  local worldX, worldY = self._renderScale:toWorld(mouseX, mouseY)
+  self._sceneManager:dispatch("wheelmoved", worldX, worldY, screenDx, screenDy)
 end
 
 function App:keypressed(key)

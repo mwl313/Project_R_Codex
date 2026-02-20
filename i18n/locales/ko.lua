@@ -268,6 +268,13 @@ local LocaleKo = {
     hand = {
       drop_prompt = "가운데 영역에 카드를 내려놓아 사용"
     },
+    chat = {
+      toggle_label = "채팅",
+      panel_title = "인게임 채팅",
+      input_placeholder = "메시지를 입력하세요 (Enter 전송)",
+      line = "[{nickname}] {text}",
+      system_denied = "[SYSTEM] 채팅 거부: {reason}"
+    },
     button = {
       submit_placement = "배치 제출",
       confirm_selection = "선택 확정",

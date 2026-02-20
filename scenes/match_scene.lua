@@ -21,6 +21,7 @@ local Button = require("ui.button")
 local UIDraw = require("ui.ui_draw")
 local CardAnimator = require("ui.card_animator")
 local CardHandBar = require("ui.card_hand_bar")
+local InGameChat = require("ui.in_game_chat")
 local EffectManager = require("effects.effect_manager")
 local Abilities = require("abilities")
 local GameMechanics = require("game_mechanics")
@@ -300,6 +301,7 @@ function MatchScene.new(app)
     _shouldSendSnapshotAfterSim = false,
     _playingCardButtonList = {},
     _playingCardHandBar = nil,
+    _inGameChat = nil,
     _optimisticConsumedCardIdSet = {},
     _pendingDeclaredTargetCardId = nil,
     _surrenderButton = nil,
@@ -383,6 +385,7 @@ function MatchScene.new(app)
       instance:handleHandCardBlocked()
     end
   })
+  instance._inGameChat = InGameChat.new(app)
 
   return instance
 end
@@ -449,6 +452,9 @@ function MatchScene:enter(params)
   self._isResultVotePending = false
   self._myResultVote = nil
   self._opponentResultVote = nil
+  if self._inGameChat then
+    self._inGameChat:reset()
+  end
   if self._effectManager then
     self._effectManager:clear()
   end
@@ -493,6 +499,11 @@ end
 
 function MatchScene:isPlayingPhase()
   return self._roomState.phase == Constants.PHASE_PLAYING
+end
+
+function MatchScene:isInGameChatAvailable()
+  local phase = self._roomState.phase
+  return phase == Constants.PHASE_PLAYING or phase == Constants.PHASE_RESULT
 end
 
 function MatchScene:isMyTurn()
@@ -1592,6 +1603,11 @@ function MatchScene:update(dt)
       isStoneDragging = self._isAimDragging
     })
   end
+  if self._inGameChat and self:isInGameChatAvailable() then
+    self._inGameChat:update(dt)
+  elseif self._inGameChat then
+    self._inGameChat:closeImmediate()
+  end
 end
 
 function MatchScene:drawBoardFrame()
@@ -2038,9 +2054,17 @@ function MatchScene:draw()
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(self._statusColor)
   love.graphics.printf(self._statusText, 0, 690, Constants.BASE_WORLD_W, "center")
+
+  if self._inGameChat and self:isInGameChatAvailable() then
+    self._inGameChat:draw(mouseX, mouseY)
+  end
 end
 
 function MatchScene:mousepressed(mouseX, mouseY, button)
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:mousepressed(mouseX, mouseY, button) then
+    return
+  end
+
   if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
     return
   end
@@ -2117,6 +2141,14 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
 end
 
 function MatchScene:mousereleased(mouseX, mouseY, button)
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:mousereleased(mouseX, mouseY, button) then
+    return
+  end
+
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:isInputBlocking() then
+    return
+  end
+
   if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
     return
   end
@@ -2131,13 +2163,35 @@ function MatchScene:mousereleased(mouseX, mouseY, button)
   end
 end
 
-function MatchScene:textinput(_text)
+function MatchScene:mousemoved(mouseX, mouseY, dx, dy)
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:mousemoved(mouseX, mouseY, dx, dy) then
+    return
+  end
 end
 
-function MatchScene:textedited(_text, _start, _length)
+function MatchScene:wheelmoved(mouseX, mouseY, dx, dy)
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:wheelmoved(mouseX, mouseY, dx, dy) then
+    return
+  end
+end
+
+function MatchScene:textinput(text)
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:textinput(text) then
+    return
+  end
+end
+
+function MatchScene:textedited(text, start, length)
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:textedited(text, start, length) then
+    return
+  end
 end
 
 function MatchScene:keypressed(key)
+  if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:keypressed(key) then
+    return
+  end
+
   if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
     return
   end
@@ -2472,6 +2526,9 @@ end
 
 function MatchScene:onSceneWillChange(_event)
   self:cancelAimDrag(true)
+  if self._inGameChat then
+    self._inGameChat:closeImmediate()
+  end
   if self._playingCardHandBar then
     self._playingCardHandBar:cancelCardDrag(false)
   end
@@ -2479,6 +2536,9 @@ end
 
 function MatchScene:exit()
   self:cancelAimDrag(true)
+  if self._inGameChat then
+    self._inGameChat:closeImmediate()
+  end
   if self._playingCardHandBar then
     self._playingCardHandBar:cancelCardDrag(false)
   end
@@ -2491,6 +2551,9 @@ function MatchScene:onAppEvent(event)
   end
 
   if event.type == "ws_envelope" then
+    if self._inGameChat then
+      self._inGameChat:onWsEnvelope(event.envelope)
+    end
     self:onWsEnvelope(event.envelope)
     return
   end
@@ -2511,6 +2574,9 @@ function MatchScene:onAppEvent(event)
 
   if event.type == "focus_lost" then
     self:cancelAimDrag(true)
+    if self._inGameChat then
+      self._inGameChat:onFocusLost()
+    end
     if self._playingCardHandBar then
       self._playingCardHandBar:cancelCardDrag(false)
     end

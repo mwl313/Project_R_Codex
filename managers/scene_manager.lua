@@ -28,6 +28,7 @@ local INPUT_EVENT_NAME_SET = {
   mousepressed = true,
   mousereleased = true,
   mousemoved = true,
+  wheelmoved = true,
   keypressed = true,
   textinput = true,
   textedited = true

@@ -268,6 +268,13 @@ local LocaleEn = {
     hand = {
       drop_prompt = "Drop a card in the center zone to use it"
     },
+    chat = {
+      toggle_label = "Chat",
+      panel_title = "In-Game Chat",
+      input_placeholder = "Type a message (Enter to send)",
+      line = "[{nickname}] {text}",
+      system_denied = "[SYSTEM] Chat denied: {reason}"
+    },
     button = {
       submit_placement = "Submit Placement",
       confirm_selection = "Confirm Selection",
