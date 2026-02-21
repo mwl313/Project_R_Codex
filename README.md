@@ -7,6 +7,7 @@ LÖVE 11.x 클라이언트 + Cloudflare Workers + Durable Objects 서버 기반 
 ### 1) 서버 실행 (Workers)
 
 ```bash
+cd server
 npm install
 npm run dev
 ```
@@ -24,8 +25,10 @@ love .
 ### 3) 권장 점검 명령
 
 ```bash
+cd server
 npm run typecheck
-npm run i18n:audit
+cd ..
+node tools/i18n_audit.js
 ```
 
 ## 현재 구현 상태 (Phase별)
@@ -138,7 +141,7 @@ npm run i18n:audit
 
 - 공통 규칙 SSOT: `shared/gameplay_rules.json`
 - 카드 수치 SSOT: `shared/card_rules.json`
-- 서버 로더: `src/rules.ts`, `src/card_rules.ts`
+- 서버 로더: `server/src/rules.ts`, `server/src/card_rules.ts`
 - 클라 로더: `constants.lua`, `shared/card_rules.lua`
 - 가이드 문서
 - `shared/gameplay_rules.README.md`

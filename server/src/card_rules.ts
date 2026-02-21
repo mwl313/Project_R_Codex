@@ -1,4 +1,4 @@
-import sharedCardRulesJson from "../shared/card_rules.json";
+import sharedCardRulesJson from "../../shared/card_rules.json";
 
 interface ReinforcementCardRule {
   enabled: boolean;

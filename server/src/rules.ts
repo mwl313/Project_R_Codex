@@ -1,4 +1,4 @@
-import sharedRulesJson from "../shared/gameplay_rules.json";
+import sharedRulesJson from "../../shared/gameplay_rules.json";
 import { CARD_POOL as CARD_POOL_FROM_CARD_RULES } from "./card_rules";
 
 interface SharedRules {

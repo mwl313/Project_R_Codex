@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "wrangler dev",
-    "typecheck": "tsc --noEmit",
-    "i18n:audit": "node tools/i18n_audit.js",
-    "deploy": "wrangler deploy"
+    "dev": "wrangler dev --config wrangler.jsonc",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "i18n:audit": "node ../tools/i18n_audit.js",
+    "deploy": "wrangler deploy --config wrangler.jsonc"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260201.0",
