@@ -36,6 +36,7 @@ local SoundManager = require("managers.sound_manager")
 local HttpClient = require("net.http_client")
 local WsClient = require("net.ws_client")
 local InputCaptureGuard = require("utils.input_capture_guard")
+local ServerEnv = require("net.server_env")
 
 local App = {}
 App.__index = App
@@ -153,6 +154,10 @@ function App.new(renderScale)
     _nickname = "Player",
     _displayMode = Constants.DISPLAY_MODE_WINDOWED,
     _language = "ko",
+    _serverEnv = Constants.SERVER_ENV_DEFAULT,
+    _wsConnected = false,
+    _wsFallbackTried = false,
+    _wsUsingInsecureCloud = false,
     _fontWarningText = FontManager.getWarningMessage(),
     _worldMouseX = 0,
     _worldMouseY = 0,
@@ -189,7 +194,9 @@ end
 function App:setNickname(nickname)
   local normalized = self._settingsManager:normalizeSettings({
     nickname = nickname,
-    displayMode = self._displayMode
+    displayMode = self._displayMode,
+    language = self._language,
+    serverEnv = self._serverEnv
   })
   self._nickname = normalized.nickname
 end
@@ -210,12 +217,71 @@ function App:getSettingsDebugPath()
   return self._settingsManager:getSettingsDebugPath()
 end
 
+function App:getServerEnv()
+  return self._serverEnv
+end
+
+function App:getServerHttpBase(env)
+  return ServerEnv.getHttpBase(env)
+end
+
+function App:getServerWsBase(env)
+  return ServerEnv.getWsBase(env, self._wsUsingInsecureCloud)
+end
+
+function App:isNetworkSessionActive()
+  if self._wsConnected then
+    return true
+  end
+  if next(self._pendingHttpMap) ~= nil then
+    return true
+  end
+  if self._session.roomCode or self._session.token or self._session.wsUrl then
+    return true
+  end
+  return false
+end
+
+function App:canSwitchServerEnv()
+  if self:isNetworkSessionActive() then
+    return false
+  end
+  return true
+end
+
+function App:setServerEnv(serverEnv)
+  if not self:canSwitchServerEnv() then
+    return false, t("debug_menu.status.server_env_locked")
+  end
+
+  local previousEnv = self._serverEnv
+  local normalizedEnv = ServerEnv.set(serverEnv)
+  self._serverEnv = normalizedEnv
+  self._wsFallbackTried = false
+  self._wsUsingInsecureCloud = false
+
+  local isSaved, saveMessage = self:savePersistentSettings({
+    serverEnv = normalizedEnv
+  })
+  if not isSaved then
+    self._serverEnv = ServerEnv.set(previousEnv)
+    return false, saveMessage
+  end
+
+  return true, t("debug_menu.status.server_env_applied", {
+    env = normalizedEnv == Constants.SERVER_ENV_LOCAL and t("debug_menu.network.local") or t("debug_menu.network.cloud")
+  })
+end
+
 function App:loadPersistentSettings()
   local loadedSettings, loadError = self._settingsManager:loadSettings()
   local normalizedSettings = self._settingsManager:normalizeSettings(loadedSettings)
 
   self._nickname = normalizedSettings.nickname
   self._language = I18n.setLanguage(normalizedSettings.language)
+  self._serverEnv = ServerEnv.set(normalizedSettings.serverEnv)
+  self._wsFallbackTried = false
+  self._wsUsingInsecureCloud = false
   local appliedDisplayMode, applyError = self._settingsManager:applyDisplayMode(normalizedSettings.displayMode)
   self._displayMode = appliedDisplayMode
   self:resize(love.graphics.getDimensions())
@@ -237,7 +303,8 @@ function App:savePersistentSettings(patchSettings)
   local mergedSettings = self._settingsManager:normalizeSettings({
     nickname = patchSettings and patchSettings.nickname or self._nickname,
     displayMode = patchSettings and patchSettings.displayMode or self._displayMode,
-    language = patchSettings and patchSettings.language or self._language
+    language = patchSettings and patchSettings.language or self._language,
+    serverEnv = patchSettings and patchSettings.serverEnv or self._serverEnv
   })
 
   local applyWarning = nil
@@ -251,6 +318,9 @@ function App:savePersistentSettings(patchSettings)
 
   self._nickname = mergedSettings.nickname
   self._language = I18n.setLanguage(mergedSettings.language)
+  self._serverEnv = ServerEnv.set(mergedSettings.serverEnv)
+  self._wsFallbackTried = false
+  self._wsUsingInsecureCloud = false
 
   local isSaved, saveError = self._settingsManager:saveSettings(mergedSettings)
   if not isSaved then
@@ -382,14 +452,45 @@ function App:emitUiStatus(text, color)
 end
 
 function App:buildHttpUrl(path)
-  return Constants.SERVER_HTTP_BASE_URL .. path
+  return ServerEnv.getHttpBase() .. path
 end
 
-function App:buildWsUrl(pathOrAbsolute)
+function App:buildWsUrl(pathOrAbsolute, preferInsecureCloud)
   if startsWith(pathOrAbsolute, "ws://") or startsWith(pathOrAbsolute, "wss://") then
+    if preferInsecureCloud and self._serverEnv == Constants.SERVER_ENV_CLOUD and startsWith(pathOrAbsolute, "wss://") then
+      return "ws://" .. pathOrAbsolute:sub(7)
+    end
     return pathOrAbsolute
   end
-  return Constants.SERVER_WS_BASE_URL .. pathOrAbsolute
+  return ServerEnv.getWsBase(nil, preferInsecureCloud == true) .. pathOrAbsolute
+end
+
+function App:connectWebSocketInternal(preferInsecureCloud)
+  self._wsUsingInsecureCloud = preferInsecureCloud == true
+  local wsUrl = self:buildWsUrl(self._session.wsUrl, self._wsUsingInsecureCloud)
+  self._wsClient:connect(wsUrl)
+end
+
+function App:shouldRetryCloudWebSocketWithInsecure(event)
+  if self._serverEnv ~= Constants.SERVER_ENV_CLOUD then
+    return false
+  end
+  if self._wsConnected then
+    return false
+  end
+  if self._wsUsingInsecureCloud or self._wsFallbackTried then
+    return false
+  end
+  if not self._session or not self._session.wsUrl then
+    return false
+  end
+  if self._session.role ~= nil then
+    return false
+  end
+  if not event or event.type ~= "ws_error" then
+    return false
+  end
+  return true
 end
 
 function App:checkRulesVersion(serverVersion)
@@ -438,7 +539,10 @@ function App:connectWebSocket()
     self:emitUiStatus(t("app.ui.ws_url_missing"), Constants.COLOR_DANGER)
     return
   end
-  self._wsClient:connect(self:buildWsUrl(self._session.wsUrl))
+  self._wsConnected = false
+  self._wsFallbackTried = false
+  self._wsUsingInsecureCloud = false
+  self:connectWebSocketInternal(false)
 end
 
 function App:sendWsEnvelope(envelopeType, payload)
@@ -461,6 +565,9 @@ end
 function App:leaveRoom()
   self:sendWsEnvelope("client.room.leave", {})
   self._wsClient:disconnect()
+  self._wsConnected = false
+  self._wsFallbackTried = false
+  self._wsUsingInsecureCloud = false
   self._session = {
     roomCode = nil,
     token = nil,
@@ -539,6 +646,9 @@ function App:handleWsEnvelope(envelope)
     self:checkRulesVersion(payload.rulesVersion)
   elseif envelope.type == "room.closed" then
     self._wsClient:disconnect()
+    self._wsConnected = false
+    self._wsFallbackTried = false
+    self._wsUsingInsecureCloud = false
     self._session = {
       roomCode = nil,
       token = nil,
@@ -576,11 +686,30 @@ function App:pollNetworkEvents()
         self:emitUiStatus(t("app.ui.ws_message_parse_failed"), Constants.COLOR_DANGER)
       end
     else
-      local hookId = NETWORK_EVENT_SOUND_HOOK_MAP[event.type]
-      if hookId then
-        self:playSoundHook(hookId)
+      if event.type == "ws_open" then
+        self._wsConnected = true
+        if self._wsUsingInsecureCloud then
+          self:emitUiStatus(t("app.ui.ws_connected_insecure_cloud"), Constants.COLOR_TEXT_SUB)
+        end
+      elseif event.type == "ws_close" or event.type == "ws_error" then
+        self._wsConnected = false
       end
-      self._sceneManager:dispatch("onAppEvent", event)
+
+      local shouldDispatchNetworkEvent = true
+      if self:shouldRetryCloudWebSocketWithInsecure(event) then
+        self._wsFallbackTried = true
+        self:emitUiStatus(t("app.ui.ws_retry_insecure_cloud"), Constants.COLOR_TEXT_SUB)
+        self:connectWebSocketInternal(true)
+        shouldDispatchNetworkEvent = false
+      end
+
+      if shouldDispatchNetworkEvent then
+        local hookId = NETWORK_EVENT_SOUND_HOOK_MAP[event.type]
+        if hookId then
+          self:playSoundHook(hookId)
+        end
+        self._sceneManager:dispatch("onAppEvent", event)
+      end
     end
   end
 end

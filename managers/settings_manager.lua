@@ -32,6 +32,10 @@ local KNOWN_LANGUAGE_MAP = {
   ko = true,
   en = true
 }
+local KNOWN_SERVER_ENV_MAP = {
+  [Constants.SERVER_ENV_LOCAL] = true,
+  [Constants.SERVER_ENV_CLOUD] = true
+}
 
 local function trim(value)
   return (value:gsub("^%s+", ""):gsub("%s+$", ""))
@@ -102,8 +106,17 @@ local function cloneSettings(settings)
   return {
     nickname = settings.nickname,
     displayMode = settings.displayMode,
-    language = settings.language
+    language = settings.language,
+    serverEnv = settings.serverEnv
   }
+end
+
+local function sanitizeServerEnv(value)
+  local normalized = tostring(value or ""):lower()
+  if KNOWN_SERVER_ENV_MAP[normalized] then
+    return normalized
+  end
+  return Constants.SERVER_ENV_DEFAULT
 end
 
 function SettingsManager.new()
@@ -115,7 +128,8 @@ function SettingsManager:getDefaultSettings()
   return {
     nickname = "Player",
     displayMode = Constants.DISPLAY_MODE_WINDOWED,
-    language = "ko"
+    language = "ko",
+    serverEnv = Constants.SERVER_ENV_DEFAULT
   }
 end
 
@@ -149,6 +163,8 @@ function SettingsManager:loadSettings()
           settings.displayMode = sanitizeDisplayMode(value)
         elseif key == "language" then
           settings.language = sanitizeLanguage(value)
+        elseif key == "server_env" or key == "serverEnv" then
+          settings.serverEnv = sanitizeServerEnv(value)
         end
       end
     end
@@ -161,7 +177,8 @@ function SettingsManager:saveSettings(settings)
   local normalized = {
     nickname = sanitizeNickname(settings.nickname),
     displayMode = sanitizeDisplayMode(settings.displayMode),
-    language = sanitizeLanguage(settings.language)
+    language = sanitizeLanguage(settings.language),
+    serverEnv = sanitizeServerEnv(settings.serverEnv)
   }
 
   local isFullscreen = normalized.displayMode == Constants.DISPLAY_MODE_FULLSCREEN
@@ -170,6 +187,7 @@ function SettingsManager:saveSettings(settings)
     "nickname=" .. normalized.nickname,
     "display_mode=" .. normalized.displayMode,
     "language=" .. normalized.language,
+    "server_env=" .. normalized.serverEnv,
     "window_width=" .. tostring(Constants.WINDOWED_W),
     "window_height=" .. tostring(Constants.WINDOWED_H),
     "fullscreen=" .. (isFullscreen and "true" or "false"),
@@ -233,11 +251,13 @@ function SettingsManager:normalizeSettings(settings)
   local normalized = {
     nickname = settings and settings.nickname or defaultSettings.nickname,
     displayMode = settings and settings.displayMode or defaultSettings.displayMode,
-    language = settings and settings.language or defaultSettings.language
+    language = settings and settings.language or defaultSettings.language,
+    serverEnv = settings and settings.serverEnv or defaultSettings.serverEnv
   }
   normalized.nickname = sanitizeNickname(normalized.nickname)
   normalized.displayMode = sanitizeDisplayMode(normalized.displayMode)
   normalized.language = sanitizeLanguage(normalized.language)
+  normalized.serverEnv = sanitizeServerEnv(normalized.serverEnv)
   return cloneSettings(normalized)
 end
 

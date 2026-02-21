@@ -49,6 +49,8 @@ local LocaleTemplate = {
       response_parse_failed = "Failed to parse response.",
       request_failed = "Request failed: {reason}",
       ws_message_parse_failed = "Failed to parse WS message.",
+      ws_retry_insecure_cloud = "WSS failed on cloud, retrying with WS.",
+      ws_connected_insecure_cloud = "Connected via cloud WS (insecure).",
       rules_version_mismatch = "Rules version mismatch: client {clientVersion} / server {serverVersion}",
       ui_skin_toggle = "UI skin: {state}"
     },
@@ -128,6 +130,40 @@ local LocaleTemplate = {
     },
     status = {
       creating_room = "Creating room..."
+    }
+  },
+  debug_menu = {
+    title = "Debug Menu",
+    subtitle = "Manual scene/effect test launcher",
+    network = {
+      title = "Server Environment",
+      current = "Current: {env}",
+      ["local"] = "Local Test",
+      ["cloud"] = "Network Test",
+      apply = "Apply"
+    },
+    action = {
+      go_lobby = "Lobby Scene",
+      go_play = "Play Scene",
+      go_multiplayer = "Multiplayer Scene",
+      go_room_search = "Room Search Scene",
+      waiting_mock = "Waiting Room (Mock)",
+      coin_first = "Coin Toss (First)",
+      coin_second = "Coin Toss (Second)",
+      match_placement = "Match: Placement Phase",
+      match_card_first = "Match: Card Select (Pick 1)",
+      match_card_second = "Match: Card Select (Pick 2)",
+      match_playing = "Match: Playing Phase",
+      match_card_zone = "Match: Card Zone Test",
+      match_result = "Match: Result Phase",
+      single_dummy = "Single Dummy Scene"
+    },
+    status = {
+      default = "Debug menu ready",
+      opened_from = "Opened debug menu from: {scene}",
+      waiting_mock = "Entered waiting room mock state",
+      server_env_locked = "Cannot change server while connected. Leave/disconnect first.",
+      server_env_applied = "Server environment applied: {env}"
     }
   },
   guide = {

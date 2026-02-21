@@ -48,6 +48,8 @@ local LocaleKo = {
       response_parse_failed = "응답 파싱 실패",
       request_failed = "요청 실패: {reason}",
       ws_message_parse_failed = "WS 메시지 파싱 실패",
+      ws_retry_insecure_cloud = "클라우드 WSS 연결 실패로 WS 연결을 재시도합니다.",
+      ws_connected_insecure_cloud = "클라우드 WS(비보안)로 연결되었습니다.",
       rules_version_mismatch = "룰 버전 불일치: 클라이언트 {clientVersion} / 서버 {serverVersion}",
       ui_skin_toggle = "UI skin: {state}"
     },
@@ -133,6 +135,13 @@ local LocaleKo = {
   debug_menu = {
     title = "Debug Menu",
     subtitle = "씬/연출 수동 테스트",
+    network = {
+      title = "서버 환경",
+      current = "현재: {env}",
+      ["local"] = "로컬 테스트",
+      ["cloud"] = "네트워크 테스트",
+      apply = "적용"
+    },
     action = {
       go_lobby = "로비 씬",
       go_play = "플레이 씬",
@@ -152,7 +161,9 @@ local LocaleKo = {
     status = {
       default = "디버그 메뉴 준비 완료 (F7 단축키 지원)",
       opened_from = "디버그 메뉴 열림: {scene}",
-      waiting_mock = "모의 대기방 상태로 진입"
+      waiting_mock = "모의 대기방 상태로 진입",
+      server_env_locked = "연결 중에는 서버를 변경할 수 없습니다. 먼저 나가기/연결 종료를 해주세요.",
+      server_env_applied = "서버 환경 적용: {env}"
     }
   },
   guide = {

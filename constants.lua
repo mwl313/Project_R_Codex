@@ -61,8 +61,18 @@ Constants = {
   BASE_WORLD_W = 1280,
   BASE_WORLD_H = 720,
 
-  SERVER_HTTP_BASE_URL = "http://127.0.0.1:8787",
-  SERVER_WS_BASE_URL = "ws://127.0.0.1:8787",
+  SERVER_ENV_LOCAL = "local",
+  SERVER_ENV_CLOUD = "cloud",
+  SERVER_ENV_DEFAULT = "cloud",
+  SERVER_HTTP_BASE_URL_LOCAL = "http://127.0.0.1:8787",
+  SERVER_WS_BASE_URL_LOCAL = "ws://127.0.0.1:8787",
+  SERVER_HTTP_BASE_URL_CLOUD = "https://project-r-server.pangyostonefist.workers.dev",
+  SERVER_WS_BASE_URL_CLOUD = "wss://project-r-server.pangyostonefist.workers.dev",
+  -- Cloud WS secure 연결 실패 시 폴백용(개발/환경 호환성).
+  SERVER_WS_BASE_URL_CLOUD_INSECURE = "ws://project-r-server.pangyostonefist.workers.dev",
+  -- 레거시 기본값 (하위 호환). 실제 요청 URL은 net/server_env.lua 경로를 사용한다.
+  SERVER_HTTP_BASE_URL = "https://project-r-server.pangyostonefist.workers.dev",
+  SERVER_WS_BASE_URL = "wss://project-r-server.pangyostonefist.workers.dev",
 
   SAVE_IDENTITY = "project_r",
   SETTINGS_FILENAME = "settings.ini",

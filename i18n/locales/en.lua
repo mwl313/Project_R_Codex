@@ -48,6 +48,8 @@ local LocaleEn = {
       response_parse_failed = "Failed to parse response.",
       request_failed = "Request failed: {reason}",
       ws_message_parse_failed = "Failed to parse WS message.",
+      ws_retry_insecure_cloud = "WSS failed on cloud, retrying with WS.",
+      ws_connected_insecure_cloud = "Connected via cloud WS (insecure).",
       rules_version_mismatch = "Rules version mismatch: client {clientVersion} / server {serverVersion}",
       ui_skin_toggle = "UI skin: {state}"
     },
@@ -133,6 +135,13 @@ local LocaleEn = {
   debug_menu = {
     title = "Debug Menu",
     subtitle = "Manual scene/effect test launcher",
+    network = {
+      title = "Server Environment",
+      current = "Current: {env}",
+      ["local"] = "Local Test",
+      ["cloud"] = "Network Test",
+      apply = "Apply"
+    },
     action = {
       go_lobby = "Lobby Scene",
       go_play = "Play Scene",
@@ -152,7 +161,9 @@ local LocaleEn = {
     status = {
       default = "Debug menu ready (F7 shortcut available)",
       opened_from = "Opened debug menu from: {scene}",
-      waiting_mock = "Entered waiting room mock state"
+      waiting_mock = "Entered waiting room mock state",
+      server_env_locked = "Cannot change server while connected. Leave/disconnect first.",
+      server_env_applied = "Server environment applied: {env}"
     }
   },
   guide = {
