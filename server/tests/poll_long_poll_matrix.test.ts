@@ -273,7 +273,85 @@ test("5) leave/room.closed semantics in waiting phase", async () => {
   }
 });
 
-test("6) chat rate-limit triggers denied and recovers after window", async () => {
+test("6) placement reveal timer alarm is not delayed by presence heartbeat", async () => {
+  const fakeState = new FakeDurableObjectState();
+  const roomDo = new RoomDO(fakeState as unknown as DurableObjectState, {});
+  const host = await createRoom(roomDo, "Host");
+  const guest = await joinRoom(roomDo, "Guest");
+
+  const hostInitial = await pollRoom(roomDo, host.token, 0, 0);
+  const guestInitial = await pollRoom(roomDo, guest.token, 0, 0);
+  let hostCursor = Number(hostInitial.nextCursor ?? 0);
+  let guestCursor = Number(guestInitial.nextCursor ?? 0);
+
+  await sendEnvelope(roomDo, guest.token, "client.room.ready", {});
+  const hostAfterReady = await pollRoom(roomDo, host.token, hostCursor, 0);
+  hostCursor = Number(hostAfterReady.nextCursor ?? hostCursor);
+
+  await sendEnvelope(roomDo, host.token, "client.match.start", {});
+  const hostAfterStart = await pollRoom(roomDo, host.token, hostCursor, 0);
+  hostCursor = Number(hostAfterStart.nextCursor ?? hostCursor);
+  const guestAfterStart = await pollRoom(roomDo, guest.token, guestCursor, 0);
+  guestCursor = Number(guestAfterStart.nextCursor ?? guestCursor);
+
+  const hostStones: Array<{ id: string; x: number; y: number }> = [
+    { id: "h1", x: 80, y: 500 },
+    { id: "h2", x: 160, y: 500 },
+    { id: "h3", x: 240, y: 500 },
+    { id: "h4", x: 320, y: 500 },
+    { id: "h5", x: 400, y: 500 },
+    { id: "h6", x: 480, y: 500 },
+    { id: "h7", x: 560, y: 500 }
+  ];
+  const guestStones: Array<{ id: string; x: number; y: number }> = [
+    { id: "g1", x: 80, y: 100 },
+    { id: "g2", x: 160, y: 100 },
+    { id: "g3", x: 240, y: 100 },
+    { id: "g4", x: 320, y: 100 },
+    { id: "g5", x: 400, y: 100 },
+    { id: "g6", x: 480, y: 100 },
+    { id: "g7", x: 560, y: 100 }
+  ];
+
+  await sendEnvelope(roomDo, host.token, "client.match.placement.submit", { stones: hostStones });
+  await sendEnvelope(roomDo, guest.token, "client.match.placement.submit", { stones: guestStones });
+
+  const hostAfterSubmit = await pollRoom(roomDo, host.token, hostCursor, 0);
+  hostCursor = Number(hostAfterSubmit.nextCursor ?? hostCursor);
+
+  let revealEndsAtMs = 0;
+  const hostSubmitEvents = Array.isArray(hostAfterSubmit.events) ? hostAfterSubmit.events : [];
+  for (const event of hostSubmitEvents) {
+    if (event.type !== "room.state") {
+      continue;
+    }
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    if (payload.phase !== "PLACEMENT_REVEAL") {
+      continue;
+    }
+    const timers = (payload.timers ?? {}) as Record<string, unknown>;
+    if (typeof timers.phaseEndsAtMs === "number") {
+      revealEndsAtMs = timers.phaseEndsAtMs;
+    }
+  }
+  assert.ok(revealEndsAtMs > 0, "placement reveal state must expose phaseEndsAtMs");
+
+  const alarmBeforeHeartbeat = fakeState.storage.alarmAtMs ?? 0;
+  assert.ok(alarmBeforeHeartbeat > 0, "alarm must be scheduled for reveal timeout");
+  assert.ok(alarmBeforeHeartbeat <= revealEndsAtMs, "alarm should target the reveal deadline");
+
+  const hostHeartbeatPoll = await pollRoom(roomDo, host.token, hostCursor, 0);
+  hostCursor = Number(hostHeartbeatPoll.nextCursor ?? hostCursor);
+  const alarmAfterHeartbeat = fakeState.storage.alarmAtMs ?? 0;
+  assert.ok(alarmAfterHeartbeat > 0, "alarm must stay scheduled after heartbeat poll");
+  assert.ok(
+    alarmAfterHeartbeat <= revealEndsAtMs,
+    "presence heartbeat must not push alarm later than reveal deadline"
+  );
+  assert.ok(hostCursor >= 0);
+});
+
+test("7) chat rate-limit triggers denied and recovers after window", async () => {
   const fakeState = new FakeDurableObjectState();
   const roomDo = new RoomDO(fakeState as unknown as DurableObjectState, {});
   const host = await createRoom(roomDo, "Host");

@@ -1221,6 +1221,56 @@ export class RoomDO {
     return playerIndex === 1 ? "host" : "guest";
   }
 
+  private considerAlarmDeadline(candidateValue: unknown, nowMs: number, currentMin: number | null): number | null {
+    if (typeof candidateValue !== "number" || !Number.isFinite(candidateValue)) {
+      return currentMin;
+    }
+    const deadlineMs = Math.floor(candidateValue);
+    if (deadlineMs <= nowMs) {
+      return currentMin;
+    }
+    if (currentMin === null || deadlineMs < currentMin) {
+      return deadlineMs;
+    }
+    return currentMin;
+  }
+
+  private getNextAlarmDeadlineMs(nowMs: number): number | null {
+    let minDeadlineMs: number | null = null;
+    minDeadlineMs = this.considerAlarmDeadline(this.room.timers.phaseEndsAtMs, nowMs, minDeadlineMs);
+    minDeadlineMs = this.considerAlarmDeadline(this.room.timers.turnEndsAtMs, nowMs, minDeadlineMs);
+    minDeadlineMs = this.considerAlarmDeadline(this.room.timers.snapshotEndsAtMs, nowMs, minDeadlineMs);
+
+    for (const tokenSession of Object.values(this.pollState.tokenSessionByToken)) {
+      if (!tokenSession || typeof tokenSession !== "object") {
+        continue;
+      }
+      if (tokenSession.role !== "host" && tokenSession.role !== "guest") {
+        continue;
+      }
+      const slot = this.getSlotByRole(tokenSession.role);
+      if (!slot.connected) {
+        continue;
+      }
+      const lastSeenAtMs = typeof tokenSession.lastSeenAtMs === "number" ? tokenSession.lastSeenAtMs : 0;
+      if (!Number.isFinite(lastSeenAtMs) || lastSeenAtMs <= 0) {
+        continue;
+      }
+      const presenceDeadlineMs = Math.floor(lastSeenAtMs + PRESENCE_TIMEOUT_MS);
+      minDeadlineMs = this.considerAlarmDeadline(presenceDeadlineMs, nowMs, minDeadlineMs);
+    }
+
+    return minDeadlineMs;
+  }
+
+  private async scheduleNextAlarm(nowMs: number): Promise<void> {
+    const nextDeadlineMs = this.getNextAlarmDeadlineMs(nowMs);
+    if (nextDeadlineMs === null) {
+      return;
+    }
+    await this.state.storage.setAlarm(nextDeadlineMs);
+  }
+
   private async touchTokenPresence(token: string, role: Role, nowMs: number): Promise<void> {
     const tokenSession = this.getTokenSessionRecord(token);
     if (!tokenSession) {
@@ -1236,7 +1286,7 @@ export class RoomDO {
       await this.saveState();
     }
     await this.savePollState();
-    await this.state.storage.setAlarm(nowMs + PRESENCE_TIMEOUT_MS);
+    await this.scheduleNextAlarm(nowMs);
 
     if (!wasConnected) {
       this.broadcastRoomState();
@@ -2018,9 +2068,7 @@ export class RoomDO {
     });
     this.broadcastTurnStart();
     this.broadcastRoomState();
-    if (this.room.match.playing.turnEndsAtMs) {
-      await this.state.storage.setAlarm(this.room.match.playing.turnEndsAtMs);
-    }
+    await this.scheduleNextAlarm(Date.now());
   }
 
   private initializePlayingStateFromPlacements(): void {
@@ -2165,7 +2213,7 @@ export class RoomDO {
       snapshotEndsAtMs
     });
     this.broadcastRoomState();
-    await this.state.storage.setAlarm(snapshotEndsAtMs);
+    await this.scheduleNextAlarm(Date.now());
   }
 
   private async handleSnapshotTimeout(): Promise<void> {
@@ -2399,9 +2447,7 @@ export class RoomDO {
     await this.saveState();
     this.broadcastTurnStart();
     this.broadcastRoomState();
-    if (this.room.match.playing.turnEndsAtMs) {
-      await this.state.storage.setAlarm(this.room.match.playing.turnEndsAtMs);
-    }
+    await this.scheduleNextAlarm(Date.now());
   }
 
   private async handleCardPick(token: string, session: Session, payload: unknown): Promise<void> {
@@ -2497,7 +2543,7 @@ export class RoomDO {
     });
     this.broadcastRoomState();
 
-    await this.state.storage.setAlarm(phaseEndsAtMs);
+    await this.scheduleNextAlarm(Date.now());
   }
 
   private initializeCardSelectDraft(): void {
@@ -2567,7 +2613,7 @@ export class RoomDO {
     });
     this.sendCardDealsToConnectedClients(selectEndsAtMs);
     this.broadcastRoomState();
-    await this.state.storage.setAlarm(selectEndsAtMs);
+    await this.scheduleNextAlarm(Date.now());
   }
 
   private autoLockMissingCardPicksOnTimeout(): void {
@@ -2594,48 +2640,42 @@ export class RoomDO {
           this.room.timers.snapshotEndsAtMs = snapshotEndsAtMs;
           await this.saveState();
         }
-        if (nowMs < snapshotEndsAtMs) {
-          await this.state.storage.setAlarm(snapshotEndsAtMs);
-          return;
+        if (nowMs >= snapshotEndsAtMs) {
+          await this.handleSnapshotTimeout();
         }
-        await this.handleSnapshotTimeout();
+        await this.scheduleNextAlarm(nowMs);
         return;
       }
 
       const turnEndsAtMs = this.room.timers.turnEndsAtMs;
       if (turnEndsAtMs) {
-        if (nowMs < turnEndsAtMs) {
-          await this.state.storage.setAlarm(turnEndsAtMs);
-          return;
-        }
-        if (!this.room.match.playing.awaitingSnapshot) {
+        if (nowMs >= turnEndsAtMs && !this.room.match.playing.awaitingSnapshot) {
           await this.requestSnapshotFromHost("turn_timeout");
         }
+        await this.scheduleNextAlarm(nowMs);
         return;
       }
     }
 
     const phaseEndsAtMs = this.room.timers.phaseEndsAtMs;
-    if (!phaseEndsAtMs) {
-      return;
+    if (phaseEndsAtMs && nowMs >= phaseEndsAtMs) {
+      if (this.room.phase === PHASE_PLACEMENT_REVEAL) {
+        await this.startCardSelectPhase();
+        await this.scheduleNextAlarm(nowMs);
+        return;
+      }
+
+      if (this.room.phase === PHASE_CARD_SELECT) {
+        this.autoLockMissingCardPicksOnTimeout();
+        await this.saveState();
+        this.broadcastRoomState();
+        await this.finalizeCardSelectIfReady();
+        await this.scheduleNextAlarm(nowMs);
+        return;
+      }
     }
 
-    if (nowMs < phaseEndsAtMs) {
-      await this.state.storage.setAlarm(phaseEndsAtMs);
-      return;
-    }
-
-    if (this.room.phase === PHASE_PLACEMENT_REVEAL) {
-      await this.startCardSelectPhase();
-      return;
-    }
-
-    if (this.room.phase === PHASE_CARD_SELECT) {
-      this.autoLockMissingCardPicksOnTimeout();
-      await this.saveState();
-      this.broadcastRoomState();
-      await this.finalizeCardSelectIfReady();
-    }
+    await this.scheduleNextAlarm(nowMs);
   }
 
   private async handleChatSend(token: string, session: Session, payload: unknown): Promise<void> {
