@@ -51,6 +51,7 @@ local LocaleEn = {
       ws_retry_insecure_cloud = "WSS failed on cloud, retrying with WS.",
       ws_connected_insecure_cloud = "Connected via cloud WS (insecure).",
       rules_version_mismatch = "Rules version mismatch: client {clientVersion} / server {serverVersion}",
+      poll_session_invalid = "Session is invalid ({reason}). Check local/cloud mix, server restart, or session expiration. env={env}, base={base}",
       ui_skin_toggle = "UI skin: {state}"
     },
     settings = {
@@ -213,7 +214,7 @@ local LocaleEn = {
       waiting = "Waiting"
     },
     status = {
-      ws_waiting = "Waiting for WS connection...",
+      ws_waiting = "Waiting for server event connection...",
       left_room = "Left waiting room.",
       start_condition_not_met = "Match start conditions are not met.",
       start_request_sent = "Match start request sent...",
@@ -229,9 +230,9 @@ local LocaleEn = {
       turn_order = "First turn: P{playerIndex}",
       room_closed = "Room closed: {reason}",
       server_error = "Server error: {code}",
-      ws_open = "WS connected",
-      ws_close = "WS closed: {reason}",
-      ws_error = "WS error: {message}"
+      ws_open = "Server event connected",
+      ws_close = "Server event disconnected: {reason}",
+      ws_error = "Server event error: {message}"
     },
     system = {
       player_joined = "[SYSTEM] player {playerIndex} joined",
@@ -350,8 +351,8 @@ local LocaleEn = {
       result_winner = "Result: winner P{winner}",
       server_error = "Server error: {code}",
       room_closed = "Room has been closed.",
-      ws_close = "WS closed: {reason}",
-      ws_error = "WS error: {message}"
+      ws_close = "Server event disconnected: {reason}",
+      ws_error = "Server event error: {message}"
     },
     result = {
       title = "RESULT - {title}",

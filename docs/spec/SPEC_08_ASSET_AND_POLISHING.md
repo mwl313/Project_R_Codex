@@ -16,7 +16,7 @@ Date: 2026-02-10
 - Missing sound files must be no-op (never crash).
 
 ### 3.1 Runtime Contract (Implemented)
-- Client dispatches hook IDs from major HTTP/WS/match events.
+- Client dispatches hook IDs from major HTTP long-poll/match events.
 - Sound lookup order:
   - `assets/sounds/<hookId>.ogg`
   - `assets/sounds/<hookId>.wav`

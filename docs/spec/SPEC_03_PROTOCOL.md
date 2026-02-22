@@ -1,4 +1,4 @@
-# SPEC_03_PROTOCOL - HTTP/WS Message Contract
+# SPEC_03_PROTOCOL - HTTP Long-Poll Message Contract
 Date: 2026-02-11
 
 > NOTE: Message `type` strings are code-facing identifiers. Do not translate or rename them.
@@ -25,8 +25,7 @@ Date: 2026-02-11
   "ok": true,
   "rulesVersion": 1,
   "roomCode": "16-char",
-  "token": "opaque-token",
-  "wsUrl": "/ws?code=...&token=..."
+  "token": "opaque-token"
 }
 ```
 - Room code generation:
@@ -47,14 +46,51 @@ Date: 2026-02-11
   - `rulesVersion`
   - `roomCode`
   - `token`
-  - `wsUrl`
 
-## 2. WebSocket Endpoint
+### 1.4 `POST /room/send`
+- Request:
+```json
+{
+  "roomCode": "string",
+  "token": "opaque-token",
+  "envelope": { "type": "client.*", "payload": {} }
+}
+```
+- Success:
+```json
+{ "ok": true }
+```
+
+### 1.5 `POST /room/poll`
+- Request:
+```json
+{
+  "roomCode": "string",
+  "token": "opaque-token",
+  "cursor": 0,
+  "timeoutMs": 25000
+}
+```
+- Success:
+```json
+{
+  "ok": true,
+  "events": [{ "type": "server.welcome", "payload": {}, "ts": 0 }],
+  "nextCursor": 1,
+  "serverTimeMs": 0
+}
+```
+- Behavior:
+  - first poll must bootstrap `server.welcome` + `room.state`
+  - server holds request up to `timeoutMs` when no new event exists
+  - client re-issues poll immediately after response
+
+## 2. Legacy WebSocket Endpoint (Compatibility Only)
 - URL: `GET /ws?code={roomCode}&token={token}`
 - Worker routes by room code to DO.
-- DO authenticates token and player slot.
+- Current client transport is HTTP long-poll, not WS.
 
-## 3. WS Envelope
+## 3. Event Envelope
 ```json
 {
   "type": "string",
@@ -63,8 +99,8 @@ Date: 2026-02-11
 }
 ```
 - `type` namespaces:
-  - client -> server: `client.*`
-  - server -> client: `server.*`, `room.*`, `match.*`, `chat.*`, `error.*`
+  - client -> server: `client.*` (`/room/send`)
+  - server -> client: `server.*`, `room.*`, `match.*`, `chat.*`, `error.*` (`/room/poll`)
 
 ## 4. Server -> Client Events (Required)
 - `server.welcome`

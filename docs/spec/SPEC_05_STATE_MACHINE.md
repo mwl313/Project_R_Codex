@@ -86,7 +86,8 @@ Date: 2026-02-10
   - `GET /health`
   - `POST /room/create`
   - `POST /room/join`
-  - `GET /ws?code=...&token=...`
+  - `POST /room/send`
+  - `POST /room/poll`
 - DO minimum state:
   - `roomCode`, `phase`, `hostToken`, `guestToken`
   - connection flags
@@ -101,7 +102,7 @@ Date: 2026-02-10
   - keep existing menu
   - add top `싱글플레이어` button (placeholder only)
 - Add room create/join UI and waiting room view.
-- Enable waiting-room chat through WS.
+- Enable waiting-room chat through HTTP send + long-poll events.
 - Leave flow follows waiting-room rules.
 
 ### 6.3 Phase 3 - Match Flow
@@ -142,7 +143,7 @@ Date: 2026-02-10
 
 ## 8. Runtime Safety Rules
 ### 8.1 Non-blocking networking
-- HTTP and WS integration must not block render/update loop.
+- HTTP request + long-poll integration must not block render/update loop.
 - Use event queue pattern:
   - network callbacks enqueue events
   - scene update consumes queue per frame

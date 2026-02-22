@@ -43,7 +43,7 @@ Date: 2026-02-11
 
 ## 6. Versioning Contract
 - `RULES_VERSION` in `shared/gameplay_rules.json` is network-facing compatibility version.
-- Worker includes `rulesVersion` in HTTP/WS payloads.
+- Worker includes `rulesVersion` in HTTP create/join and poll event payloads.
 - Client warns on mismatch (UI warning), but should continue to run safely when possible.
 
 ## 7. Safety Rules

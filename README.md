@@ -46,8 +46,8 @@ node tools/i18n_audit.js
 - `GET /health`
 - `POST /room/create`
 - `POST /room/join`
-- WS 업그레이드 구현
-- `GET /ws?code=...&token=...`
+- `POST /room/send`
+- `POST /room/poll` (long-poll)
 - Durable Object 룸 상태 관리
 - `roomCode`, `host/guest token`, `phase`, `timers`, `chatLimiter`
 - 기본 브로드캐스트 이벤트
@@ -84,6 +84,8 @@ node tools/i18n_audit.js
 - 방 찾기 기능
 - 룸 코드 입력 및 참가
 - 클립보드 붙여넣기 버튼
+- 네트워크 트랜스포트
+- HTTP long-poll(`/room/poll`) + HTTP send(`/room/send`) 고정
 
 ### Phase 3 (게임 플로우)
 
@@ -131,7 +133,7 @@ node tools/i18n_audit.js
 
 - 사운드 훅 시스템
 - 중앙 관리: `managers/sound_manager.lua`
-- 주요 HTTP/WS/매치 이벤트에서 훅 ID 재생
+- 주요 HTTP long-poll/매치 이벤트에서 훅 ID 재생
 - 파일 규칙: `assets/sounds/<hookId>.(ogg|wav|mp3)`
 - 사운드 파일이 없어도 no-op으로 정상 진행(크래시 없음)
 - 공용 이펙트 매니저: `effects/effect_manager.lua`

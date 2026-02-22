@@ -4,14 +4,14 @@
 
 역할:
 - 클라이언트 서버 접속 환경(local/cloud)을 중앙 관리한다.
-- HTTP/WS base URL을 단일 경로로 제공한다.
+- HTTP base URL을 단일 경로로 제공한다.
 
 외부에서 사용 가능한 함수:
 - ServerEnv.normalize(env)
 - ServerEnv.set(env)
 - ServerEnv.get()
 - ServerEnv.getHttpBase(env)
-- ServerEnv.getWsBase(env)
+- ServerEnv.getWsBase(env) -- deprecated (legacy compatibility only)
 ]]
 
 local Constants = require("constants")
@@ -50,6 +50,8 @@ function ServerEnv.getHttpBase(env)
 end
 
 function ServerEnv.getWsBase(env, preferInsecureCloud)
+  -- Deprecated: 런타임 클라이언트는 WS를 사용하지 않는다.
+  -- 기존 호출부와의 호환을 위해서만 남겨둔다.
   local resolvedEnv = normalizeEnv(env or currentEnv)
   if resolvedEnv == Constants.SERVER_ENV_LOCAL then
     return Constants.SERVER_WS_BASE_URL_LOCAL

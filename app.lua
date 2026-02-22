@@ -4,7 +4,7 @@
 
 역할:
 - Phase 2 클라이언트 전체 상태 관리
-- 씬 전환, HTTP/WS 이벤트 처리, 세션 상태 관리
+- 씬 전환, HTTP long-poll 이벤트 처리, 세션 상태 관리
 
 외부에서 사용 가능한 함수:
 - App.new(renderScale)
@@ -257,6 +257,8 @@ function App:getServerHttpBase(env)
 end
 
 function App:getServerWsBase(env)
+  -- Deprecated: 클라이언트 런타임은 WS를 사용하지 않는다.
+  -- 하위호환 조회가 남아있는 경우를 위해서만 유지한다.
   return ServerEnv.getWsBase(env, false)
 end
 
@@ -553,7 +555,9 @@ function App:startPolling()
   self:networkLog("POLL_START", {
     roomCode = self._session.roomCode,
     token = shortToken(self._session.token),
-    generation = self._poll.generation
+    generation = self._poll.generation,
+    serverEnv = self._serverEnv,
+    httpBase = self:getServerHttpBase(self._serverEnv)
   })
   self:playSoundHook(NETWORK_EVENT_SOUND_HOOK_MAP.ws_open)
   self._sceneManager:dispatch("onAppEvent", {
@@ -570,7 +574,9 @@ function App:stopPolling(reason)
   self:networkLog("POLL_STOP", {
     reason = reason or "poll_stopped",
     roomCode = self._session.roomCode,
-    token = shortToken(self._session.token)
+    token = shortToken(self._session.token),
+    serverEnv = self._serverEnv,
+    httpBase = self:getServerHttpBase(self._serverEnv)
   })
   self:playSoundHook(NETWORK_EVENT_SOUND_HOOK_MAP.ws_close)
   self._sceneManager:dispatch("onAppEvent", {
@@ -652,6 +658,46 @@ function App:sendChat(text)
   })
 end
 
+function App:handlePollFatalError(reason)
+  local reasonCode = tostring(reason or "")
+  if reasonCode ~= "invalid_token" and reasonCode ~= "invalid_room_code" then
+    return false
+  end
+
+  local httpBase = self:getServerHttpBase(self._serverEnv)
+  local statusMessage = t("app.ui.poll_session_invalid", {
+    reason = reasonCode,
+    env = self._serverEnv,
+    base = httpBase
+  })
+
+  self:networkLog("POLL_FATAL", {
+    reason = reasonCode,
+    roomCode = self._session.roomCode,
+    token = shortToken(self._session.token),
+    cursor = self._poll.cursor,
+    serverEnv = self._serverEnv,
+    httpBase = httpBase
+  })
+
+  self:stopPolling(reasonCode)
+  self._session = {
+    roomCode = nil,
+    token = nil,
+    role = nil,
+    serverRulesVersion = nil,
+    lastRoomState = nil
+  }
+
+  self:emitUiStatus(statusMessage, Constants.COLOR_DANGER)
+  self:goLobby({
+    statusText = statusMessage,
+    statusColor = Constants.COLOR_DANGER
+  }, Config.TRANSITION_BACK)
+
+  return true
+end
+
 function App:leaveRoom()
   self:sendClientEnvelope("client.room.leave", {}, {
     silent = true
@@ -728,7 +774,9 @@ function App:handleHttpResponse(event, sourceTag)
       activeGeneration = self._poll.generation,
       activeRoomCode = self._session.roomCode,
       activeToken = shortToken(self._session.token),
-      inFlightRequestId = tostring(self._poll.inFlightRequestId or "")
+      inFlightRequestId = tostring(self._poll.inFlightRequestId or ""),
+      serverEnv = self._serverEnv,
+      httpBase = self:getServerHttpBase(self._serverEnv)
     })
     if requestMeta.generation ~= self._poll.generation then
       return
@@ -761,8 +809,13 @@ function App:handleHttpResponse(event, sourceTag)
         nextPollAtMs = self._poll.nextPollAtMs,
         roomCode = self._session.roomCode,
         token = shortToken(self._session.token),
-        cursor = self._poll.cursor
+        cursor = self._poll.cursor,
+        serverEnv = self._serverEnv,
+        httpBase = self:getServerHttpBase(self._serverEnv)
       })
+      if self:handlePollFatalError(reason) then
+        return
+      end
       return
     end
 
@@ -783,6 +836,9 @@ function App:handleHttpResponse(event, sourceTag)
       return
     end
     local reason = bodyTable.error or event.error or ("http_status_" .. tostring(event.status))
+    if self:handlePollFatalError(reason) then
+      return
+    end
     local retryCount = requestMeta.retryCount or 0
     local maxRetry = requestMeta.maxRetry or 0
     local canRetry = requestMeta.critical == true and retryCount < maxRetry and self._session.roomCode and self._session.token
@@ -882,7 +938,9 @@ function App:issuePollRequest(nowMs)
     cursor = self._poll.cursor,
     timeoutMs = Constants.NETWORK_POLL_TIMEOUT_MS,
     issuedAtMs = nowValue,
-    generation = self._poll.generation
+    generation = self._poll.generation,
+    serverEnv = self._serverEnv,
+    httpBase = self:getServerHttpBase(self._serverEnv)
   }
   self:networkLog("POLL_REQUEST", self._poll.lastIssued)
   self._pendingHttpMap["poll:" .. requestId] = {

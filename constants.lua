@@ -65,13 +65,16 @@ Constants = {
   SERVER_ENV_CLOUD = "cloud",
   SERVER_ENV_DEFAULT = "cloud",
   SERVER_HTTP_BASE_URL_LOCAL = "http://127.0.0.1:8787",
+  -- Deprecated (legacy only): 클라이언트 런타임은 WS 경로를 사용하지 않는다.
   SERVER_WS_BASE_URL_LOCAL = "ws://127.0.0.1:8787",
   SERVER_HTTP_BASE_URL_CLOUD = "http://project-r-server.pangyostonefist.workers.dev",
+  -- Deprecated (legacy only): 클라이언트 런타임은 WS 경로를 사용하지 않는다.
   SERVER_WS_BASE_URL_CLOUD = "wss://project-r-server.pangyostonefist.workers.dev",
-  -- Cloud WS secure 연결 실패 시 폴백용(개발/환경 호환성).
+  -- Deprecated (legacy only): WS 비보안 폴백 URL.
   SERVER_WS_BASE_URL_CLOUD_INSECURE = "ws://project-r-server.pangyostonefist.workers.dev",
   -- 레거시 기본값 (하위 호환). 실제 요청 URL은 net/server_env.lua 경로를 사용한다.
   SERVER_HTTP_BASE_URL = "http://project-r-server.pangyostonefist.workers.dev",
+  -- Deprecated (legacy only): 클라이언트 런타임은 WS 기본값을 사용하지 않는다.
   SERVER_WS_BASE_URL = "wss://project-r-server.pangyostonefist.workers.dev",
 
   NETWORK_POLL_TIMEOUT_MS = 25000,

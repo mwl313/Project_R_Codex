@@ -7,7 +7,7 @@ Date: 2026-02-10
 - Stack is fixed:
   - Client: LÖVE 11.x (Lua)
   - Server: Cloudflare Workers + Durable Objects (TypeScript)
-  - Transport: HTTP (`/room/create`, `/room/join`) + WebSocket (`/ws`)
+  - Transport: HTTP (`/room/create`, `/room/join`, `/room/send`, `/room/poll` long-poll)
 
 ## 2. Non-Negotiable Rules
 - No implementation code before spec approval.

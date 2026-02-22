@@ -540,10 +540,9 @@ function DebugMenuScene:drawServerEnvPanel(mouseX, mouseY)
   self:drawServerEnvRadio(self._serverEnvCloudRect, t("debug_menu.network.cloud"), pendingEnv == Constants.SERVER_ENV_CLOUD, alpha)
 
   local httpBase = self._app:getServerHttpBase(pendingEnv)
-  local wsBase = self._app:getServerWsBase(pendingEnv)
   love.graphics.setColor(Constants.COLOR_TEXT_SUB[1], Constants.COLOR_TEXT_SUB[2], Constants.COLOR_TEXT_SUB[3], 0.90)
   love.graphics.print("HTTP: " .. tostring(httpBase), panel.x + 342, panel.y + 44)
-  love.graphics.print("WS: " .. tostring(wsBase), panel.x + 342, panel.y + 66)
+  love.graphics.print("Transport: HTTP long-poll", panel.x + 342, panel.y + 66)
 
   self._serverEnvApplyButton.isEnabled = canSwitch and pendingEnv ~= currentEnv
   self._serverEnvApplyButton:draw(mouseX, mouseY)

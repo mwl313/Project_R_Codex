@@ -101,8 +101,7 @@ export default {
           ok: true,
           rulesVersion: RULES_VERSION,
           roomCode,
-          token: payload.token,
-          wsUrl: `/ws?code=${roomCode}&token=${payload.token}`
+          token: payload.token
         });
       }
 
@@ -146,8 +145,7 @@ export default {
         ok: true,
         rulesVersion: RULES_VERSION,
         roomCode,
-        token: payload.token,
-        wsUrl: `/ws?code=${roomCode}&token=${payload.token}`
+        token: payload.token
       });
     }
 
