@@ -4,7 +4,7 @@
 
 역할:
 - Phase 2 클라이언트 전체 상태 관리
-- 씬 전환, HTTP/WS 이벤트 처리, 세션 상태 관리
+- 씬 전환, HTTP long-poll 이벤트 처리, 세션 상태 관리
 
 외부에서 사용 가능한 함수:
 - App.new(renderScale)
@@ -34,14 +34,24 @@ local SceneManager = require("managers.scene_manager")
 local SettingsManager = require("managers.settings_manager")
 local SoundManager = require("managers.sound_manager")
 local HttpClient = require("net.http_client")
-local WsClient = require("net.ws_client")
 local InputCaptureGuard = require("utils.input_capture_guard")
+local ServerEnv = require("net.server_env")
 
 local App = {}
 App.__index = App
 
 local function t(key, vars)
   return I18n.t(key, vars)
+end
+
+local function shortToken(token)
+  if type(token) ~= "string" or token == "" then
+    return ""
+  end
+  if #token <= 10 then
+    return token
+  end
+  return string.sub(token, 1, 6) .. "..." .. string.sub(token, -4)
 end
 
 local function createSceneFactoryTable()
@@ -128,24 +138,32 @@ local SERVER_ENVELOPE_SOUND_HOOK_MAP = {
 }
 
 local NETWORK_EVENT_SOUND_HOOK_MAP = {
-  ws_open = "ws_open",
-  ws_close = "ws_close",
-  ws_error = "ws_error"
+  server_open = "ws_open",
+  server_close = "ws_close",
+  server_error = "ws_error"
 }
 
 function App.new(renderScale)
   local instance = {
     _renderScale = renderScale,
     _httpClient = HttpClient.new(),
-    _wsClient = WsClient.new(),
+    _pollHttpClient = HttpClient.new(),
     _settingsManager = SettingsManager.new(),
     _soundManager = SoundManager.new(),
     _sceneManager = nil,
     _pendingHttpMap = {},
+    _poll = {
+      isActive = false,
+      cursor = 0,
+      inFlightRequestId = nil,
+      nextPollAtMs = 0,
+      backoffMs = 0,
+      generation = 0,
+      lastIssued = nil
+    },
     _session = {
       roomCode = nil,
       token = nil,
-      wsUrl = nil,
       role = nil,
       serverRulesVersion = nil,
       lastRoomState = nil
@@ -153,6 +171,8 @@ function App.new(renderScale)
     _nickname = "Player",
     _displayMode = Constants.DISPLAY_MODE_WINDOWED,
     _language = "ko",
+    _serverEnv = Constants.SERVER_ENV_DEFAULT,
+    _serverStreamConnected = false,
     _fontWarningText = FontManager.getWarningMessage(),
     _worldMouseX = 0,
     _worldMouseY = 0,
@@ -175,6 +195,22 @@ function App.new(renderScale)
   return instance
 end
 
+function App:networkLog(tag, payload)
+  if Constants.NETWORK_DIAG_LOG ~= true then
+    return
+  end
+  local encodedPayload = "{}"
+  if payload ~= nil then
+    local isEncoded, encodedOrError = pcall(Json.encode, payload)
+    if isEncoded and type(encodedOrError) == "string" then
+      encodedPayload = encodedOrError
+    else
+      encodedPayload = "{\"encodeError\":true}"
+    end
+  end
+  print(string.format("[NET][%s] %s", tostring(tag), encodedPayload))
+end
+
 function App:playSoundHook(hookId)
   if not self._soundManager then
     return
@@ -189,7 +225,9 @@ end
 function App:setNickname(nickname)
   local normalized = self._settingsManager:normalizeSettings({
     nickname = nickname,
-    displayMode = self._displayMode
+    displayMode = self._displayMode,
+    language = self._language,
+    serverEnv = self._serverEnv
   })
   self._nickname = normalized.nickname
 end
@@ -210,12 +248,69 @@ function App:getSettingsDebugPath()
   return self._settingsManager:getSettingsDebugPath()
 end
 
+function App:getServerEnv()
+  return self._serverEnv
+end
+
+function App:getServerHttpBase(env)
+  return ServerEnv.getHttpBase(env)
+end
+
+function App:getServerWsBase(env)
+  -- Deprecated: 클라이언트 런타임은 WS를 사용하지 않는다.
+  -- 하위호환 조회가 남아있는 경우를 위해서만 유지한다.
+  return ServerEnv.getWsBase(env, false)
+end
+
+function App:isNetworkSessionActive()
+  if self._poll and self._poll.isActive then
+    return true
+  end
+  if next(self._pendingHttpMap) ~= nil then
+    return true
+  end
+  if self._session.roomCode or self._session.token then
+    return true
+  end
+  return false
+end
+
+function App:canSwitchServerEnv()
+  if self:isNetworkSessionActive() then
+    return false
+  end
+  return true
+end
+
+function App:setServerEnv(serverEnv)
+  if not self:canSwitchServerEnv() then
+    return false, t("debug_menu.status.server_env_locked")
+  end
+
+  local previousEnv = self._serverEnv
+  local normalizedEnv = ServerEnv.set(serverEnv)
+  self._serverEnv = normalizedEnv
+
+  local isSaved, saveMessage = self:savePersistentSettings({
+    serverEnv = normalizedEnv
+  })
+  if not isSaved then
+    self._serverEnv = ServerEnv.set(previousEnv)
+    return false, saveMessage
+  end
+
+  return true, t("debug_menu.status.server_env_applied", {
+    env = normalizedEnv == Constants.SERVER_ENV_LOCAL and t("debug_menu.network.local") or t("debug_menu.network.cloud")
+  })
+end
+
 function App:loadPersistentSettings()
   local loadedSettings, loadError = self._settingsManager:loadSettings()
   local normalizedSettings = self._settingsManager:normalizeSettings(loadedSettings)
 
   self._nickname = normalizedSettings.nickname
   self._language = I18n.setLanguage(normalizedSettings.language)
+  self._serverEnv = ServerEnv.set(normalizedSettings.serverEnv)
   local appliedDisplayMode, applyError = self._settingsManager:applyDisplayMode(normalizedSettings.displayMode)
   self._displayMode = appliedDisplayMode
   self:resize(love.graphics.getDimensions())
@@ -237,7 +332,8 @@ function App:savePersistentSettings(patchSettings)
   local mergedSettings = self._settingsManager:normalizeSettings({
     nickname = patchSettings and patchSettings.nickname or self._nickname,
     displayMode = patchSettings and patchSettings.displayMode or self._displayMode,
-    language = patchSettings and patchSettings.language or self._language
+    language = patchSettings and patchSettings.language or self._language,
+    serverEnv = patchSettings and patchSettings.serverEnv or self._serverEnv
   })
 
   local applyWarning = nil
@@ -251,6 +347,7 @@ function App:savePersistentSettings(patchSettings)
 
   self._nickname = mergedSettings.nickname
   self._language = I18n.setLanguage(mergedSettings.language)
+  self._serverEnv = ServerEnv.set(mergedSettings.serverEnv)
 
   local isSaved, saveError = self._settingsManager:saveSettings(mergedSettings)
   if not isSaved then
@@ -382,14 +479,7 @@ function App:emitUiStatus(text, color)
 end
 
 function App:buildHttpUrl(path)
-  return Constants.SERVER_HTTP_BASE_URL .. path
-end
-
-function App:buildWsUrl(pathOrAbsolute)
-  if startsWith(pathOrAbsolute, "ws://") or startsWith(pathOrAbsolute, "wss://") then
-    return pathOrAbsolute
-  end
-  return Constants.SERVER_WS_BASE_URL .. pathOrAbsolute
+  return ServerEnv.getHttpBase() .. path
 end
 
 function App:checkRulesVersion(serverVersion)
@@ -418,7 +508,7 @@ function App:createRoom()
   }, {
     ["content-type"] = "application/json"
   })
-  self._pendingHttpMap[requestId] = { kind = "createRoom" }
+  self._pendingHttpMap["main:" .. requestId] = { kind = "createRoom" }
 end
 
 function App:joinRoom(roomCode)
@@ -429,59 +519,212 @@ function App:joinRoom(roomCode)
   }, {
     ["content-type"] = "application/json"
   })
-  self._pendingHttpMap[requestId] = { kind = "joinRoom" }
+  self._pendingHttpMap["main:" .. requestId] = { kind = "joinRoom" }
 end
 
-function App:connectWebSocket()
-  if not self._session.wsUrl then
-    self:playSoundHook("error_generic")
-    self:emitUiStatus(t("app.ui.ws_url_missing"), Constants.COLOR_DANGER)
+function App:getNowMs()
+  if love and love.timer and love.timer.getTime then
+    return math.floor(love.timer.getTime() * 1000)
+  end
+  return math.floor(os.clock() * 1000)
+end
+
+function App:resetPollState()
+  for requestKey, requestMeta in pairs(self._pendingHttpMap) do
+    if type(requestMeta) == "table" and requestMeta.kind == "poll" then
+      self._pendingHttpMap[requestKey] = nil
+    end
+  end
+  self._poll.isActive = false
+  self._poll.cursor = 0
+  self._poll.inFlightRequestId = nil
+  self._poll.nextPollAtMs = 0
+  self._poll.backoffMs = 0
+  self._poll.generation = (self._poll.generation or 0) + 1
+  self._poll.lastIssued = nil
+end
+
+function App:startPolling()
+  if not self._session.roomCode or not self._session.token then
     return
   end
-  self._wsClient:connect(self:buildWsUrl(self._session.wsUrl))
+  self:resetPollState()
+  self._poll.isActive = true
+  self._poll.nextPollAtMs = self:getNowMs()
+  self._serverStreamConnected = true
+  self:networkLog("POLL_START", {
+    roomCode = self._session.roomCode,
+    token = shortToken(self._session.token),
+    generation = self._poll.generation,
+    serverEnv = self._serverEnv,
+    httpBase = self:getServerHttpBase(self._serverEnv)
+  })
+  self:playSoundHook(NETWORK_EVENT_SOUND_HOOK_MAP.server_open)
+  self._sceneManager:dispatch("onAppEvent", {
+    type = "server_open"
+  })
 end
 
-function App:sendWsEnvelope(envelopeType, payload)
-  self._wsClient:sendEnvelope({
-    type = envelopeType,
-    payload = payload or {}
+function App:stopPolling(reason)
+  if not self._poll.isActive and not self._serverStreamConnected then
+    return
+  end
+  self:resetPollState()
+  self._serverStreamConnected = false
+  self:networkLog("POLL_STOP", {
+    reason = reason or "poll_stopped",
+    roomCode = self._session.roomCode,
+    token = shortToken(self._session.token),
+    serverEnv = self._serverEnv,
+    httpBase = self:getServerHttpBase(self._serverEnv)
   })
+  self:playSoundHook(NETWORK_EVENT_SOUND_HOOK_MAP.server_close)
+  self._sceneManager:dispatch("onAppEvent", {
+    type = "server_close",
+    reason = reason or "poll_stopped"
+  })
+end
+
+function App:buildSendRetryMeta(envelopeType, payload, options)
+  local opts = options or {}
+  local critical = opts.critical == true
+  return {
+    kind = "sendEnvelope",
+    envelopeType = envelopeType,
+    payload = payload or {},
+    critical = critical,
+    retryCount = opts.retryCount or 0,
+    maxRetry = opts.maxRetry or Constants.NETWORK_SEND_RETRY_MAX,
+    silent = opts.silent == true
+  }
+end
+
+function App:requestSendEnvelope(envelopeType, payload, options)
+  if not self._session.roomCode or not self._session.token then
+    self:emitUiStatus(t("app.ui.request_failed", {
+      reason = "session_missing"
+    }), Constants.COLOR_DANGER)
+    return nil
+  end
+  local requestId = self._httpClient:request("POST", self:buildHttpUrl("/room/send"), {
+    roomCode = self._session.roomCode,
+    token = self._session.token,
+    envelope = {
+      type = envelopeType,
+      payload = payload or {}
+    }
+  }, {
+    ["content-type"] = "application/json"
+  })
+  self._pendingHttpMap["main:" .. requestId] = self:buildSendRetryMeta(envelopeType, payload, options)
+  return requestId
+end
+
+function App:sendClientEnvelope(envelopeType, payload, options)
+  local requestId = self:requestSendEnvelope(envelopeType, payload, options)
+  if not requestId then
+    return
+  end
   local hookId = CLIENT_ENVELOPE_SOUND_HOOK_MAP[envelopeType]
   if hookId then
     self:playSoundHook(hookId)
   end
+  local shouldTriggerEarlyPoll = options and options.critical == true
+  if shouldTriggerEarlyPoll and self._poll.isActive and not self._poll.inFlightRequestId then
+    self._poll.nextPollAtMs = self:getNowMs()
+  end
+end
+
+function App:sendEnvelope(envelopeType, payload)
+  local criticalEnvelopeTypeMap = {
+    ["client.match.turn.shot"] = true,
+    ["client.match.turn.snapshot"] = true,
+    ["client.match.turn.cardUse"] = true,
+    ["client.match.cards.pick"] = true,
+    ["client.match.placement.submit"] = true,
+    ["client.match.start"] = true,
+    ["client.room.ready"] = true,
+    ["client.match.rematch.vote"] = true,
+    ["client.match.surrender"] = true
+  }
+  self:sendClientEnvelope(envelopeType, payload, {
+    critical = criticalEnvelopeTypeMap[envelopeType] == true
+  })
 end
 
 function App:sendChat(text)
-  self:sendWsEnvelope("client.chat.send", {
+  self:sendEnvelope("client.chat.send", {
     text = text
   })
 end
 
-function App:leaveRoom()
-  self:sendWsEnvelope("client.room.leave", {})
-  self._wsClient:disconnect()
+function App:handlePollFatalError(reason)
+  local reasonCode = tostring(reason or "")
+  if reasonCode ~= "invalid_token" and reasonCode ~= "invalid_room_code" then
+    return false
+  end
+
+  local httpBase = self:getServerHttpBase(self._serverEnv)
+  local statusMessage = t("app.ui.poll_session_invalid", {
+    reason = reasonCode,
+    env = self._serverEnv,
+    base = httpBase
+  })
+
+  self:networkLog("POLL_FATAL", {
+    reason = reasonCode,
+    roomCode = self._session.roomCode,
+    token = shortToken(self._session.token),
+    cursor = self._poll.cursor,
+    serverEnv = self._serverEnv,
+    httpBase = httpBase
+  })
+
+  self:stopPolling(reasonCode)
   self._session = {
     roomCode = nil,
     token = nil,
-    wsUrl = nil,
+    role = nil,
+    serverRulesVersion = nil,
+    lastRoomState = nil
+  }
+
+  self:emitUiStatus(statusMessage, Constants.COLOR_DANGER)
+  self:goLobby({
+    statusText = statusMessage,
+    statusColor = Constants.COLOR_DANGER
+  }, Config.TRANSITION_BACK)
+
+  return true
+end
+
+function App:leaveRoom()
+  self:sendClientEnvelope("client.room.leave", {}, {
+    silent = true
+  })
+  self:stopPolling("leave_room")
+  self._session = {
+    roomCode = nil,
+    token = nil,
     role = nil,
     serverRulesVersion = nil,
     lastRoomState = nil
   }
 end
 
-function App:handleHttpResponse(event)
-  local requestMeta = self._pendingHttpMap[event.requestId]
+function App:handleHttpResponse(event, sourceTag)
+  local source = sourceTag or "main"
+  local requestKey = source .. ":" .. tostring(event.requestId)
+  local requestMeta = self._pendingHttpMap[requestKey]
   if not requestMeta then
     return
   end
-  self._pendingHttpMap[event.requestId] = nil
+  self._pendingHttpMap[requestKey] = nil
 
   local bodyTable = {}
   if event.body and event.body ~= "" then
     local isDecoded, parsed = pcall(Json.decode, event.body)
-    if isDecoded and parsed then
+    if isDecoded and type(parsed) == "table" then
       bodyTable = parsed
     else
       self:playSoundHook("http_parse_error")
@@ -490,34 +733,142 @@ function App:handleHttpResponse(event)
     end
   end
 
-  if not event.ok or not bodyTable.ok then
-    self:playSoundHook("http_error")
-    local reason = bodyTable.error or event.error or ("http_status_" .. tostring(event.status))
-    self:emitUiStatus(t("app.ui.request_failed", {
-      reason = reason
-    }), Constants.COLOR_DANGER)
-    return
-  end
-
-  self._session.roomCode = bodyTable.roomCode
-  self._session.token = bodyTable.token
-  self._session.wsUrl = bodyTable.wsUrl
-  self._session.role = nil
-  self._session.lastRoomState = nil
-  self:checkRulesVersion(bodyTable.rulesVersion)
-
+  local requestOk = event.ok and bodyTable.ok
   if requestMeta.kind == "createRoom" or requestMeta.kind == "joinRoom" then
+    if not requestOk then
+      self:playSoundHook("http_error")
+      local reason = bodyTable.error or event.error or ("http_status_" .. tostring(event.status))
+      self:emitUiStatus(t("app.ui.request_failed", {
+        reason = reason
+      }), Constants.COLOR_DANGER)
+      return
+    end
+    self._session.roomCode = bodyTable.roomCode
+    self._session.token = bodyTable.token
+    self._session.role = nil
+    self._session.lastRoomState = nil
+    self:checkRulesVersion(bodyTable.rulesVersion)
+
     if requestMeta.kind == "createRoom" then
       self:playSoundHook("room_create_success")
     else
       self:playSoundHook("room_join_success")
     end
     self:goWaitingRoom(nil, Config.TRANSITION_FORWARD)
-    self:connectWebSocket()
+    self:startPolling()
+    return
+  end
+
+  if requestMeta.kind == "poll" then
+    local isValidPollResponse = requestOk and type(bodyTable.nextCursor) == "number" and type(bodyTable.events) == "table"
+    self:networkLog("POLL_RESPONSE", {
+      requestId = tostring(event.requestId),
+      httpOk = event.ok == true,
+      httpStatus = event.status,
+      transportError = event.error,
+      bodyOk = bodyTable.ok,
+      bodyError = bodyTable.error,
+      nextCursor = bodyTable.nextCursor,
+      eventsCount = type(bodyTable.events) == "table" and #bodyTable.events or nil,
+      generation = requestMeta.generation,
+      activeGeneration = self._poll.generation,
+      activeRoomCode = self._session.roomCode,
+      activeToken = shortToken(self._session.token),
+      inFlightRequestId = tostring(self._poll.inFlightRequestId or ""),
+      serverEnv = self._serverEnv,
+      httpBase = self:getServerHttpBase(self._serverEnv)
+    })
+    if requestMeta.generation ~= self._poll.generation then
+      return
+    end
+    if self._poll.inFlightRequestId == event.requestId then
+      self._poll.inFlightRequestId = nil
+    end
+    if not isValidPollResponse then
+      local reason = bodyTable.error or event.error or ("http_status_" .. tostring(event.status))
+      local currentBackoff = self._poll.backoffMs
+      if currentBackoff <= 0 then
+        currentBackoff = Constants.NETWORK_POLL_BACKOFF_INITIAL_MS
+      else
+        currentBackoff = math.min(currentBackoff * 2, Constants.NETWORK_POLL_BACKOFF_MAX_MS)
+      end
+      self._poll.backoffMs = currentBackoff
+      local jitterRatio = Constants.NETWORK_POLL_BACKOFF_JITTER_RATIO
+      local jitter = (math.random() * 2 - 1) * jitterRatio * currentBackoff
+      local waitMs = math.max(0, math.floor(currentBackoff + jitter))
+      self._poll.nextPollAtMs = self:getNowMs() + waitMs
+      self:playSoundHook(NETWORK_EVENT_SOUND_HOOK_MAP.server_error)
+      self._sceneManager:dispatch("onAppEvent", {
+        type = "server_error",
+        message = reason
+      })
+      self:networkLog("POLL_RESPONSE_INVALID", {
+        requestId = tostring(event.requestId),
+        reason = tostring(reason),
+        retryBackoffMs = self._poll.backoffMs,
+        nextPollAtMs = self._poll.nextPollAtMs,
+        roomCode = self._session.roomCode,
+        token = shortToken(self._session.token),
+        cursor = self._poll.cursor,
+        serverEnv = self._serverEnv,
+        httpBase = self:getServerHttpBase(self._serverEnv)
+      })
+      if self:handlePollFatalError(reason) then
+        return
+      end
+      return
+    end
+
+    self._poll.backoffMs = 0
+    self._poll.cursor = bodyTable.nextCursor
+    self._poll.nextPollAtMs = self:getNowMs()
+
+    for _, envelope in ipairs(bodyTable.events) do
+      if type(envelope) == "table" and type(envelope.type) == "string" then
+        self:handleServerEnvelope(envelope)
+      end
+    end
+    return
+  end
+
+  if requestMeta.kind == "sendEnvelope" then
+    if requestOk then
+      return
+    end
+    local reason = bodyTable.error or event.error or ("http_status_" .. tostring(event.status))
+    if self:handlePollFatalError(reason) then
+      return
+    end
+    local retryCount = requestMeta.retryCount or 0
+    local maxRetry = requestMeta.maxRetry or 0
+    local canRetry = requestMeta.critical == true and retryCount < maxRetry and self._session.roomCode and self._session.token
+    if canRetry then
+      self:requestSendEnvelope(requestMeta.envelopeType, requestMeta.payload, {
+        critical = true,
+        retryCount = retryCount + 1,
+        maxRetry = maxRetry,
+        silent = requestMeta.silent == true
+      })
+      return
+    end
+    if requestMeta.silent ~= true then
+      self:emitUiStatus(t("app.ui.request_failed", {
+        reason = reason
+      }), Constants.COLOR_DANGER)
+    end
+    return
+  end
+
+  if not requestOk then
+    self:playSoundHook("http_error")
+    local reason = bodyTable.error or event.error or ("http_status_" .. tostring(event.status))
+    self:emitUiStatus(t("app.ui.request_failed", {
+      reason = reason
+    }), Constants.COLOR_DANGER)
   end
 end
 
-function App:handleWsEnvelope(envelope)
+function App:handleServerEnvelope(envelope)
   local shouldDispatch = true
   local hookId = SERVER_ENVELOPE_SOUND_HOOK_MAP[envelope.type]
   if hookId then
@@ -538,11 +889,10 @@ function App:handleWsEnvelope(envelope)
     end
     self:checkRulesVersion(payload.rulesVersion)
   elseif envelope.type == "room.closed" then
-    self._wsClient:disconnect()
+    self:stopPolling("room_closed")
     self._session = {
       roomCode = nil,
       token = nil,
-      wsUrl = nil,
       role = nil,
       serverRulesVersion = nil,
       lastRoomState = nil
@@ -552,37 +902,67 @@ function App:handleWsEnvelope(envelope)
     return
   end
   self._sceneManager:dispatch("onAppEvent", {
-    type = "ws_envelope",
+    type = "server_envelope",
     envelope = envelope
   })
 end
 
-function App:pollNetworkEvents()
-  local httpEvents = self._httpClient:pollEvents(20)
-  for _, event in ipairs(httpEvents) do
-    if event.type == "response" then
-      self:handleHttpResponse(event)
-    end
+function App:issuePollRequest(nowMs)
+  if not self._poll.isActive then
+    return
+  end
+  if self._poll.inFlightRequestId ~= nil then
+    return
+  end
+  if not self._session.roomCode or not self._session.token then
+    return
+  end
+  local nowValue = nowMs or self:getNowMs()
+  if nowValue < (self._poll.nextPollAtMs or 0) then
+    return
   end
 
-  local wsEvents = self._wsClient:pollEvents(50)
-  for _, event in ipairs(wsEvents) do
-    if event.type == "ws_message" then
-      local isDecoded, envelope = pcall(Json.decode, event.text)
-      if isDecoded and envelope then
-        self:handleWsEnvelope(envelope)
-      else
-        self:playSoundHook("ws_parse_error")
-        self:emitUiStatus(t("app.ui.ws_message_parse_failed"), Constants.COLOR_DANGER)
-      end
-    else
-      local hookId = NETWORK_EVENT_SOUND_HOOK_MAP[event.type]
-      if hookId then
-        self:playSoundHook(hookId)
-      end
-      self._sceneManager:dispatch("onAppEvent", event)
+  local requestId = self._pollHttpClient:request("POST", self:buildHttpUrl("/room/poll"), {
+    roomCode = self._session.roomCode,
+    token = self._session.token,
+    cursor = self._poll.cursor,
+    timeoutMs = Constants.NETWORK_POLL_TIMEOUT_MS
+  }, {
+    ["content-type"] = "application/json"
+  })
+  self._poll.inFlightRequestId = requestId
+  self._poll.lastIssued = {
+    requestId = requestId,
+    roomCode = self._session.roomCode,
+    token = shortToken(self._session.token),
+    cursor = self._poll.cursor,
+    timeoutMs = Constants.NETWORK_POLL_TIMEOUT_MS,
+    issuedAtMs = nowValue,
+    generation = self._poll.generation,
+    serverEnv = self._serverEnv,
+    httpBase = self:getServerHttpBase(self._serverEnv)
+  }
+  self:networkLog("POLL_REQUEST", self._poll.lastIssued)
+  self._pendingHttpMap["poll:" .. requestId] = {
+    kind = "poll",
+    generation = self._poll.generation
+  }
+end
+
+function App:pollNetworkEvents()
+  local httpEvents = self._httpClient:pollEvents(30)
+  for _, event in ipairs(httpEvents) do
+    if event.type == "response" then
+      self:handleHttpResponse(event, "main")
     end
   end
+  local pollEvents = self._pollHttpClient:pollEvents(8)
+  for _, event in ipairs(pollEvents) do
+    if event.type == "response" then
+      self:handleHttpResponse(event, "poll")
+    end
+  end
+  self:issuePollRequest(self:getNowMs())
 end
 
 function App:update(dt)
@@ -688,8 +1068,9 @@ function App:shutdown()
   if self._soundManager then
     self._soundManager:stopAll()
   end
+  self:stopPolling("shutdown")
   self._httpClient:shutdown()
-  self._wsClient:shutdown()
+  self._pollHttpClient:shutdown()
 end
 
 return App

@@ -101,8 +101,7 @@ export default {
           ok: true,
           rulesVersion: RULES_VERSION,
           roomCode,
-          token: payload.token,
-          wsUrl: `/ws?code=${roomCode}&token=${payload.token}`
+          token: payload.token
         });
       }
 
@@ -146,8 +145,91 @@ export default {
         ok: true,
         rulesVersion: RULES_VERSION,
         roomCode,
-        token: payload.token,
-        wsUrl: `/ws?code=${roomCode}&token=${payload.token}`
+        token: payload.token
+      });
+    }
+
+    if (request.method === "POST" && url.pathname === "/room/send") {
+      let body: { roomCode?: unknown; token?: unknown; envelope?: unknown };
+      try {
+        body = (await parseBodyJson(request)) as { roomCode?: unknown; token?: unknown; envelope?: unknown };
+      } catch {
+        return jsonResponse({ ok: false, error: "invalid_payload" }, 400);
+      }
+
+      if (typeof body.roomCode !== "string" || !isValidRoomCode(body.roomCode)) {
+        return jsonResponse({ ok: false, error: "invalid_room_code" }, 400);
+      }
+      if (typeof body.token !== "string" || body.token.length <= 0) {
+        return jsonResponse({ ok: false, error: "invalid_token" }, 401);
+      }
+      if (!body.envelope || typeof body.envelope !== "object") {
+        return jsonResponse({ ok: false, error: "invalid_payload" }, 400);
+      }
+
+      const roomCode = body.roomCode;
+      const id = env.ROOM_DO.idFromName(roomCode);
+      const stub = env.ROOM_DO.get(id);
+      const doResponse = await stub.fetch(
+        createDoInternalRequest("https://room.internal/internal/send", {
+          method: "POST",
+          body: JSON.stringify({
+            token: body.token,
+            envelope: body.envelope
+          })
+        })
+      );
+      const payload = await readJsonResponse<{ ok: boolean; error?: string }>(doResponse);
+      if (!payload.ok) {
+        return jsonResponse({ ok: false, error: payload.error ?? "send_failed" }, doResponse.status);
+      }
+      return jsonResponse({ ok: true });
+    }
+
+    if (request.method === "POST" && url.pathname === "/room/poll") {
+      let body: { roomCode?: unknown; token?: unknown; cursor?: unknown; timeoutMs?: unknown };
+      try {
+        body = (await parseBodyJson(request)) as { roomCode?: unknown; token?: unknown; cursor?: unknown; timeoutMs?: unknown };
+      } catch {
+        return jsonResponse({ ok: false, error: "invalid_payload" }, 400);
+      }
+
+      if (typeof body.roomCode !== "string" || !isValidRoomCode(body.roomCode)) {
+        return jsonResponse({ ok: false, error: "invalid_room_code" }, 400);
+      }
+      if (typeof body.token !== "string" || body.token.length <= 0) {
+        return jsonResponse({ ok: false, error: "invalid_token" }, 401);
+      }
+
+      const roomCode = body.roomCode;
+      const id = env.ROOM_DO.idFromName(roomCode);
+      const stub = env.ROOM_DO.get(id);
+      const doResponse = await stub.fetch(
+        createDoInternalRequest("https://room.internal/internal/poll", {
+          method: "POST",
+          body: JSON.stringify({
+            token: body.token,
+            cursor: body.cursor,
+            timeoutMs: body.timeoutMs
+          })
+        })
+      );
+      const payload = await readJsonResponse<{
+        ok: boolean;
+        error?: string;
+        events?: unknown[];
+        nextCursor?: number;
+        serverTimeMs?: number;
+      }>(doResponse);
+      if (!payload.ok) {
+        return jsonResponse({ ok: false, error: payload.error ?? "poll_failed" }, doResponse.status);
+      }
+
+      return jsonResponse({
+        ok: true,
+        events: Array.isArray(payload.events) ? payload.events : [],
+        nextCursor: typeof payload.nextCursor === "number" ? payload.nextCursor : 0,
+        serverTimeMs: typeof payload.serverTimeMs === "number" ? payload.serverTimeMs : Date.now()
       });
     }
 

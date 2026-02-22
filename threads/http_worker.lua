@@ -25,10 +25,9 @@ local canUseSocket = false
 local httpModule
 local ltn12Module
 
-local hasSocket, _ = pcall(require, "socket")
 local hasHttp, httpValue = pcall(require, "socket.http")
 local hasLtn12, ltn12Value = pcall(require, "ltn12")
-if hasSocket and hasHttp and hasLtn12 then
+if hasHttp and hasLtn12 then
   canUseSocket = true
   httpModule = httpValue
   ltn12Module = ltn12Value

@@ -5,12 +5,14 @@
   "scripts": {
     "dev": "wrangler dev --config wrangler.jsonc",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test --import tsx tests/**/*.test.ts",
     "i18n:audit": "node ../tools/i18n_audit.js",
     "deploy": "wrangler deploy --config wrangler.jsonc"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260201.0",
     "typescript": "^5.7.3",
+    "tsx": "^4.19.3",
     "wrangler": "^4.1.0"
   }
 }

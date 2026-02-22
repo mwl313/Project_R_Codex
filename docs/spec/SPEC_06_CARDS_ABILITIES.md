@@ -115,7 +115,7 @@ Date: 2026-02-11
 ## 7. Validation Plan
 ### 7.1 Server API smoke
 - `GET /health` -> `{"ok":true}`
-- `POST /room/create` -> `roomCode(16), token, wsUrl`
+- `POST /room/create` -> `roomCode(16), token`
 - `POST /room/join` -> join success / `invalid_room_code` / `room_full`
 
 ### 7.2 Waiting room functional
@@ -162,7 +162,7 @@ Date: 2026-02-11
 - Korean IME in nickname/chat.
 - `textedited` composition visible.
 - Backspace on multibyte text does not crash.
-- No frame stutter during WS activity.
+- No frame stutter during long-poll/send activity.
 
 ### 7.8 Persistence validation
 - Save nickname/display settings.
@@ -176,7 +176,7 @@ Date: 2026-02-11
 ### 7.9 Failure checklist
 - Capture on failure:
   - current phase
-  - last 10 WS events
+  - last 10 poll events
   - room code and role
   - local log timestamp
   - expected vs actual.

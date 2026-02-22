@@ -54,6 +54,11 @@ import {
 } from "./room_do_helpers";
 
 const STORAGE_KEY = "room_state_v2";
+const POLL_STATE_KEY = "room_poll_state_v1";
+const POLL_TIMEOUT_DEFAULT_MS = 25_000;
+const POLL_TIMEOUT_MAX_MS = 30_000;
+const POLL_EVENT_LOG_MAX = 512;
+const PRESENCE_TIMEOUT_MS = 70_000;
 
 type LeaveReason = "leave" | "disconnect" | "kick" | "unknown";
 type ChatDeniedReason = "rate_limited" | "too_long" | "not_allowed_phase";
@@ -168,10 +173,41 @@ interface RoomState {
 }
 
 interface Session {
-  socket: WebSocket;
+  socket?: WebSocket;
   role: Role;
   playerIndex: 1 | 2;
   isClosing: boolean;
+}
+
+interface PollEventRecord {
+  id: number;
+  envelope: WsEnvelope;
+  recipientTokens: string[] | null;
+}
+
+interface PollState {
+  nextEventId: number;
+  events: PollEventRecord[];
+  tokenCursorByToken: Record<string, number>;
+  tokenLastSeenAtMsByToken: Record<string, number>;
+  tokenSessionByToken: Record<string, {
+    role: Role;
+    playerIndex: 1 | 2;
+    createdAtMs: number;
+    lastSeenAtMs: number;
+    welcomed: boolean;
+    lastCursorAck: number;
+  }>;
+}
+
+interface PollWaiter {
+  cursor: number;
+  resolve: (payload: {
+    events: WsEnvelope[];
+    nextCursor: number;
+    serverTimeMs: number;
+  }) => void;
+  timeoutHandle: ReturnType<typeof setTimeout>;
 }
 
 function createEmptySlot(): PlayerSlot {
@@ -254,7 +290,15 @@ async function parseBodyJson(request: Request): Promise<unknown> {
 export class RoomDO {
   private readonly state: DurableObjectState;
   private readonly sessions = new Map<string, Session>();
+  private readonly pollWaitersByToken = new Map<string, PollWaiter[]>();
   private room: RoomState = createDefaultRoomState();
+  private pollState: PollState = {
+    nextEventId: 1,
+    events: [],
+    tokenCursorByToken: {},
+    tokenLastSeenAtMsByToken: {},
+    tokenSessionByToken: {}
+  };
   private loadPromise: Promise<void> | null = null;
 
   constructor(state: DurableObjectState, _env: unknown) {
@@ -276,6 +320,12 @@ export class RoomDO {
     }
     if (pathname === "/internal/ws" && request.method === "GET") {
       return this.handleInternalWebSocket(request);
+    }
+    if (pathname === "/internal/send" && request.method === "POST") {
+      return this.handleInternalSend(request);
+    }
+    if (pathname === "/internal/poll" && request.method === "POST") {
+      return this.handleInternalPoll(request);
     }
 
     return jsonResponse({ ok: false, error: "not_found" }, 404);
@@ -299,6 +349,11 @@ export class RoomDO {
       this.room = stored;
       this.ensureRoomStateShape();
     }
+    const storedPoll = await this.state.storage.get<PollState>(POLL_STATE_KEY);
+    if (storedPoll) {
+      this.pollState = storedPoll;
+    }
+    this.ensurePollStateShape();
   }
 
   private ensureRoomStateShape(): void {
@@ -462,6 +517,123 @@ export class RoomDO {
 
   private async saveState(): Promise<void> {
     await this.state.storage.put(STORAGE_KEY, this.room);
+  }
+
+  private ensurePollStateShape(): void {
+    if (!this.pollState || typeof this.pollState !== "object") {
+      this.pollState = {
+        nextEventId: 1,
+        events: [],
+        tokenCursorByToken: {},
+        tokenLastSeenAtMsByToken: {},
+        tokenSessionByToken: {}
+      };
+      return;
+    }
+    if (typeof this.pollState.nextEventId !== "number" || !Number.isFinite(this.pollState.nextEventId) || this.pollState.nextEventId < 1) {
+      this.pollState.nextEventId = 1;
+    }
+    if (!Array.isArray(this.pollState.events)) {
+      this.pollState.events = [];
+    }
+    if (!this.pollState.tokenCursorByToken || typeof this.pollState.tokenCursorByToken !== "object") {
+      this.pollState.tokenCursorByToken = {};
+    }
+    if (!this.pollState.tokenLastSeenAtMsByToken || typeof this.pollState.tokenLastSeenAtMsByToken !== "object") {
+      this.pollState.tokenLastSeenAtMsByToken = {};
+    }
+    if (!this.pollState.tokenSessionByToken || typeof this.pollState.tokenSessionByToken !== "object") {
+      this.pollState.tokenSessionByToken = {};
+    }
+
+    const sanitizedEvents = this.pollState.events
+      .map((item): PollEventRecord | null => {
+        if (!item || typeof item !== "object") {
+          return null;
+        }
+        const id = (item as PollEventRecord).id;
+        const envelope = (item as PollEventRecord).envelope;
+        const recipientTokens = (item as PollEventRecord).recipientTokens;
+        if (typeof id !== "number" || !Number.isFinite(id) || id <= 0 || !envelope || typeof envelope.type !== "string") {
+          return null;
+        }
+        const normalizedRecipients = Array.isArray(recipientTokens)
+          ? recipientTokens.filter((token): token is string => typeof token === "string" && token.length > 0)
+          : null;
+        return {
+          id: Math.floor(id),
+          envelope: {
+            type: envelope.type,
+            payload: envelope.payload ?? {},
+            ts: typeof envelope.ts === "number" ? envelope.ts : Date.now()
+          },
+          recipientTokens: normalizedRecipients && normalizedRecipients.length > 0 ? normalizedRecipients : null
+        };
+      })
+      .filter((item): item is PollEventRecord => item !== null);
+
+    this.pollState.events = sanitizedEvents;
+
+    this.pollState.events.sort((a, b) => a.id - b.id);
+    const latestId = this.pollState.events.length > 0 ? this.pollState.events[this.pollState.events.length - 1].id : 0;
+    if (this.pollState.nextEventId <= latestId) {
+      this.pollState.nextEventId = latestId + 1;
+    }
+
+    // Backward-compat bootstrap for states saved before tokenSessionByToken existed.
+    if (this.room.host.token && !this.pollState.tokenSessionByToken[this.room.host.token]) {
+      const nowMs = Date.now();
+      this.pollState.tokenSessionByToken[this.room.host.token] = {
+        role: "host",
+        playerIndex: 1,
+        createdAtMs: nowMs,
+        lastSeenAtMs: this.pollState.tokenLastSeenAtMsByToken[this.room.host.token] ?? 0,
+        welcomed: false,
+        lastCursorAck: this.pollState.tokenCursorByToken[this.room.host.token] ?? 0
+      };
+    }
+    if (this.room.guest.token && !this.pollState.tokenSessionByToken[this.room.guest.token]) {
+      const nowMs = Date.now();
+      this.pollState.tokenSessionByToken[this.room.guest.token] = {
+        role: "guest",
+        playerIndex: 2,
+        createdAtMs: nowMs,
+        lastSeenAtMs: this.pollState.tokenLastSeenAtMsByToken[this.room.guest.token] ?? 0,
+        welcomed: false,
+        lastCursorAck: this.pollState.tokenCursorByToken[this.room.guest.token] ?? 0
+      };
+    }
+
+    for (const [token, session] of Object.entries(this.pollState.tokenSessionByToken)) {
+      if (!session || typeof session !== "object") {
+        delete this.pollState.tokenSessionByToken[token];
+        continue;
+      }
+      if (session.role !== "host" && session.role !== "guest") {
+        delete this.pollState.tokenSessionByToken[token];
+        continue;
+      }
+      if (session.playerIndex !== 1 && session.playerIndex !== 2) {
+        session.playerIndex = this.getPlayerIndex(session.role);
+      }
+      if (typeof session.createdAtMs !== "number" || !Number.isFinite(session.createdAtMs) || session.createdAtMs < 0) {
+        session.createdAtMs = Date.now();
+      }
+      if (typeof session.lastSeenAtMs !== "number" || !Number.isFinite(session.lastSeenAtMs) || session.lastSeenAtMs < 0) {
+        session.lastSeenAtMs = this.pollState.tokenLastSeenAtMsByToken[token] ?? 0;
+      }
+      if (typeof session.lastCursorAck !== "number" || !Number.isFinite(session.lastCursorAck) || session.lastCursorAck < 0) {
+        session.lastCursorAck = this.pollState.tokenCursorByToken[token] ?? 0;
+      }
+      if (typeof session.welcomed !== "boolean") {
+        session.welcomed = false;
+      }
+    }
+  }
+
+  private async savePollState(): Promise<void> {
+    this.trimPollEvents();
+    await this.state.storage.put(POLL_STATE_KEY, this.pollState);
   }
 
   private getSlotByRole(role: Role): PlayerSlot {
@@ -734,34 +906,262 @@ export class RoomDO {
     };
   }
 
-  private sendToSocket<T>(socket: WebSocket, type: string, payload: T): void {
+  private getKnownTokenList(): string[] {
+    const tokenList: string[] = [];
+    if (this.room.host.token) {
+      tokenList.push(this.room.host.token);
+    }
+    if (this.room.guest.token) {
+      tokenList.push(this.room.guest.token);
+    }
+    return tokenList;
+  }
+
+  private getLatestEventCursor(): number {
+    return this.pollState.nextEventId > 1 ? this.pollState.nextEventId - 1 : 0;
+  }
+
+  private cloneEnvelope(type: string, payload: unknown): WsEnvelope {
+    return {
+      type,
+      payload,
+      ts: Date.now()
+    };
+  }
+
+  private enqueueEvent(envelope: WsEnvelope, recipientTokens: string[] | null): void {
+    const event: PollEventRecord = {
+      id: this.pollState.nextEventId,
+      envelope,
+      recipientTokens: recipientTokens && recipientTokens.length > 0 ? [...recipientTokens] : null
+    };
+    this.pollState.nextEventId += 1;
+    this.pollState.events.push(event);
+    this.trimPollEvents();
+    this.notifyPollWaitersForTokens(recipientTokens ?? this.getKnownTokenList());
+  }
+
+  private trimPollEvents(): void {
+    if (this.pollState.events.length <= POLL_EVENT_LOG_MAX) {
+      return;
+    }
+    const trackedTokens = this.getKnownTokenList();
+    let minCursor = this.getLatestEventCursor();
+    if (trackedTokens.length > 0) {
+      for (const token of trackedTokens) {
+        const cursor = this.pollState.tokenCursorByToken[token] ?? 0;
+        if (cursor < minCursor) {
+          minCursor = cursor;
+        }
+      }
+    }
+    const hardKeepFromId = Math.max(0, this.getLatestEventCursor() - POLL_EVENT_LOG_MAX);
+    const keepFromId = Math.max(minCursor, hardKeepFromId);
+    this.pollState.events = this.pollState.events.filter((event) => event.id > keepFromId);
+  }
+
+  private sendEnvelopeToSocket(socket: WebSocket, envelope: WsEnvelope): void {
     if (socket.readyState !== 1) {
       return;
     }
-    socket.send(serializeEnvelope(type, payload));
+    socket.send(serializeEnvelope(envelope.type, envelope.payload ?? {}));
   }
 
-  private sendToToken<T>(token: string, type: string, payload: T): void {
+  private emitToToken(token: string, type: string, payload: unknown): void {
+    const envelope = this.cloneEnvelope(type, payload);
+    this.enqueueEvent(envelope, [token]);
     const session = this.sessions.get(token);
-    if (!session) {
-      return;
+    if (session?.socket) {
+      this.sendEnvelopeToSocket(session.socket, envelope);
     }
-    this.sendToSocket(session.socket, type, payload);
+    this.state.waitUntil(this.savePollState());
   }
 
-  private broadcast<T>(type: string, payload: T): void {
+  private emitBroadcast(type: string, payload: unknown): void {
+    const envelope = this.cloneEnvelope(type, payload);
+    this.enqueueEvent(envelope, null);
     for (const session of this.sessions.values()) {
-      this.sendToSocket(session.socket, type, payload);
+      if (session.socket) {
+        this.sendEnvelopeToSocket(session.socket, envelope);
+      }
     }
+    this.state.waitUntil(this.savePollState());
+  }
+
+  private emitRoomStateToToken(token: string, role: Role): void {
+    this.emitToToken(token, "room.state", this.buildRoomStatePayload(role));
   }
 
   private broadcastRoomState(): void {
-    for (const [token, session] of this.sessions.entries()) {
-      this.sendToToken(token, "room.state", this.buildRoomStatePayload(session.role));
+    const tokenList = this.getKnownTokenList();
+    for (const token of tokenList) {
+      const role = this.getRoleByToken(token);
+      if (!role) {
+        continue;
+      }
+      this.emitRoomStateToToken(token, role);
+    }
+  }
+
+  private tokenCanReceiveEvent(token: string, event: PollEventRecord): boolean {
+    if (!event.recipientTokens) {
+      return true;
+    }
+    return event.recipientTokens.includes(token);
+  }
+
+  private buildBootstrapEvents(role: Role, includeWelcome: boolean): WsEnvelope[] {
+    const events: WsEnvelope[] = [];
+    if (includeWelcome) {
+      events.push(this.cloneEnvelope("server.welcome", {
+        rulesVersion: RULES_VERSION,
+        roomCode: this.room.roomCode,
+        role,
+        playerIndex: this.getPlayerIndex(role)
+      }));
+    }
+    if (this.room.phase === PHASE_CARD_SELECT && this.room.match.cardSelect.selectEndsAtMs) {
+      events.push(this.cloneEnvelope("match.cards.dealt", {
+        dealtCards: [...this.getDealtCardsByRole(role)],
+        pickCount: this.getPickCountByRole(role),
+        myDealtCount: this.getDealtCardsByRole(role).length,
+        opponentDealtCount: this.getOpponentDealtCountByRole(role),
+        totalPoolCount: this.getTotalCardPoolCount(),
+        selectEndsAtMs: this.room.match.cardSelect.selectEndsAtMs
+      }));
+    }
+    events.push(this.cloneEnvelope("room.state", this.buildRoomStatePayload(role)));
+    return events;
+  }
+
+  private collectEventsAfterCursor(token: string, cursor: number): PollEventRecord[] {
+    const eventList: PollEventRecord[] = [];
+    for (const event of this.pollState.events) {
+      if (event.id <= cursor) {
+        continue;
+      }
+      if (!this.tokenCanReceiveEvent(token, event)) {
+        continue;
+      }
+      eventList.push(event);
+    }
+    return eventList;
+  }
+
+  private buildPollResponse(
+    token: string,
+    role: Role,
+    cursor: number,
+    includeBootstrap: boolean,
+    includeWelcome: boolean
+  ): { events: WsEnvelope[]; nextCursor: number; serverTimeMs: number } {
+    const effectiveCursor = Math.max(0, Math.floor(cursor));
+    const eventList = includeBootstrap ? this.buildBootstrapEvents(role, includeWelcome) : [];
+    const queuedEvents = this.collectEventsAfterCursor(token, effectiveCursor);
+    let nextCursor = effectiveCursor;
+    for (const event of queuedEvents) {
+      eventList.push({
+        type: event.envelope.type,
+        payload: event.envelope.payload,
+        ts: event.envelope.ts
+      });
+      if (event.id > nextCursor) {
+        nextCursor = event.id;
+      }
+    }
+    return {
+      events: eventList,
+      nextCursor,
+      serverTimeMs: Date.now()
+    };
+  }
+
+  private registerPollWaiter(token: string, cursor: number, timeoutMs: number): Promise<{ events: WsEnvelope[]; nextCursor: number; serverTimeMs: number }> {
+    return new Promise((resolve) => {
+      const waiterList = this.pollWaitersByToken.get(token) ?? [];
+      const waiter: PollWaiter = {
+        cursor,
+        resolve,
+        timeoutHandle: setTimeout(() => {
+          this.removePollWaiter(token, waiter);
+          resolve({
+            events: [],
+            nextCursor: cursor,
+            serverTimeMs: Date.now()
+          });
+        }, timeoutMs)
+      };
+      waiterList.push(waiter);
+      this.pollWaitersByToken.set(token, waiterList);
+    });
+  }
+
+  private removePollWaiter(token: string, waiter: PollWaiter): void {
+    const waiterList = this.pollWaitersByToken.get(token);
+    if (!waiterList) {
+      return;
+    }
+    const index = waiterList.indexOf(waiter);
+    if (index >= 0) {
+      waiterList.splice(index, 1);
+    }
+    if (waiterList.length <= 0) {
+      this.pollWaitersByToken.delete(token);
+    } else {
+      this.pollWaitersByToken.set(token, waiterList);
+    }
+  }
+
+  private notifyPollWaitersForTokens(tokenList: string[]): void {
+    for (const token of tokenList) {
+      const role = this.getRoleByToken(token);
+      if (!role) {
+        continue;
+      }
+      const waiterList = this.pollWaitersByToken.get(token);
+      if (!waiterList || waiterList.length <= 0) {
+        continue;
+      }
+      const snapshot = [...waiterList];
+      for (const waiter of snapshot) {
+        const response = this.buildPollResponse(token, role, waiter.cursor, false, false);
+        if (response.events.length <= 0) {
+          continue;
+        }
+        clearTimeout(waiter.timeoutHandle);
+        this.removePollWaiter(token, waiter);
+        waiter.resolve(response);
+      }
+    }
+  }
+
+  private clearPollWaitersForToken(token: string): void {
+    const waiterList = this.pollWaitersByToken.get(token);
+    if (!waiterList) {
+      return;
+    }
+    for (const waiter of waiterList) {
+      clearTimeout(waiter.timeoutHandle);
+      waiter.resolve({
+        events: [],
+        nextCursor: waiter.cursor,
+        serverTimeMs: Date.now()
+      });
+    }
+    this.pollWaitersByToken.delete(token);
+  }
+
+  private clearAllPollWaiters(): void {
+    for (const token of this.pollWaitersByToken.keys()) {
+      this.clearPollWaitersForToken(token);
     }
   }
 
   private getRoleByToken(token: string): Role | null {
+    const sessionRecord = this.pollState.tokenSessionByToken[token];
+    if (sessionRecord && (sessionRecord.role === "host" || sessionRecord.role === "guest")) {
+      return sessionRecord.role;
+    }
     if (this.room.host.token && token === this.room.host.token) {
       return "host";
     }
@@ -771,12 +1171,165 @@ export class RoomDO {
     return null;
   }
 
+  private getTokenSessionRecord(token: string): {
+    role: Role;
+    playerIndex: 1 | 2;
+    createdAtMs: number;
+    lastSeenAtMs: number;
+    welcomed: boolean;
+    lastCursorAck: number;
+  } | null {
+    const value = this.pollState.tokenSessionByToken[token];
+    if (!value) {
+      return null;
+    }
+    if (value.role !== "host" && value.role !== "guest") {
+      return null;
+    }
+    return value;
+  }
+
+  private maskToken(token: string): string {
+    if (!token || token.length <= 10) {
+      return token;
+    }
+    return `${token.slice(0, 6)}...${token.slice(-4)}`;
+  }
+
+  private logInvalidToken(scope: string, token: string, cursor?: number): void {
+    const knownTokenCount = Object.keys(this.pollState.tokenSessionByToken).length;
+    const hostToken = this.room.host.token ? this.maskToken(this.room.host.token) : null;
+    const guestToken = this.room.guest.token ? this.maskToken(this.room.guest.token) : null;
+    console.warn("[ROOM_DO_INVALID_TOKEN]", {
+      scope,
+      roomCode: this.room.roomCode,
+      token: this.maskToken(token),
+      cursor: typeof cursor === "number" ? cursor : null,
+      knownTokenCount,
+      hostToken,
+      guestToken,
+      phase: this.room.phase,
+      isClosed: this.room.isClosed
+    });
+  }
+
   private getPlayerIndex(role: Role): 1 | 2 {
     return role === "host" ? 1 : 2;
   }
 
   private getRoleByPlayerIndex(playerIndex: 1 | 2): Role {
     return playerIndex === 1 ? "host" : "guest";
+  }
+
+  private considerAlarmDeadline(candidateValue: unknown, nowMs: number, currentMin: number | null): number | null {
+    if (typeof candidateValue !== "number" || !Number.isFinite(candidateValue)) {
+      return currentMin;
+    }
+    const deadlineMs = Math.floor(candidateValue);
+    if (deadlineMs <= nowMs) {
+      return currentMin;
+    }
+    if (currentMin === null || deadlineMs < currentMin) {
+      return deadlineMs;
+    }
+    return currentMin;
+  }
+
+  private getNextAlarmDeadlineMs(nowMs: number): number | null {
+    let minDeadlineMs: number | null = null;
+    minDeadlineMs = this.considerAlarmDeadline(this.room.timers.phaseEndsAtMs, nowMs, minDeadlineMs);
+    minDeadlineMs = this.considerAlarmDeadline(this.room.timers.turnEndsAtMs, nowMs, minDeadlineMs);
+    minDeadlineMs = this.considerAlarmDeadline(this.room.timers.snapshotEndsAtMs, nowMs, minDeadlineMs);
+
+    for (const tokenSession of Object.values(this.pollState.tokenSessionByToken)) {
+      if (!tokenSession || typeof tokenSession !== "object") {
+        continue;
+      }
+      if (tokenSession.role !== "host" && tokenSession.role !== "guest") {
+        continue;
+      }
+      const slot = this.getSlotByRole(tokenSession.role);
+      if (!slot.connected) {
+        continue;
+      }
+      const lastSeenAtMs = typeof tokenSession.lastSeenAtMs === "number" ? tokenSession.lastSeenAtMs : 0;
+      if (!Number.isFinite(lastSeenAtMs) || lastSeenAtMs <= 0) {
+        continue;
+      }
+      const presenceDeadlineMs = Math.floor(lastSeenAtMs + PRESENCE_TIMEOUT_MS);
+      minDeadlineMs = this.considerAlarmDeadline(presenceDeadlineMs, nowMs, minDeadlineMs);
+    }
+
+    return minDeadlineMs;
+  }
+
+  private async scheduleNextAlarm(nowMs: number): Promise<void> {
+    const nextDeadlineMs = this.getNextAlarmDeadlineMs(nowMs);
+    if (nextDeadlineMs === null) {
+      return;
+    }
+    await this.state.storage.setAlarm(nextDeadlineMs);
+  }
+
+  private async touchTokenPresence(token: string, role: Role, nowMs: number): Promise<void> {
+    const tokenSession = this.getTokenSessionRecord(token);
+    if (!tokenSession) {
+      return;
+    }
+    tokenSession.lastSeenAtMs = nowMs;
+    this.pollState.tokenLastSeenAtMsByToken[token] = nowMs;
+
+    const slot = this.getSlotByRole(role);
+    const wasConnected = slot.connected;
+    if (!slot.connected) {
+      slot.connected = true;
+      await this.saveState();
+    }
+    await this.savePollState();
+    await this.scheduleNextAlarm(nowMs);
+
+    if (!wasConnected) {
+      this.broadcastRoomState();
+    }
+  }
+
+  private clearTokenPresence(token: string): void {
+    delete this.pollState.tokenSessionByToken[token];
+    delete this.pollState.tokenCursorByToken[token];
+    delete this.pollState.tokenLastSeenAtMsByToken[token];
+    this.clearPollWaitersForToken(token);
+  }
+
+  private clearAllPresenceTracking(): void {
+    this.pollState.tokenSessionByToken = {};
+    this.pollState.tokenCursorByToken = {};
+    this.pollState.tokenLastSeenAtMsByToken = {};
+    this.clearAllPollWaiters();
+  }
+
+  private async processPresenceTimeouts(nowMs: number): Promise<void> {
+    const candidateTokens = Object.keys(this.pollState.tokenSessionByToken);
+    for (const token of candidateTokens) {
+      const tokenSession = this.getTokenSessionRecord(token);
+      if (!tokenSession) {
+        continue;
+      }
+      const role = tokenSession.role;
+      const slot = this.getSlotByRole(role);
+      if (!slot.connected) {
+        continue;
+      }
+      const lastSeenAtMs = tokenSession.lastSeenAtMs > 0
+        ? tokenSession.lastSeenAtMs
+        : (this.pollState.tokenLastSeenAtMsByToken[token] ?? 0);
+      if (lastSeenAtMs <= 0) {
+        continue;
+      }
+      if (nowMs - lastSeenAtMs < PRESENCE_TIMEOUT_MS) {
+        continue;
+      }
+      await this.handleLeave(token, "disconnect");
+    }
   }
 
   private async handleInternalCreate(request: Request): Promise<Response> {
@@ -852,6 +1405,22 @@ export class RoomDO {
       },
       result: null
     };
+    this.pollState = {
+      nextEventId: 1,
+      events: [],
+      tokenCursorByToken: {},
+      tokenLastSeenAtMsByToken: {},
+      tokenSessionByToken: {}
+    };
+    this.pollState.tokenSessionByToken[hostToken] = {
+      role: "host",
+      playerIndex: 1,
+      createdAtMs: Date.now(),
+      lastSeenAtMs: 0,
+      welcomed: false,
+      lastCursorAck: 0
+    };
+    await this.savePollState();
 
     await this.saveState();
 
@@ -889,10 +1458,19 @@ export class RoomDO {
       connected: false
     };
     this.room.guestReady = false;
+    this.pollState.tokenSessionByToken[guestToken] = {
+      role: "guest",
+      playerIndex: 2,
+      createdAtMs: Date.now(),
+      lastSeenAtMs: 0,
+      welcomed: false,
+      lastCursorAck: 0
+    };
 
+    await this.savePollState();
     await this.saveState();
 
-    this.broadcast("room.joined", {
+    this.emitBroadcast("room.joined", {
       playerIndex: 2,
       nickname
     });
@@ -917,13 +1495,16 @@ export class RoomDO {
     const url = new URL(request.url);
     const token = url.searchParams.get("token");
     if (!token) {
+      this.logInvalidToken("internal.ws.missing_token", "");
       return jsonResponse({ ok: false, error: "invalid_token" }, 401);
     }
 
-    const role = this.getRoleByToken(token);
-    if (!role) {
+    const tokenSession = this.getTokenSessionRecord(token);
+    if (!tokenSession) {
+      this.logInvalidToken("internal.ws", token);
       return jsonResponse({ ok: false, error: "invalid_token" }, 401);
     }
+    const role = tokenSession.role;
 
     const pair = new WebSocketPair();
     const client = pair[0];
@@ -936,9 +1517,108 @@ export class RoomDO {
     });
   }
 
+  private async handleInternalSend(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await parseBodyJson(request);
+    } catch {
+      return jsonResponse({ ok: false, error: "invalid_payload" }, 400);
+    }
+
+    const token = typeof (body as { token?: unknown }).token === "string" ? (body as { token: string }).token : "";
+    if (!token) {
+      this.logInvalidToken("internal.send.missing_token", "");
+      return jsonResponse({ ok: false, error: "invalid_token" }, 401);
+    }
+    const tokenSession = this.getTokenSessionRecord(token);
+    if (!tokenSession) {
+      this.logInvalidToken("internal.send", token);
+      return jsonResponse({ ok: false, error: "invalid_token" }, 401);
+    }
+    const role = tokenSession.role;
+
+    const rawEnvelope = (body as { envelope?: unknown }).envelope;
+    if (!rawEnvelope || typeof rawEnvelope !== "object") {
+      return jsonResponse({ ok: false, error: "invalid_payload" }, 400);
+    }
+    const envelope = rawEnvelope as WsEnvelope;
+    if (typeof envelope.type !== "string") {
+      return jsonResponse({ ok: false, error: "invalid_payload" }, 400);
+    }
+
+    await this.touchTokenPresence(token, role, Date.now());
+    await this.handleClientEnvelope(token, envelope);
+    return jsonResponse({ ok: true });
+  }
+
+  private async handleInternalPoll(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await parseBodyJson(request);
+    } catch {
+      return jsonResponse({ ok: false, error: "invalid_payload" }, 400);
+    }
+
+    const token = typeof (body as { token?: unknown }).token === "string" ? (body as { token: string }).token : "";
+    if (!token) {
+      this.logInvalidToken("internal.poll.missing_token", "");
+      return jsonResponse({ ok: false, error: "invalid_token" }, 401);
+    }
+    const rawCursor = (body as { cursor?: unknown }).cursor;
+    const hasCursor = typeof rawCursor === "number" && Number.isFinite(rawCursor);
+    const cursor = hasCursor ? Math.max(0, Math.floor(rawCursor as number)) : 0;
+    const tokenSession = this.getTokenSessionRecord(token);
+    if (!tokenSession) {
+      this.logInvalidToken("internal.poll", token, cursor);
+      return jsonResponse({ ok: false, error: "invalid_token" }, 401);
+    }
+    const role = tokenSession.role;
+
+    const nowMs = Date.now();
+    await this.touchTokenPresence(token, role, nowMs);
+
+    if (cursor > tokenSession.lastCursorAck) {
+      tokenSession.lastCursorAck = cursor;
+    }
+
+    const rawTimeoutMs = (body as { timeoutMs?: unknown }).timeoutMs;
+    const timeoutMs = typeof rawTimeoutMs === "number" && Number.isFinite(rawTimeoutMs)
+      ? Math.max(0, Math.min(POLL_TIMEOUT_MAX_MS, Math.floor(rawTimeoutMs)))
+      : POLL_TIMEOUT_DEFAULT_MS;
+
+    const includeBootstrap = cursor <= 0 || !tokenSession.welcomed;
+    const includeWelcome = !tokenSession.welcomed;
+    const immediateResponse = this.buildPollResponse(token, role, cursor, includeBootstrap, includeWelcome);
+    if (includeWelcome) {
+      tokenSession.welcomed = true;
+    }
+    if (immediateResponse.events.length > 0 || timeoutMs <= 0) {
+      this.pollState.tokenCursorByToken[token] = immediateResponse.nextCursor;
+      tokenSession.lastCursorAck = immediateResponse.nextCursor;
+      await this.savePollState();
+      return jsonResponse({
+        ok: true,
+        events: immediateResponse.events,
+        nextCursor: immediateResponse.nextCursor,
+        serverTimeMs: immediateResponse.serverTimeMs
+      });
+    }
+
+    const waitedResponse = await this.registerPollWaiter(token, cursor, timeoutMs);
+    this.pollState.tokenCursorByToken[token] = waitedResponse.nextCursor;
+    tokenSession.lastCursorAck = waitedResponse.nextCursor;
+    await this.savePollState();
+    return jsonResponse({
+      ok: true,
+      events: waitedResponse.events,
+      nextCursor: waitedResponse.nextCursor,
+      serverTimeMs: waitedResponse.serverTimeMs
+    });
+  }
+
   private openSession(token: string, role: Role, socket: WebSocket): void {
     const previous = this.sessions.get(token);
-    if (previous) {
+    if (previous && previous.socket) {
       previous.isClosing = true;
       previous.socket.close(1000, "replaced");
       this.sessions.delete(token);
@@ -956,18 +1636,16 @@ export class RoomDO {
     this.sessions.set(token, session);
 
     const slot = this.getSlotByRole(role);
-    slot.connected = true;
-    void this.saveState();
+    void this.touchTokenPresence(token, role, Date.now());
 
-    this.sendToSocket(socket, "server.welcome", {
+    this.emitToToken(token, "server.welcome", {
       rulesVersion: RULES_VERSION,
       roomCode: this.room.roomCode,
       role,
       playerIndex
     });
-    this.broadcastRoomState();
     if (this.room.phase === PHASE_CARD_SELECT && this.room.match.cardSelect.selectEndsAtMs) {
-      this.sendToSocket(socket, "match.cards.dealt", {
+      this.emitToToken(token, "match.cards.dealt", {
         dealtCards: [...this.getDealtCardsByRole(role)],
         pickCount: this.getPickCountByRole(role),
         myDealtCount: this.getDealtCardsByRole(role).length,
@@ -1043,10 +1721,10 @@ export class RoomDO {
 
     const fromWaiting = this.room.phase;
     this.room.phase = PHASE_TURN_ORDER;
-    this.broadcast("match.turnOrder", {
+    this.emitBroadcast("match.turnOrder", {
       firstPlayerIndex
     });
-    this.broadcast("match.phaseChanged", {
+    this.emitBroadcast("match.phaseChanged", {
       from: fromWaiting,
       to: PHASE_TURN_ORDER
     });
@@ -1054,7 +1732,7 @@ export class RoomDO {
     const fromTurnOrder = this.room.phase;
     this.room.phase = PHASE_PLACEMENT_PRIVATE;
     this.room.timers = {};
-    this.broadcast("match.phaseChanged", {
+    this.emitBroadcast("match.phaseChanged", {
       from: fromTurnOrder,
       to: PHASE_PLACEMENT_PRIVATE
     });
@@ -1063,15 +1741,27 @@ export class RoomDO {
     this.broadcastRoomState();
   }
 
+  private getSessionForToken(token: string): Session | null {
+    const session = this.sessions.get(token);
+    if (session && !session.isClosing) {
+      return session;
+    }
+    const role = this.getRoleByToken(token);
+    if (!role) {
+      return null;
+    }
+    return {
+      role,
+      playerIndex: this.getPlayerIndex(role),
+      isClosing: false
+    };
+  }
+
   private async handleMessage(token: string, event: MessageEvent): Promise<void> {
     await this.processPhaseTimers(Date.now());
 
-    const session = this.sessions.get(token);
-    if (!session || session.isClosing) {
-      return;
-    }
     if (typeof event.data !== "string") {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_payload"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_payload"));
       return;
     }
 
@@ -1079,12 +1769,22 @@ export class RoomDO {
     try {
       envelope = JSON.parse(event.data) as WsEnvelope;
     } catch {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_payload"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_payload"));
       return;
     }
 
     if (!envelope || typeof envelope.type !== "string") {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_payload"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_payload"));
+      return;
+    }
+
+    await this.handleClientEnvelope(token, envelope);
+  }
+
+  private async handleClientEnvelope(token: string, envelope: WsEnvelope): Promise<void> {
+    const session = this.getSessionForToken(token);
+    if (!session) {
+      this.emitToToken(token, "error.generic", errorPayload("invalid_token"));
       return;
     }
 
@@ -1133,24 +1833,24 @@ export class RoomDO {
       return;
     }
 
-    this.sendToToken(token, "error.generic", errorPayload("unsupported_command"));
+    this.emitToToken(token, "error.generic", errorPayload("unsupported_command"));
   }
 
   private async handleMatchStart(token: string, session: Session): Promise<void> {
     if (this.room.phase !== PHASE_WAITING) {
-      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
       return;
     }
     if (session.role !== "host") {
-      this.sendToToken(token, "error.generic", errorPayload("host_only"));
+      this.emitToToken(token, "error.generic", errorPayload("host_only"));
       return;
     }
     if (!this.room.host.connected || !this.room.guest.connected) {
-      this.sendToToken(token, "error.generic", errorPayload("player_not_ready"));
+      this.emitToToken(token, "error.generic", errorPayload("player_not_ready"));
       return;
     }
     if (!this.room.guestReady) {
-      this.sendToToken(token, "error.generic", errorPayload("guest_not_ready"));
+      this.emitToToken(token, "error.generic", errorPayload("guest_not_ready"));
       return;
     }
 
@@ -1159,31 +1859,31 @@ export class RoomDO {
 
   private async handleGuestReady(token: string, session: Session): Promise<void> {
     if (this.room.phase !== PHASE_WAITING) {
-      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
       return;
     }
     if (session.role !== "guest") {
-      this.sendToToken(token, "error.generic", errorPayload("guest_only"));
+      this.emitToToken(token, "error.generic", errorPayload("guest_only"));
       return;
     }
 
     const slot = this.getSlotByRole("guest");
     if (!slot.token || slot.token !== token) {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_token"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_token"));
       return;
     }
     if (!slot.connected || !this.room.host.connected) {
-      this.sendToToken(token, "error.generic", errorPayload("player_not_ready"));
+      this.emitToToken(token, "error.generic", errorPayload("player_not_ready"));
       return;
     }
     if (this.room.guestReady) {
-      this.sendToToken(token, "error.generic", errorPayload("already_ready"));
+      this.emitToToken(token, "error.generic", errorPayload("already_ready"));
       return;
     }
 
     this.room.guestReady = true;
     await this.saveState();
-    this.broadcast("room.ready", {
+    this.emitBroadcast("room.ready", {
       playerIndex: 2,
       nickname: slot.nickname ?? "Guest",
       ready: true
@@ -1194,11 +1894,11 @@ export class RoomDO {
   private async handleSurrender(token: string, session: Session): Promise<void> {
     const slot = this.getSlotByRole(session.role);
     if (!slot.token || slot.token !== token) {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_token"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_token"));
       return;
     }
     if (!isGameplayPhase(this.room.phase) || this.room.phase === PHASE_RESULT) {
-      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
       return;
     }
 
@@ -1216,11 +1916,11 @@ export class RoomDO {
     this.room.match.playing.shotCommitted = false;
 
     await this.saveState();
-    this.broadcast("match.phaseChanged", {
+    this.emitBroadcast("match.phaseChanged", {
       from: fromPhase,
       to: PHASE_RESULT
     });
-    this.broadcast("match.result", {
+    this.emitBroadcast("match.result", {
       reason: "surrender",
       winnerPlayerIndex,
       surrenderPlayerIndex
@@ -1230,18 +1930,18 @@ export class RoomDO {
 
   private async handleResultVote(token: string, session: Session, payload: unknown): Promise<void> {
     if (this.room.phase !== PHASE_RESULT || !this.room.result) {
-      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
       return;
     }
     const slot = this.getSlotByRole(session.role);
     if (!slot.token || slot.token !== token) {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_token"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_token"));
       return;
     }
 
     const votePayload = parseRematchVotePayload(payload);
     if (!votePayload) {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_payload"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_payload"));
       return;
     }
 
@@ -1249,7 +1949,7 @@ export class RoomDO {
 
     if (votePayload.action === "to_lobby") {
       await this.saveState();
-      this.broadcast("room.closed", {
+      this.emitBroadcast("room.closed", {
         reason: "result_to_lobby",
         byPlayerIndex: session.playerIndex
       });
@@ -1260,6 +1960,8 @@ export class RoomDO {
       this.room.phase = DEFAULT_PHASE as Phase;
       this.room.timers = {};
       this.room.chatLimiter = {};
+      this.clearAllPresenceTracking();
+      await this.savePollState();
       await this.saveState();
       this.closeAllSockets("result_to_lobby");
       return;
@@ -1275,7 +1977,7 @@ export class RoomDO {
       this.resetMatchStateForNewRound();
 
       await this.saveState();
-      this.broadcast("match.phaseChanged", {
+      this.emitBroadcast("match.phaseChanged", {
         from: fromPhase,
         to: PHASE_WAITING
       });
@@ -1285,23 +1987,23 @@ export class RoomDO {
 
   private async handlePlacementSubmit(token: string, session: Session, payload: unknown): Promise<void> {
     if (this.room.phase !== PHASE_PLACEMENT_PRIVATE) {
-      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
       return;
     }
 
     const slot = this.getSlotByRole(session.role);
     if (!slot.token || slot.token !== token) {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_token"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_token"));
       return;
     }
     if (this.getSubmittedByRole(session.role)) {
-      this.sendToToken(token, "error.generic", errorPayload("already_submitted"));
+      this.emitToToken(token, "error.generic", errorPayload("already_submitted"));
       return;
     }
 
     const stoneList = parsePlacementStones(payload);
     if (!stoneList || !this.validatePlacementStones(stoneList, session.role)) {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_placement"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_placement"));
       return;
     }
 
@@ -1337,7 +2039,7 @@ export class RoomDO {
   private lockCards(role: Role, pickedCards: string[], reason: CardLockReason): void {
     this.setPickedCardsByRole(role, [...pickedCards]);
     this.setLockedByRole(role, true);
-    this.broadcast("match.cards.locked", {
+    this.emitBroadcast("match.cards.locked", {
       playerIndex: this.getPlayerIndex(role),
       pickedCards: [...pickedCards],
       reason
@@ -1360,15 +2062,13 @@ export class RoomDO {
     this.startNewTurn(this.room.match.firstPlayerIndex ?? 1);
 
     await this.saveState();
-    this.broadcast("match.phaseChanged", {
+    this.emitBroadcast("match.phaseChanged", {
       from: fromPhase,
       to: PHASE_PLAYING
     });
     this.broadcastTurnStart();
     this.broadcastRoomState();
-    if (this.room.match.playing.turnEndsAtMs) {
-      await this.state.storage.setAlarm(this.room.match.playing.turnEndsAtMs);
-    }
+    await this.scheduleNextAlarm(Date.now());
   }
 
   private initializePlayingStateFromPlacements(): void {
@@ -1406,7 +2106,7 @@ export class RoomDO {
   }
 
   private broadcastTurnStart(): void {
-    this.broadcast("match.turn.start", {
+    this.emitBroadcast("match.turn.start", {
       turnIndex: this.room.match.playing.turnIndex,
       activePlayerIndex: this.room.match.playing.activePlayerIndex,
       turnEndsAtMs: this.room.match.playing.turnEndsAtMs,
@@ -1453,11 +2153,11 @@ export class RoomDO {
     this.room.match.playing.turnEndsAtMs = null;
 
     await this.saveState();
-    this.broadcast("match.phaseChanged", {
+    this.emitBroadcast("match.phaseChanged", {
       from: fromPhase,
       to: PHASE_RESULT
     });
-    this.broadcast("match.result", {
+    this.emitBroadcast("match.result", {
       reason,
       winnerPlayerIndex
     });
@@ -1507,13 +2207,13 @@ export class RoomDO {
     this.room.timers.snapshotEndsAtMs = snapshotEndsAtMs;
 
     await this.saveState();
-    this.broadcast("match.turn.snapshotRequested", {
+    this.emitBroadcast("match.turn.snapshotRequested", {
       turnIndex: this.room.match.playing.turnIndex,
       reason,
       snapshotEndsAtMs
     });
     this.broadcastRoomState();
-    await this.state.storage.setAlarm(snapshotEndsAtMs);
+    await this.scheduleNextAlarm(Date.now());
   }
 
   private async handleSnapshotTimeout(): Promise<void> {
@@ -1534,11 +2234,11 @@ export class RoomDO {
     this.room.timers.snapshotEndsAtMs = undefined;
 
     await this.saveState();
-    this.broadcast("match.phaseChanged", {
+    this.emitBroadcast("match.phaseChanged", {
       from: fromPhase,
       to: PHASE_RESULT
     });
-    this.broadcast("match.result", {
+    this.emitBroadcast("match.result", {
       reason: "snapshot_timeout",
       winnerPlayerIndex,
       timedOutPlayerIndex
@@ -1548,48 +2248,48 @@ export class RoomDO {
 
   private async handleTurnCardUse(token: string, session: Session, payload: unknown): Promise<void> {
     if (this.room.phase !== PHASE_PLAYING) {
-      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
       return;
     }
 
     const cardUsePayload = parseCardUsePayload(payload);
     if (!cardUsePayload) {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_payload"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_payload"));
       return;
     }
     if (cardUsePayload.turnIndex !== this.room.match.playing.turnIndex) {
-      this.sendToToken(token, "error.generic", errorPayload("turn_mismatch"));
+      this.emitToToken(token, "error.generic", errorPayload("turn_mismatch"));
       return;
     }
     if (session.playerIndex !== this.room.match.playing.activePlayerIndex) {
-      this.sendToToken(token, "error.generic", errorPayload("not_your_turn"));
+      this.emitToToken(token, "error.generic", errorPayload("not_your_turn"));
       return;
     }
     if (this.room.match.playing.awaitingSnapshot) {
-      this.sendToToken(token, "error.generic", errorPayload("awaiting_snapshot"));
+      this.emitToToken(token, "error.generic", errorPayload("awaiting_snapshot"));
       return;
     }
     const turnEndsAtMs = this.room.match.playing.turnEndsAtMs;
     if (!turnEndsAtMs || Date.now() > turnEndsAtMs) {
-      this.sendToToken(token, "error.generic", errorPayload("timeout"));
+      this.emitToToken(token, "error.generic", errorPayload("timeout"));
       return;
     }
     if (this.room.match.playing.hasCardUsedThisTurn) {
-      this.sendToToken(token, "error.generic", errorPayload("card_already_used"));
+      this.emitToToken(token, "error.generic", errorPayload("card_already_used"));
       return;
     }
     if (this.room.match.playing.shotUsed > 0) {
-      this.sendToToken(token, "error.generic", errorPayload("card_use_window_closed"));
+      this.emitToToken(token, "error.generic", errorPayload("card_use_window_closed"));
       return;
     }
     if (!(CARD_POOL as readonly string[]).includes(cardUsePayload.cardId)) {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_card_id"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_card_id"));
       return;
     }
 
     const pickedCards = this.getPickedCardsByRole(session.role);
     if (!pickedCards.includes(cardUsePayload.cardId)) {
-      this.sendToToken(token, "error.generic", errorPayload("card_not_owned"));
+      this.emitToToken(token, "error.generic", errorPayload("card_not_owned"));
       return;
     }
 
@@ -1602,7 +2302,7 @@ export class RoomDO {
       canPlaceObstacleAt: (x, y, width, height, margin) => this.canPlaceObstacleAt(x, y, width, height, margin)
     });
     if (!abilityResult.ok || !abilityResult.appliedCardId) {
-      this.sendToToken(token, "error.generic", errorPayload(abilityResult.errorCode ?? "card_not_implemented"));
+      this.emitToToken(token, "error.generic", errorPayload(abilityResult.errorCode ?? "card_not_implemented"));
       return;
     }
     const effectPayload = abilityResult.effectPayload;
@@ -1611,13 +2311,13 @@ export class RoomDO {
     this.removePickedCardByRole(session.role, abilityResult.appliedCardId);
 
     await this.saveState();
-    this.broadcast("match.turn.cardCue", {
+    this.emitBroadcast("match.turn.cardCue", {
       turnIndex: this.room.match.playing.turnIndex,
       playerIndex: session.playerIndex,
       cardId: abilityResult.appliedCardId,
       target: cardUsePayload.target
     });
-    this.broadcast("match.turn.cardApplied", {
+    this.emitBroadcast("match.turn.cardApplied", {
       turnIndex: this.room.match.playing.turnIndex,
       playerIndex: session.playerIndex,
       cardId: abilityResult.appliedCardId,
@@ -1628,55 +2328,55 @@ export class RoomDO {
 
   private async handleTurnShot(token: string, session: Session, payload: unknown): Promise<void> {
     if (this.room.phase !== PHASE_PLAYING) {
-      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
       return;
     }
 
     const shotPayload = parseShotPayload(payload);
     if (!shotPayload) {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_payload"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_payload"));
       return;
     }
     if (shotPayload.turnIndex !== this.room.match.playing.turnIndex) {
-      this.sendToToken(token, "error.generic", errorPayload("turn_mismatch"));
+      this.emitToToken(token, "error.generic", errorPayload("turn_mismatch"));
       return;
     }
     if (session.playerIndex !== this.room.match.playing.activePlayerIndex) {
-      this.sendToToken(token, "error.generic", errorPayload("not_your_turn"));
+      this.emitToToken(token, "error.generic", errorPayload("not_your_turn"));
       return;
     }
     if (this.room.match.playing.shotUsed >= this.room.match.playing.shotBudget) {
-      this.sendToToken(token, "error.generic", errorPayload("shot_budget_exceeded"));
+      this.emitToToken(token, "error.generic", errorPayload("shot_budget_exceeded"));
       return;
     }
     if (this.room.match.playing.awaitingSnapshot) {
-      this.sendToToken(token, "error.generic", errorPayload("awaiting_snapshot"));
+      this.emitToToken(token, "error.generic", errorPayload("awaiting_snapshot"));
       return;
     }
     if (shotPayload.power < 0 || shotPayload.power > MAX_SHOT_POWER) {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_shot_power"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_shot_power"));
       return;
     }
 
     const dirLength = Math.sqrt(shotPayload.dirX * shotPayload.dirX + shotPayload.dirY * shotPayload.dirY);
     if (!Number.isFinite(dirLength) || dirLength <= 0) {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_shot_dir"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_shot_dir"));
       return;
     }
 
     const turnEndsAtMs = this.room.match.playing.turnEndsAtMs;
     if (!turnEndsAtMs || Date.now() > turnEndsAtMs) {
-      this.sendToToken(token, "error.generic", errorPayload("timeout"));
+      this.emitToToken(token, "error.generic", errorPayload("timeout"));
       return;
     }
 
     const shotStone = this.room.match.playing.stones.find((stone) => stone.id === shotPayload.stoneId);
     if (!shotStone || !shotStone.alive || shotStone.ownerPlayerIndex !== session.playerIndex) {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_shot_stone"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_shot_stone"));
       return;
     }
     if (this.room.match.playing.lockedStoneIds.includes(shotPayload.stoneId)) {
-      this.sendToToken(token, "error.generic", errorPayload("stone_locked_this_turn"));
+      this.emitToToken(token, "error.generic", errorPayload("stone_locked_this_turn"));
       return;
     }
 
@@ -1684,7 +2384,7 @@ export class RoomDO {
     this.room.match.playing.shotCommitted = this.room.match.playing.shotUsed >= this.room.match.playing.shotBudget;
     await this.saveState();
 
-    this.broadcast("match.turn.shotAccepted", {
+    this.emitBroadcast("match.turn.shotAccepted", {
       turnIndex: this.room.match.playing.turnIndex,
       playerIndex: session.playerIndex,
       stoneId: shotPayload.stoneId,
@@ -1705,25 +2405,25 @@ export class RoomDO {
 
   private async handleTurnSnapshot(token: string, session: Session, payload: unknown): Promise<void> {
     if (this.room.phase !== PHASE_PLAYING) {
-      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
       return;
     }
     if (session.role !== "host") {
-      this.sendToToken(token, "error.generic", errorPayload("host_only"));
+      this.emitToToken(token, "error.generic", errorPayload("host_only"));
       return;
     }
 
     const snapshotPayload = parseSnapshotPayload(payload);
     if (!snapshotPayload) {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_payload"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_payload"));
       return;
     }
     if (snapshotPayload.turnIndex !== this.room.match.playing.turnIndex) {
-      this.sendToToken(token, "error.generic", errorPayload("turn_mismatch"));
+      this.emitToToken(token, "error.generic", errorPayload("turn_mismatch"));
       return;
     }
     if (!this.room.match.playing.awaitingSnapshot) {
-      this.sendToToken(token, "error.generic", errorPayload("snapshot_not_requested"));
+      this.emitToToken(token, "error.generic", errorPayload("snapshot_not_requested"));
       return;
     }
 
@@ -1731,7 +2431,7 @@ export class RoomDO {
     this.room.match.playing.awaitingSnapshot = false;
     this.room.timers.snapshotEndsAtMs = undefined;
 
-    this.broadcast("match.turn.snapshotApplied", {
+    this.emitBroadcast("match.turn.snapshotApplied", {
       turnIndex: this.room.match.playing.turnIndex,
       stones: clonePlayingStones(this.room.match.playing.stones)
     });
@@ -1747,24 +2447,22 @@ export class RoomDO {
     await this.saveState();
     this.broadcastTurnStart();
     this.broadcastRoomState();
-    if (this.room.match.playing.turnEndsAtMs) {
-      await this.state.storage.setAlarm(this.room.match.playing.turnEndsAtMs);
-    }
+    await this.scheduleNextAlarm(Date.now());
   }
 
   private async handleCardPick(token: string, session: Session, payload: unknown): Promise<void> {
     if (this.room.phase !== PHASE_CARD_SELECT) {
-      this.sendToToken(token, "error.generic", errorPayload("not_in_phase"));
+      this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
       return;
     }
     if (this.isLockedByRole(session.role)) {
-      this.sendToToken(token, "error.generic", errorPayload("already_locked"));
+      this.emitToToken(token, "error.generic", errorPayload("already_locked"));
       return;
     }
 
     const picks = parseCardPickList(payload);
     if (!picks || !this.isValidCardPick(session.role, picks)) {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_card_pick"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_card_pick"));
       return;
     }
 
@@ -1832,11 +2530,11 @@ export class RoomDO {
 
     await this.saveState();
 
-    this.broadcast("match.phaseChanged", {
+    this.emitBroadcast("match.phaseChanged", {
       from: fromPhase,
       to: PHASE_PLACEMENT_REVEAL
     });
-    this.broadcast("match.placement.revealStart", {
+    this.emitBroadcast("match.placement.revealStart", {
       endsAtMs: phaseEndsAtMs,
       stones: {
         host: clonePlacementStones(this.room.match.placement.hostStones),
@@ -1845,7 +2543,7 @@ export class RoomDO {
     });
     this.broadcastRoomState();
 
-    await this.state.storage.setAlarm(phaseEndsAtMs);
+    await this.scheduleNextAlarm(Date.now());
   }
 
   private initializeCardSelectDraft(): void {
@@ -1884,7 +2582,7 @@ export class RoomDO {
 
   private sendCardDealsToConnectedClients(selectEndsAtMs: number): void {
     for (const [token, session] of this.sessions.entries()) {
-      this.sendToToken(token, "match.cards.dealt", {
+      this.emitToToken(token, "match.cards.dealt", {
         dealtCards: [...this.getDealtCardsByRole(session.role)],
         pickCount: this.getPickCountByRole(session.role),
         myDealtCount: this.getDealtCardsByRole(session.role).length,
@@ -1909,13 +2607,13 @@ export class RoomDO {
 
     await this.saveState();
 
-    this.broadcast("match.phaseChanged", {
+    this.emitBroadcast("match.phaseChanged", {
       from: fromPhase,
       to: PHASE_CARD_SELECT
     });
     this.sendCardDealsToConnectedClients(selectEndsAtMs);
     this.broadcastRoomState();
-    await this.state.storage.setAlarm(selectEndsAtMs);
+    await this.scheduleNextAlarm(Date.now());
   }
 
   private autoLockMissingCardPicksOnTimeout(): void {
@@ -1932,6 +2630,8 @@ export class RoomDO {
   }
 
   private async processPhaseTimers(nowMs: number): Promise<void> {
+    await this.processPresenceTimeouts(nowMs);
+
     if (this.room.phase === PHASE_PLAYING) {
       if (this.room.match.playing.awaitingSnapshot) {
         let snapshotEndsAtMs = this.room.timers.snapshotEndsAtMs;
@@ -1940,53 +2640,47 @@ export class RoomDO {
           this.room.timers.snapshotEndsAtMs = snapshotEndsAtMs;
           await this.saveState();
         }
-        if (nowMs < snapshotEndsAtMs) {
-          await this.state.storage.setAlarm(snapshotEndsAtMs);
-          return;
+        if (nowMs >= snapshotEndsAtMs) {
+          await this.handleSnapshotTimeout();
         }
-        await this.handleSnapshotTimeout();
+        await this.scheduleNextAlarm(nowMs);
         return;
       }
 
       const turnEndsAtMs = this.room.timers.turnEndsAtMs;
       if (turnEndsAtMs) {
-        if (nowMs < turnEndsAtMs) {
-          await this.state.storage.setAlarm(turnEndsAtMs);
-          return;
-        }
-        if (!this.room.match.playing.awaitingSnapshot) {
+        if (nowMs >= turnEndsAtMs && !this.room.match.playing.awaitingSnapshot) {
           await this.requestSnapshotFromHost("turn_timeout");
         }
+        await this.scheduleNextAlarm(nowMs);
         return;
       }
     }
 
     const phaseEndsAtMs = this.room.timers.phaseEndsAtMs;
-    if (!phaseEndsAtMs) {
-      return;
+    if (phaseEndsAtMs && nowMs >= phaseEndsAtMs) {
+      if (this.room.phase === PHASE_PLACEMENT_REVEAL) {
+        await this.startCardSelectPhase();
+        await this.scheduleNextAlarm(nowMs);
+        return;
+      }
+
+      if (this.room.phase === PHASE_CARD_SELECT) {
+        this.autoLockMissingCardPicksOnTimeout();
+        await this.saveState();
+        this.broadcastRoomState();
+        await this.finalizeCardSelectIfReady();
+        await this.scheduleNextAlarm(nowMs);
+        return;
+      }
     }
 
-    if (nowMs < phaseEndsAtMs) {
-      await this.state.storage.setAlarm(phaseEndsAtMs);
-      return;
-    }
-
-    if (this.room.phase === PHASE_PLACEMENT_REVEAL) {
-      await this.startCardSelectPhase();
-      return;
-    }
-
-    if (this.room.phase === PHASE_CARD_SELECT) {
-      this.autoLockMissingCardPicksOnTimeout();
-      await this.saveState();
-      this.broadcastRoomState();
-      await this.finalizeCardSelectIfReady();
-    }
+    await this.scheduleNextAlarm(nowMs);
   }
 
   private async handleChatSend(token: string, session: Session, payload: unknown): Promise<void> {
     if (!CHAT_ALLOWED_PHASES.has(this.room.phase)) {
-      this.sendToToken(token, "chat.denied", {
+      this.emitToToken(token, "chat.denied", {
         reason: "not_allowed_phase" satisfies ChatDeniedReason
       });
       return;
@@ -1994,11 +2688,11 @@ export class RoomDO {
 
     const text = typeof (payload as { text?: unknown }).text === "string" ? (payload as { text: string }).text.trim() : "";
     if (text.length === 0) {
-      this.sendToToken(token, "error.generic", errorPayload("invalid_payload"));
+      this.emitToToken(token, "error.generic", errorPayload("invalid_payload"));
       return;
     }
     if (text.length > CHAT_MAX_LENGTH) {
-      this.sendToToken(token, "chat.denied", {
+      this.emitToToken(token, "chat.denied", {
         reason: "too_long" satisfies ChatDeniedReason
       });
       return;
@@ -2006,7 +2700,7 @@ export class RoomDO {
 
     const nowMs = Date.now();
     if (!this.consumeChatQuota(token, nowMs)) {
-      this.sendToToken(token, "chat.denied", {
+      this.emitToToken(token, "chat.denied", {
         reason: "rate_limited" satisfies ChatDeniedReason
       });
       return;
@@ -2014,7 +2708,7 @@ export class RoomDO {
 
     await this.saveState();
 
-    this.broadcast("chat.message", {
+    this.emitBroadcast("chat.message", {
       playerIndex: session.playerIndex,
       nickname: session.role === "host" ? this.room.host.nickname : this.room.guest.nickname,
       text
@@ -2067,12 +2761,12 @@ export class RoomDO {
       return;
     }
 
-    this.broadcast("room.left", {
+    this.emitBroadcast("room.closed", {
+      reason: "host_left"
+    });
+    this.emitBroadcast("room.left", {
       playerIndex: 1,
       reason
-    });
-    this.broadcast("room.closed", {
-      reason: "host_left"
     });
 
     this.room.host = createEmptySlot();
@@ -2082,6 +2776,8 @@ export class RoomDO {
     this.room.phase = DEFAULT_PHASE as Phase;
     this.room.timers = {};
     this.room.chatLimiter = {};
+    this.clearAllPresenceTracking();
+    await this.savePollState();
     await this.saveState();
 
     this.closeAllSockets("host_left");
@@ -2093,7 +2789,7 @@ export class RoomDO {
       return;
     }
 
-    this.broadcast("room.left", {
+    this.emitBroadcast("room.left", {
       playerIndex: 2,
       reason
     });
@@ -2101,12 +2797,16 @@ export class RoomDO {
     const departingSession = this.sessions.get(guestToken);
     if (departingSession) {
       departingSession.isClosing = true;
-      departingSession.socket.close(1000, reason);
+      if (departingSession.socket) {
+        departingSession.socket.close(1000, reason);
+      }
       this.sessions.delete(guestToken);
     }
 
     this.room.guest = createEmptySlot();
     this.room.guestReady = false;
+    this.clearTokenPresence(guestToken);
+    await this.savePollState();
     await this.saveState();
 
     this.broadcastRoomState();
@@ -2115,7 +2815,7 @@ export class RoomDO {
   private async handleDepartureInGameplay(role: Role, reason: LeaveReason): Promise<void> {
     const playerIndex = this.getPlayerIndex(role);
 
-    this.broadcast("room.left", {
+    this.emitBroadcast("room.left", {
       playerIndex,
       reason
     });
@@ -2125,9 +2825,13 @@ export class RoomDO {
       const departingSession = this.sessions.get(token);
       if (departingSession) {
         departingSession.isClosing = true;
-        departingSession.socket.close(1000, reason);
+        if (departingSession.socket) {
+          departingSession.socket.close(1000, reason);
+        }
         this.sessions.delete(token);
       }
+      this.clearTokenPresence(token);
+      await this.savePollState();
     }
 
     const slot = this.getSlotByRole(role);
@@ -2142,11 +2846,11 @@ export class RoomDO {
 
       await this.saveState();
 
-      this.broadcast("match.phaseChanged", {
+      this.emitBroadcast("match.phaseChanged", {
         from: fromPhase,
         to: PHASE_RESULT
       });
-      this.broadcast("match.result", {
+      this.emitBroadcast("match.result", {
         reason: "player_left",
         winnerPlayerIndex,
         leftPlayerIndex: playerIndex
@@ -2162,8 +2866,12 @@ export class RoomDO {
   private closeAllSockets(closeReason: string): void {
     for (const [token, session] of this.sessions.entries()) {
       session.isClosing = true;
-      session.socket.close(1000, closeReason);
+      if (session.socket) {
+        session.socket.close(1000, closeReason);
+      }
       this.sessions.delete(token);
     }
   }
 }
+
+

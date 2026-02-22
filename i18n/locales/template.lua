@@ -45,11 +45,12 @@ local LocaleTemplate = {
   },
   app = {
     ui = {
-      ws_url_missing = "WS URL is missing.",
+      server_url_missing = "Server URL is missing.",
       response_parse_failed = "Failed to parse response.",
       request_failed = "Request failed: {reason}",
-      ws_message_parse_failed = "Failed to parse WS message.",
+      server_message_parse_failed = "Failed to parse server message.",
       rules_version_mismatch = "Rules version mismatch: client {clientVersion} / server {serverVersion}",
+      poll_session_invalid = "Session is invalid ({reason}). Check local/cloud mix, server restart, or session expiration. env={env}, base={base}",
       ui_skin_toggle = "UI skin: {state}"
     },
     settings = {
@@ -130,6 +131,40 @@ local LocaleTemplate = {
       creating_room = "Creating room..."
     }
   },
+  debug_menu = {
+    title = "Debug Menu",
+    subtitle = "Manual scene/effect test launcher",
+    network = {
+      title = "Server Environment",
+      current = "Current: {env}",
+      ["local"] = "Local Test",
+      ["cloud"] = "Network Test",
+      apply = "Apply"
+    },
+    action = {
+      go_lobby = "Lobby Scene",
+      go_play = "Play Scene",
+      go_multiplayer = "Multiplayer Scene",
+      go_room_search = "Room Search Scene",
+      waiting_mock = "Waiting Room (Mock)",
+      coin_first = "Coin Toss (First)",
+      coin_second = "Coin Toss (Second)",
+      match_placement = "Match: Placement Phase",
+      match_card_first = "Match: Card Select (Pick 1)",
+      match_card_second = "Match: Card Select (Pick 2)",
+      match_playing = "Match: Playing Phase",
+      match_card_zone = "Match: Card Zone Test",
+      match_result = "Match: Result Phase",
+      single_dummy = "Single Dummy Scene"
+    },
+    status = {
+      default = "Debug menu ready",
+      opened_from = "Opened debug menu from: {scene}",
+      waiting_mock = "Entered waiting room mock state",
+      server_env_locked = "Cannot change server while connected. Leave/disconnect first.",
+      server_env_applied = "Server environment applied: {env}"
+    }
+  },
   guide = {
     title = "Guide"
   },
@@ -177,7 +212,7 @@ local LocaleTemplate = {
       waiting = "Waiting"
     },
     status = {
-      ws_waiting = "Waiting for WS connection...",
+      server_waiting = "Waiting for server event connection...",
       left_room = "Left waiting room.",
       start_condition_not_met = "Match start conditions are not met.",
       start_request_sent = "Match start request sent...",
@@ -193,9 +228,9 @@ local LocaleTemplate = {
       turn_order = "First turn: P{playerIndex}",
       room_closed = "Room closed: {reason}",
       server_error = "Server error: {code}",
-      ws_open = "WS connected",
-      ws_close = "WS closed: {reason}",
-      ws_error = "WS error: {message}"
+      server_open = "Server event connected",
+      server_close = "Server event disconnected: {reason}",
+      server_error_event = "Server event error: {message}"
     },
     system = {
       player_joined = "[SYSTEM] player {playerIndex} joined",
@@ -300,8 +335,8 @@ local LocaleTemplate = {
       result_winner = "Result: winner P{winner}",
       server_error = "Server error: {code}",
       room_closed = "Room has been closed.",
-      ws_close = "WS closed: {reason}",
-      ws_error = "WS error: {message}"
+      server_close = "Server event disconnected: {reason}",
+      server_error_event = "Server event error: {message}"
     },
     result = {
       title = "RESULT - {title}",

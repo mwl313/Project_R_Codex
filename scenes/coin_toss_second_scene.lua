@@ -93,7 +93,7 @@ function CoinTossSecondScene:draw()
 end
 
 function CoinTossSecondScene:onAppEvent(event)
-  if event.type ~= "ws_envelope" then
+  if event.type ~= "server_envelope" then
     return
   end
   local envelope = event.envelope

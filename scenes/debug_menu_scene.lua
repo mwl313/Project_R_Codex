@@ -25,6 +25,13 @@ local function t(key, vars)
   return I18n.t(key, vars)
 end
 
+local function isPointInRect(x, y, rect)
+  if not rect then
+    return false
+  end
+  return x >= rect.x and x <= rect.x + rect.w and y >= rect.y and y <= rect.y + rect.h
+end
+
 local function clonePlacementStoneList(stoneList)
   local cloned = {}
   for _, stone in ipairs(stoneList or {}) do
@@ -236,6 +243,11 @@ function DebugMenuScene.new(app)
     _statusColor = Constants.COLOR_TEXT_SUB,
     _backButton = nil,
     _buttonList = {},
+    _serverEnvPanelRect = nil,
+    _serverEnvLocalRect = nil,
+    _serverEnvCloudRect = nil,
+    _serverEnvApplyButton = nil,
+    _serverEnvPending = app:getServerEnv(),
     _lastLanguage = app:getLanguage()
   }
   setmetatable(instance, DebugMenuScene)
@@ -417,12 +429,52 @@ function DebugMenuScene:rebuildLocalizedUi()
       onClick = action.onClick
     })
   end
+
+  local panelW = 700
+  local panelH = 116
+  local panelX = (Constants.BASE_WORLD_W - panelW) * 0.5
+  local panelY = 548
+  self._serverEnvPanelRect = {
+    x = panelX,
+    y = panelY,
+    w = panelW,
+    h = panelH
+  }
+  self._serverEnvLocalRect = {
+    x = panelX + 24,
+    y = panelY + 40,
+    w = 130,
+    h = 28
+  }
+  self._serverEnvCloudRect = {
+    x = panelX + 170,
+    y = panelY + 40,
+    w = 150,
+    h = 28
+  }
+  self._serverEnvApplyButton = Button.new({
+    x = panelX + panelW - 126,
+    y = panelY + panelH - 42,
+    w = 96,
+    h = 30,
+    label = t("debug_menu.network.apply"),
+    onClick = function()
+      local isOk, statusText = self._app:setServerEnv(self._serverEnvPending)
+      if isOk then
+        self._statusColor = Constants.COLOR_TEXT_SUB
+      else
+        self._statusColor = Constants.COLOR_DANGER
+      end
+      self._statusText = statusText or ""
+    end
+  })
 end
 
 function DebugMenuScene:enter(params)
   self._backScene = (params and params.backScene) or "lobby"
   self._statusText = (params and params.statusText) or t("debug_menu.status.default")
   self._statusColor = (params and params.statusColor) or Constants.COLOR_TEXT_SUB
+  self._serverEnvPending = self._app:getServerEnv()
   self:rebuildLocalizedUi()
 end
 
@@ -448,9 +500,66 @@ function DebugMenuScene:draw()
     button:draw(mouseX, mouseY)
   end
 
+  self:drawServerEnvPanel(mouseX, mouseY)
+
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(self._statusColor)
   love.graphics.printf(self._statusText, 0, 690, Constants.BASE_WORLD_W, "center")
+end
+
+function DebugMenuScene:drawServerEnvPanel(mouseX, mouseY)
+  local panel = self._serverEnvPanelRect
+  if not panel then
+    return
+  end
+
+  local canSwitch = self._app:canSwitchServerEnv()
+  local currentEnv = self._app:getServerEnv()
+  local pendingEnv = self._serverEnvPending
+  local alpha = canSwitch and 1.0 or 0.55
+
+  love.graphics.setColor(0.0, 0.0, 0.0, 0.36)
+  love.graphics.rectangle("fill", panel.x, panel.y, panel.w, panel.h, 8, 8)
+  love.graphics.setColor(Constants.COLOR_PANEL_BORDER[1], Constants.COLOR_PANEL_BORDER[2], Constants.COLOR_PANEL_BORDER[3], 0.85)
+  love.graphics.rectangle("line", panel.x, panel.y, panel.w, panel.h, 8, 8)
+
+  love.graphics.setFont(FontManager.getFont("small"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.print(t("debug_menu.network.title"), panel.x + 16, panel.y + 12)
+
+  love.graphics.setColor(Constants.COLOR_TEXT_SUB[1], Constants.COLOR_TEXT_SUB[2], Constants.COLOR_TEXT_SUB[3], alpha)
+  love.graphics.print(
+    t("debug_menu.network.current", {
+      env = currentEnv == Constants.SERVER_ENV_LOCAL and t("debug_menu.network.local") or t("debug_menu.network.cloud")
+    }),
+    panel.x + 16,
+    panel.y + 30
+  )
+
+  self:drawServerEnvRadio(self._serverEnvLocalRect, t("debug_menu.network.local"), pendingEnv == Constants.SERVER_ENV_LOCAL, alpha)
+  self:drawServerEnvRadio(self._serverEnvCloudRect, t("debug_menu.network.cloud"), pendingEnv == Constants.SERVER_ENV_CLOUD, alpha)
+
+  local httpBase = self._app:getServerHttpBase(pendingEnv)
+  love.graphics.setColor(Constants.COLOR_TEXT_SUB[1], Constants.COLOR_TEXT_SUB[2], Constants.COLOR_TEXT_SUB[3], 0.90)
+  love.graphics.print("HTTP: " .. tostring(httpBase), panel.x + 342, panel.y + 44)
+  love.graphics.print("Transport: HTTP long-poll", panel.x + 342, panel.y + 66)
+
+  self._serverEnvApplyButton.isEnabled = canSwitch and pendingEnv ~= currentEnv
+  self._serverEnvApplyButton:draw(mouseX, mouseY)
+end
+
+function DebugMenuScene:drawServerEnvRadio(rect, label, isSelected, alpha)
+  local circleX = rect.x + 10
+  local circleY = rect.y + rect.h * 0.5
+  love.graphics.setColor(Constants.COLOR_TEXT_SUB[1], Constants.COLOR_TEXT_SUB[2], Constants.COLOR_TEXT_SUB[3], alpha)
+  love.graphics.circle("line", circleX, circleY, 8)
+  if isSelected then
+    love.graphics.setColor(Constants.COLOR_PANEL_BORDER[1], Constants.COLOR_PANEL_BORDER[2], Constants.COLOR_PANEL_BORDER[3], alpha)
+    love.graphics.circle("fill", circleX, circleY, 4)
+  end
+
+  love.graphics.setColor(Constants.COLOR_TEXT[1], Constants.COLOR_TEXT[2], Constants.COLOR_TEXT[3], alpha)
+  love.graphics.print(label, rect.x + 24, rect.y + (rect.h - FontManager.getFont("small"):getHeight()) * 0.5)
 end
 
 function DebugMenuScene:mousepressed(mouseX, mouseY, button)
@@ -463,12 +572,54 @@ function DebugMenuScene:mousepressed(mouseX, mouseY, button)
     return
   end
 
+  if self:handleServerEnvMousePressed(mouseX, mouseY) then
+    return
+  end
+
   for _, menuButton in ipairs(self._buttonList) do
     if menuButton:isHovered(mouseX, mouseY) then
       menuButton:onClick()
       return
     end
   end
+end
+
+function DebugMenuScene:handleServerEnvMousePressed(mouseX, mouseY)
+  local panel = self._serverEnvPanelRect
+  if not panel or not isPointInRect(mouseX, mouseY, panel) then
+    return false
+  end
+
+  local canSwitch = self._app:canSwitchServerEnv()
+  if isPointInRect(mouseX, mouseY, self._serverEnvLocalRect) then
+    if canSwitch then
+      self._serverEnvPending = Constants.SERVER_ENV_LOCAL
+    else
+      self._statusText = t("debug_menu.status.server_env_locked")
+      self._statusColor = Constants.COLOR_DANGER
+    end
+    return true
+  end
+  if isPointInRect(mouseX, mouseY, self._serverEnvCloudRect) then
+    if canSwitch then
+      self._serverEnvPending = Constants.SERVER_ENV_CLOUD
+    else
+      self._statusText = t("debug_menu.status.server_env_locked")
+      self._statusColor = Constants.COLOR_DANGER
+    end
+    return true
+  end
+  if self._serverEnvApplyButton and self._serverEnvApplyButton:isHovered(mouseX, mouseY) then
+    if self._serverEnvApplyButton.isEnabled then
+      self._serverEnvApplyButton:onClick()
+    elseif not canSwitch then
+      self._statusText = t("debug_menu.status.server_env_locked")
+      self._statusColor = Constants.COLOR_DANGER
+    end
+    return true
+  end
+
+  return true
 end
 
 function DebugMenuScene:keypressed(key)

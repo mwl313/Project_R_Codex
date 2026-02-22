@@ -52,7 +52,7 @@ function WaitingRoomScene.new(app)
     _app = app,
     _roomState = createDefaultRoomState(),
     _chatMessageList = {},
-    _statusText = t("waiting_room.status.ws_waiting"),
+    _statusText = t("waiting_room.status.server_waiting"),
     _statusColor = Constants.COLOR_TEXT_SUB,
     _chatInput = chatInput,
     _startButton = nil,
@@ -240,7 +240,7 @@ function WaitingRoomScene:requestMatchStart()
     self:setStatus(t("waiting_room.status.start_condition_not_met"), Constants.COLOR_DANGER)
     return
   end
-  self._app:sendWsEnvelope("client.match.start", {})
+  self._app:sendEnvelope("client.match.start", {})
   self:setStatus(t("waiting_room.status.start_request_sent"), Constants.COLOR_TEXT_SUB)
 end
 
@@ -253,7 +253,7 @@ function WaitingRoomScene:requestGuestReady()
     end
     return
   end
-  self._app:sendWsEnvelope("client.room.ready", {})
+  self._app:sendEnvelope("client.room.ready", {})
   self:setStatus(t("waiting_room.status.ready_request_sent"), Constants.COLOR_TEXT_SUB)
 end
 
@@ -409,7 +409,7 @@ function WaitingRoomScene:keypressed(key)
   end
 end
 
-function WaitingRoomScene:onWsEnvelope(envelope)
+function WaitingRoomScene:onServerEnvelope(envelope)
   if envelope.type == "room.state" then
     if type(envelope.payload) == "table" then
       self._roomState = envelope.payload
@@ -540,25 +540,25 @@ function WaitingRoomScene:onAppEvent(event)
     return
   end
 
-  if event.type == "ws_open" then
-    self:setStatus(t("waiting_room.status.ws_open"), Constants.COLOR_TEXT_SUB)
+  if event.type == "server_open" then
+    self:setStatus(t("waiting_room.status.server_open"), Constants.COLOR_TEXT_SUB)
     return
   end
-  if event.type == "ws_close" then
+  if event.type == "server_close" then
     self._roomState.guestReady = false
-    self:setStatus(t("waiting_room.status.ws_close", {
+    self:setStatus(t("waiting_room.status.server_close", {
       reason = tostring(event.reason)
     }), Constants.COLOR_DANGER)
     return
   end
-  if event.type == "ws_error" then
-    self:setStatus(t("waiting_room.status.ws_error", {
+  if event.type == "server_error" then
+    self:setStatus(t("waiting_room.status.server_error_event", {
       message = tostring(event.message)
     }), Constants.COLOR_DANGER)
     return
   end
-  if event.type == "ws_envelope" then
-    self:onWsEnvelope(event.envelope)
+  if event.type == "server_envelope" then
+    self:onServerEnvelope(event.envelope)
   end
 end
 

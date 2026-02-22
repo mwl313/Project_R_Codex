@@ -23,6 +23,7 @@ export type ServerEventType =
 export type ClientCommandType =
   | "client.chat.send"
   | "client.room.leave"
+  | "client.room.ready"
   | "client.match.start"
   | "client.match.placement.submit"
   | "client.match.cards.pick"

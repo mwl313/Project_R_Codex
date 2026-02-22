@@ -33,7 +33,6 @@ Expected fields:
 - `ok: true`
 - `roomCode` (16 chars)
 - `token`
-- `wsUrl`
 
 ## 4) Join room
 
@@ -47,66 +46,48 @@ Expected fields:
 - `ok: true`
 - `roomCode`
 - `token`
-- `wsUrl`
 
-## 5) WS connect check with wscat
+## 5) Poll bootstrap (server.welcome + room.state)
 
-Install once:
-
-```bash
-npm i -g wscat
-```
-
-Host connection:
+Host first poll:
 
 ```bash
-wscat -c "ws://127.0.0.1:8787/ws?code=<ROOM_CODE>&token=<HOST_TOKEN>"
-```
-
-Guest connection:
-
-```bash
-wscat -c "ws://127.0.0.1:8787/ws?code=<ROOM_CODE>&token=<GUEST_TOKEN>"
-```
-
-Expected server events after connect:
-- `server.welcome`
-- `room.state`
-- host side should also receive `room.joined` when guest has joined.
-
-## 6) Chat test
-
-Send in wscat:
-
-```json
-{"type":"client.chat.send","payload":{"text":"hello"}}
+curl -s -X POST http://127.0.0.1:8787/room/poll \
+  -H "content-type: application/json" \
+  -d "{\"roomCode\":\"<ROOM_CODE>\",\"token\":\"<HOST_TOKEN>\",\"cursor\":0,\"timeoutMs\":1000}"
 ```
 
 Expected:
-- both clients receive `chat.message`.
+- `ok: true`
+- `events` includes `server.welcome`
+- `events` includes `room.state`
+- `nextCursor` is a number
 
-Rate limit check:
-- send many messages quickly (20+) within 10 seconds.
-- expected: sender receives `chat.denied` with `reason: "rate_limited"`.
+## 6) Send + poll chat test
 
-## 7) Leave test
+Send:
 
-Guest leave command:
+```bash
+curl -s -X POST http://127.0.0.1:8787/room/send \
+  -H "content-type: application/json" \
+  -d "{\"roomCode\":\"<ROOM_CODE>\",\"token\":\"<HOST_TOKEN>\",\"envelope\":{\"type\":\"client.chat.send\",\"payload\":{\"text\":\"hello\"}}}"
+```
 
-```json
-{"type":"client.room.leave","payload":{}}
+Then poll host/guest token:
+- expected `chat.message` in `events`.
+- spam rapidly to verify `chat.denied` (`reason: "rate_limited"`).
+
+## 7) Leave test (HTTP send path)
+
+Guest leave:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/room/send \
+  -H "content-type: application/json" \
+  -d "{\"roomCode\":\"<ROOM_CODE>\",\"token\":\"<GUEST_TOKEN>\",\"envelope\":{\"type\":\"client.room.leave\",\"payload\":{}}}"
 ```
 
 Expected:
-- host receives `room.left` with `playerIndex: 2`
-- host receives updated `room.state` with `guest: null`
-
-Host leave command:
-
-```json
-{"type":"client.room.leave","payload":{}}
-```
-
-Expected:
-- connected guest receives `room.closed` with `reason: "host_left"`
-- room becomes unusable for join.
+- host poll receives `room.left` (`playerIndex: 2`)
+- host poll receives updated `room.state` (guest empty)
+- host leave 시 guest poll receives `room.closed`
