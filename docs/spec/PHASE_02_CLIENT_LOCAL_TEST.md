@@ -27,8 +27,8 @@ love .
 3. A에서 `방 생성` 클릭
 4. B에서 `방 찾기` 클릭 후 A의 roomCode 입력, `참가`
 5. 양쪽 대기방에서 아래 확인
-   - `server.welcome` 반영(role 표시)
-   - `room.state` 반영(host/guest 연결 상태 표시)
+   - Long-Poll 첫 응답의 `server.welcome` 반영(role 표시)
+   - Long-Poll 이벤트의 `room.state` 반영(host/guest 연결 상태 표시)
    - 채팅 송수신
 6. B에서 `나가기`
    - A 화면에 guest left 반영
@@ -42,10 +42,10 @@ love .
 ## 4) 실패 시 체크포인트
 
 - WS 연결 실패:
-  - 서버 실행 여부 확인
-  - `ws://127.0.0.1:8787` 접속 경로 확인
+  - `/room/poll` 응답(JSON) 확인
+  - 클라이언트 `serverEnv`가 로컬(`http://127.0.0.1:8787`)인지 확인
 - HTTP 실패:
-  - `/room/create`, `/room/join` 응답 JSON 확인
+  - `/room/create`, `/room/join`, `/room/send`, `/room/poll` 응답 JSON 확인
 - 채팅 미수신:
   - `client.chat.send` payload 구조 확인
   - 서버 `chat.denied` reason 확인
