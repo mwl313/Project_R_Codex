@@ -1,10 +1,11 @@
 # ProjectR (알까기)
 
-LÖVE 11.x 클라이언트 + Cloudflare Workers + Durable Objects 서버 기반 2인 대전 MVP 프로젝트입니다.
+LÖVE 11.x 클라이언트와 Cloudflare Workers + Durable Objects 서버로 구성된 2인 대전 프로젝트입니다.  
+현재 멀티플레이 핵심 루프(방 생성/참가 -> 대기방 -> 매치 진행 -> 결과/재대결)가 동작합니다.
 
-## 실행 방법
+## 빠른 시작
 
-### 1) 서버 실행 (Workers)
+### 서버 실행 (로컬)
 
 ```bash
 cd server
@@ -12,161 +13,193 @@ npm install
 npm run dev
 ```
 
-- 기본 로컬 주소: `http://127.0.0.1:8787`
+- 기본 로컬 서버: `http://127.0.0.1:8787`
 
-### 2) 클라이언트 실행 (LÖVE)
+### 클라이언트 실행
 
 ```bash
 love .
 ```
 
-- 2인 테스트는 클라이언트를 2개 실행해서 진행합니다.
+- 멀티 테스트는 클라이언트를 2개 실행해서 진행합니다.
 
-### 3) 권장 점검 명령
+### 기본 점검 명령
 
 ```bash
-cd server
-npm run typecheck
-cd ..
+npm --prefix server run typecheck
+npm --prefix server test
 node tools/i18n_audit.js
 ```
 
-## 현재 구현 상태 (Phase별)
+## 핵심 기능
 
-### Phase 0 (SPEC/SSOT 문서화)
+### 1) 로비/메뉴/오버레이 UI
 
-- `docs/spec/` 스펙 문서 체계 구성 완료
-- `docs/spec/INDEX.md`로 스펙/테스트 문서 인덱싱
-- 네이밍 규칙 문서 반영: `docs/spec/naming_convention.md`
-- SSOT 운영 규칙 문서 추가: `docs/spec/SPEC_10_SHARED_RULES_WORKFLOW.md`
+- 로비 메뉴: `플레이`, `닉네임 변경`, `환경설정`, `가이드`, `스킨`, `크레딧`, `게임 종료`
+- 플레이 메뉴 분기:
+  - `싱글플레이어`(더미 테스트용)
+  - `멀티플레이어`
+- 멀티플레이어 메뉴 분기:
+  - `방 생성`
+  - `방 찾기`
+- 닉네임/환경설정은 씬이 아닌 오버레이(70%)로 동작
+- 환경설정:
+  - 창모드 `1280x720` 고정
+  - 전체화면 `현재 모니터 해상도`
+  - 언어 선택(`ko`, `en`)
+- 설정 저장:
+  - `love.filesystem.setIdentity("project_r")`
+  - `settings.ini`에 영구 저장
 
-### Phase 1 (서버 최소 골격)
+### 2) 네트워크 (HTTP long-poll 전환 완료)
 
-- HTTP 엔드포인트 구현
+- 클라이언트 트랜스포트는 WS가 아니라 HTTP 고정
+- 사용 엔드포인트:
+  - `POST /room/create`
+  - `POST /room/join`
+  - `POST /room/send`
+  - `POST /room/poll`
+- long-poll 루프:
+  - 항상 1개 poll in-flight 유지
+  - 응답 즉시 다음 poll 재요청
+  - 실패 시 지수 백오프 + 지터
+- 클라이언트 내부 네트워크 이벤트:
+  - `server_open`
+  - `server_close`
+  - `server_error`
+  - `server_envelope`
+- 진단 로그:
+  - `[NET][POLL_REQUEST]`
+  - `[NET][POLL_RESPONSE]`
+  - `[NET][POLL_RESPONSE_INVALID]`
+  - 환경(`serverEnv`)과 실제 base URL 같이 출력
+- 디버그 메뉴에서 서버 환경 토글 지원:
+  - `local` <-> `cloud`
+  - 연결 중에는 변경 잠금
+
+### 3) 대기방 기능
+
+- 방 코드 표시 + 복사
+- 호스트/게스트 역할 표시
+- 게스트 `준비하기`, 호스트 `게임 시작`
+- 준비/시작 조건 서버 권위 처리
+- 대기방 채팅 송수신
+- 나가기 처리:
+  - guest leave -> host 대기 유지
+  - host leave -> room closed
+
+### 4) 매치 진행 플로우
+
+- 진행 순서:
+  - `TURN_ORDER`
+  - `PLACEMENT_PRIVATE`
+  - `PLACEMENT_REVEAL`
+  - `CARD_SELECT`
+  - `PLAYING`
+  - `RESULT`
+- 코인토스 연출(선공/후공 별도 씬) 후 자동 전환
+- 배치:
+  - 클릭 배치, 최소 거리 규칙, 제출
+  - 공개 타이머 후 다음 단계
+- 카드 선택:
+  - 선공: 2장 중 1장
+  - 후공: 3장 중 2장
+  - 제한시간 만료 시 자동 선택
+- 플레이:
+  - 턴 타이머
+  - 드래그 조준/발사/취소
+  - 카드 사용 규칙(턴당 1회)
+- 결과:
+  - 승/패/무
+  - 재대결/메뉴 투표
+  - 기권 처리
+
+### 5) 카드 능력 (현재 구현)
+
+- `reinforcement` (신병)
+  - 대상 위치에 알 1개 추가
+  - 추가된 알은 해당 턴 이동 제한
+- `rockfall` (낙석)
+  - 대상 위치에 장애물 배치
+- `invincible` (무적)
+  - 지정 턴 동안 방어 상태 적용
+  - 충돌 시 상대만 반사되도록 처리
+- `shockwave` (충격파)
+  - 발사한 알 기준 충돌 시 충격파 발동
+  - 반경: `STONE_RADIUS * 4.0`
+  - 위력: `200`
+  - 발사 알 자신/무적 알 제외
+- `agile` (날렵함)
+  - 같은 턴 추가 발사
+
+### 6) 인게임 채팅
+
+- MatchScene 우하단 접힘/펼침 패널
+- Enter로 열기, ESC/외부 클릭/X 버튼으로 닫기
+- unread red-dot 표시
+- 스크롤/스크롤바 드래그 지원
+- 입력창 UTF-8/IME 경로 유지
+- 카드 선택 확정 이전 UI 충돌 방지를 위한 노출 제어 적용
+
+### 7) 입력/물리/공통 메커니즘
+
+- 월드 좌표 기준 해상도: `1280x720`
+- RenderScale 기반 screen<->world 변환 적용
+- 무한 드래그(상대 마우스 모드) + 커서 복구 가드
+- 공통 메커니즘 구조:
+  - `physics_engine.lua` (물리 코어)
+  - `game_mechanics.lua` (씬 공통 진입점)
+  - 멀티 매치/싱글 더미가 공통 경로 사용
+
+### 8) 폰트/로케일/i18n
+
+- 기본 폰트: `assets/fonts/MulmaruMono.ttf`
+- 공용 폰트 매니저: `assets/font_manager.lua`
+- 로케일:
+  - `i18n/locales/ko.lua`
+  - `i18n/locales/en.lua`
+  - `i18n/locales/template.lua`
+- 로케일 누락 검증:
+  - `node tools/i18n_audit.js`
+
+### 9) UI 스킨/연출/디버그
+
+- 9-slice UI 스킨 시스템(토글형)
+- 씬 전환(screen wipe 계열) 적용
+- 오버레이/드롭다운 등장/퇴장 연출
+- 디버그 메뉴:
+  - 단축키 `F7`
+  - 씬 점프/카드존 테스트/서버 환경(local/cloud) 전환
+
+## 서버 API 요약
+
+### 필수 API (클라이언트 사용)
+
 - `GET /health`
 - `POST /room/create`
 - `POST /room/join`
 - `POST /room/send`
-- `POST /room/poll` (long-poll)
-- Durable Object 룸 상태 관리
-- `roomCode`, `host/guest token`, `phase`, `timers`, `chatLimiter`
-- 기본 브로드캐스트 이벤트
-- `room.state`, `room.joined`, `room.left`, `room.closed`
-- `chat.message`, `chat.denied`
-- 룸 코드 정책
-- 16자리 코드 + 가독성 문자셋 (`O/0`, `I/1` 제외)
-- 룰 버전 전파
-- `/health`, `/room/create`, `/room/join`, `server.welcome`, `room.state`에 `rulesVersion` 포함
+- `POST /room/poll`
 
-### Phase 2 (클라이언트 매칭~대기방)
+### 호환 API (레거시)
 
-- 로비 메뉴 구현
-- `싱글플레이어`(수동 테스트용 더미 씬), `방 생성`, `방 찾기`, `닉네임 변경`, `환경설정`, 기타 메뉴
-- 오버레이(팝업) 기반 설정 UI
-- 닉네임 변경 오버레이 (70%)
-- 환경설정 오버레이 (70%)
-- 디스플레이/언어 드롭다운 UI
-- 드롭다운 단일 열림 제어 + 외부 클릭 닫힘 + 상위 레이어 렌더
-- 창모드 `1280x720` 고정
-- 전체화면 `현재 모니터 해상도`
-- 영구 저장
-- `love.filesystem.setIdentity("project_r")`
-- `settings.ini` 로드/저장 (`project_r` save directory)
-- 한글 폰트/입력 안정화
-- 공용 FontManager (`title/ui/small`)
-- 기본 폰트 경로: `assets/fonts/MulmaruMono.ttf`
-- 폰트 누락 시 기본 폰트 폴백 + 경고
-- UTF-8 안전 TextInput + IME 조합 표시
-- 대기방 기능
-- 룸 코드 복사 버튼
-- 채팅 송수신
-- 나가기/상태 표시
-- 방 찾기 기능
-- 룸 코드 입력 및 참가
-- 클립보드 붙여넣기 버튼
-- 네트워크 트랜스포트
-- HTTP long-poll(`/room/poll`) + HTTP send(`/room/send`) 고정
-- 클라 내부 앱 이벤트 네이밍
-- `server_open`, `server_close`, `server_error`, `server_envelope` 사용 (구 `ws_*` 명칭 제거)
+- 서버에는 `/ws` 경로가 남아있지만, 현재 클라이언트 런타임은 사용하지 않습니다.
 
-### Phase 3 (게임 플로우)
+## 규칙/밸런스 SSOT
 
-- 페이즈 진행
-- `PLACEMENT_PRIVATE -> PLACEMENT_REVEAL -> CARD_SELECT -> PLAYING -> RESULT`
-- 배치 단계
-- 클릭 배치, 최소 거리 체크, 제출
-- 공개 타이머 후 전환
-- 카드 선택
-- 호스트 2장 중 1장 선택
-- 게스트 3장 중 2장 선택
-- 제한시간 자동 선택(앞에서부터)
-- 플레이 단계
-- 턴 시작/종료, 30초 타이머
-- 드래그 조준/발사/취소
-- 서버 권위 턴 단위 스냅샷 정산
-- 호스트 스냅샷 제출, 양측 동기화
-- 결과 단계
-- 승/패/무 처리
-- `재대결` / `로비로` 투표 전환
-- 기권 버튼 및 `surrender` 결과 처리
+- 공통 규칙: `shared/gameplay_rules.json`
+- 카드 수치: `shared/card_rules.json`
+- 서버 로더:
+  - `server/src/rules.ts`
+  - `server/src/card_rules.ts`
+- 클라 로더:
+  - `constants.lua`
+  - `shared/card_rules.lua`
+- 설명 문서:
+  - `shared/gameplay_rules.README.md`
+  - `shared/card_rules.README.md`
 
-### Phase 4 (카드 효과 구현 상태)
-
-- `reinforcement` (신병)
-- 타겟 지정 후 보드 클릭 배치
-- 생성 알은 해당 턴 발사 제한
-- `rockfall` (낙석)
-- 보드 클릭으로 장애물 생성
-- `invincible` (무적)
-- 다음 턴 방어 상태 적용
-- 무적 돌 충돌 시 비무적 돌 반사 중심 처리
-- `shockwave` (충격파)
-- 발사된 돌 기반 발동
-- 돌-벽/돌-돌/돌-장애물 충돌 시 반복 발동
-- 발산 중심: 발사된 돌 중심
-- 반경: `STONE_RADIUS * 4.0`
-- 위력: `200`
-- 발사 돌 본인은 충격파 영향 제외
-- 무적 돌은 충격파 영향 제외
-- `agile` (날렵함)
-- 동일 턴 추가 발사(2회) 지원
-
-### Phase 5 (Asset/Polish 일부)
-
-- 사운드 훅 시스템
-- 중앙 관리: `managers/sound_manager.lua`
-- 주요 HTTP long-poll/매치 이벤트에서 훅 ID 재생
-- 파일 규칙: `assets/sounds/<hookId>.(ogg|wav|mp3)`
-- 사운드 파일이 없어도 no-op으로 정상 진행(크래시 없음)
-- 공용 이펙트 매니저: `effects/effect_manager.lua`
-- 현재 구현 이펙트: 충격파 원형 파동(임시 시각효과)
-
-## 룰/밸런스 SSOT 구조
-
-- 공통 규칙 SSOT: `shared/gameplay_rules.json`
-- 카드 수치 SSOT: `shared/card_rules.json`
-- 서버 로더: `server/src/rules.ts`, `server/src/card_rules.ts`
-- 클라 로더: `constants.lua`, `shared/card_rules.lua`
-- 가이드 문서
-- `shared/gameplay_rules.README.md`
-- `shared/card_rules.README.md`
-
-## i18n / 텍스트 관리
-
-- i18n 런타임: `i18n/i18n.lua`
-- 로케일: `i18n/locales/ko.lua`, `i18n/locales/en.lua`
-- 신규 언어 템플릿: `i18n/locales/template.lua`
-- 누락 키 런타임 덤프: `_G.I18N_DEBUG_DUMP_MISSING()`
-- 정적 점검 스크립트: `tools/i18n_audit.js`
-- 점검 명령: `npm run i18n:audit`
-
-## 메커니즘 구조 (클라 공통화)
-
-- 공용 진입점: `game_mechanics.lua`
-- 물리 코어: `physics_engine.lua`
-- 멀티 씬(`scenes/match_scene.lua`)과 싱글 더미 씬(`scenes/single_dummy_scene.lua`)이 동일 메커니즘 진입점을 참조
-
-## 로컬 테스트 문서
+## 테스트 문서
 
 - `docs/spec/PHASE_01_SERVER_LOCAL_TEST.md`
 - `docs/spec/PHASE_02_CLIENT_LOCAL_TEST.md`
@@ -175,7 +208,8 @@ node tools/i18n_audit.js
 - `docs/spec/PHASE_03_PLAYING_LOCAL_TEST.md`
 - `docs/spec/PHASE_03_RESULT_LOCAL_TEST.md`
 
-## 참고 문서
+## 문서 인덱스
 
 - 스펙 인덱스: `docs/spec/INDEX.md`
-- 핵심 SSOT: `docs/spec/SPEC_00_OVERVIEW.md`
+- 핵심 개요: `docs/spec/SPEC_00_OVERVIEW.md`
+- 프로토콜: `docs/spec/SPEC_03_PROTOCOL.md`
