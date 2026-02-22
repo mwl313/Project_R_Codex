@@ -138,9 +138,9 @@ local SERVER_ENVELOPE_SOUND_HOOK_MAP = {
 }
 
 local NETWORK_EVENT_SOUND_HOOK_MAP = {
-  ws_open = "ws_open",
-  ws_close = "ws_close",
-  ws_error = "ws_error"
+  server_open = "ws_open",
+  server_close = "ws_close",
+  server_error = "ws_error"
 }
 
 function App.new(renderScale)
@@ -559,9 +559,9 @@ function App:startPolling()
     serverEnv = self._serverEnv,
     httpBase = self:getServerHttpBase(self._serverEnv)
   })
-  self:playSoundHook(NETWORK_EVENT_SOUND_HOOK_MAP.ws_open)
+  self:playSoundHook(NETWORK_EVENT_SOUND_HOOK_MAP.server_open)
   self._sceneManager:dispatch("onAppEvent", {
-    type = "ws_open"
+    type = "server_open"
   })
 end
 
@@ -578,9 +578,9 @@ function App:stopPolling(reason)
     serverEnv = self._serverEnv,
     httpBase = self:getServerHttpBase(self._serverEnv)
   })
-  self:playSoundHook(NETWORK_EVENT_SOUND_HOOK_MAP.ws_close)
+  self:playSoundHook(NETWORK_EVENT_SOUND_HOOK_MAP.server_close)
   self._sceneManager:dispatch("onAppEvent", {
-    type = "ws_close",
+    type = "server_close",
     reason = reason or "poll_stopped"
   })
 end
@@ -635,7 +635,7 @@ function App:sendClientEnvelope(envelopeType, payload, options)
   end
 end
 
-function App:sendWsEnvelope(envelopeType, payload)
+function App:sendEnvelope(envelopeType, payload)
   local criticalEnvelopeTypeMap = {
     ["client.match.turn.shot"] = true,
     ["client.match.turn.snapshot"] = true,
@@ -652,8 +652,13 @@ function App:sendWsEnvelope(envelopeType, payload)
   })
 end
 
+function App:sendWsEnvelope(envelopeType, payload)
+  -- Legacy alias: use sendEnvelope instead.
+  self:sendEnvelope(envelopeType, payload)
+end
+
 function App:sendChat(text)
-  self:sendWsEnvelope("client.chat.send", {
+  self:sendEnvelope("client.chat.send", {
     text = text
   })
 end
@@ -797,9 +802,9 @@ function App:handleHttpResponse(event, sourceTag)
       local jitter = (math.random() * 2 - 1) * jitterRatio * currentBackoff
       local waitMs = math.max(0, math.floor(currentBackoff + jitter))
       self._poll.nextPollAtMs = self:getNowMs() + waitMs
-      self:playSoundHook(NETWORK_EVENT_SOUND_HOOK_MAP.ws_error)
+      self:playSoundHook(NETWORK_EVENT_SOUND_HOOK_MAP.server_error)
       self._sceneManager:dispatch("onAppEvent", {
-        type = "ws_error",
+        type = "server_error",
         message = reason
       })
       self:networkLog("POLL_RESPONSE_INVALID", {
@@ -825,7 +830,7 @@ function App:handleHttpResponse(event, sourceTag)
 
     for _, envelope in ipairs(bodyTable.events) do
       if type(envelope) == "table" and type(envelope.type) == "string" then
-        self:handleWsEnvelope(envelope)
+        self:handleServerEnvelope(envelope)
       end
     end
     return
@@ -868,7 +873,7 @@ function App:handleHttpResponse(event, sourceTag)
   end
 end
 
-function App:handleWsEnvelope(envelope)
+function App:handleServerEnvelope(envelope)
   local shouldDispatch = true
   local hookId = SERVER_ENVELOPE_SOUND_HOOK_MAP[envelope.type]
   if hookId then
@@ -902,9 +907,14 @@ function App:handleWsEnvelope(envelope)
     return
   end
   self._sceneManager:dispatch("onAppEvent", {
-    type = "ws_envelope",
+    type = "server_envelope",
     envelope = envelope
   })
+end
+
+function App:handleWsEnvelope(envelope)
+  -- Legacy alias: use handleServerEnvelope instead.
+  self:handleServerEnvelope(envelope)
 end
 
 function App:issuePollRequest(nowMs)

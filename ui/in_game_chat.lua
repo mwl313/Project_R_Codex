@@ -17,7 +17,7 @@
 - InGameChat:wheelmoved(mouseX, mouseY, dx, dy)
 - InGameChat:textinput(text)
 - InGameChat:textedited(text, start, length)
-- InGameChat:onWsEnvelope(envelope)
+- InGameChat:onServerEnvelope(envelope)
 - InGameChat:isInputBlocking()
 
 주의:
@@ -655,7 +655,7 @@ function InGameChat:textedited(text, start, length)
   return true
 end
 
-function InGameChat:onWsEnvelope(envelope)
+function InGameChat:onServerEnvelope(envelope)
   if type(envelope) ~= "table" then
     return
   end
@@ -685,6 +685,11 @@ function InGameChat:onWsEnvelope(envelope)
       self._unreadCount = self._unreadCount + 1
     end
   end
+end
+
+function InGameChat:onWsEnvelope(envelope)
+  -- Legacy alias: use onServerEnvelope instead.
+  self:onServerEnvelope(envelope)
 end
 
 function InGameChat:onFocusLost()

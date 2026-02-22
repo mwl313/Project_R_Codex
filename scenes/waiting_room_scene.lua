@@ -240,7 +240,7 @@ function WaitingRoomScene:requestMatchStart()
     self:setStatus(t("waiting_room.status.start_condition_not_met"), Constants.COLOR_DANGER)
     return
   end
-  self._app:sendWsEnvelope("client.match.start", {})
+  self._app:sendEnvelope("client.match.start", {})
   self:setStatus(t("waiting_room.status.start_request_sent"), Constants.COLOR_TEXT_SUB)
 end
 
@@ -253,7 +253,7 @@ function WaitingRoomScene:requestGuestReady()
     end
     return
   end
-  self._app:sendWsEnvelope("client.room.ready", {})
+  self._app:sendEnvelope("client.room.ready", {})
   self:setStatus(t("waiting_room.status.ready_request_sent"), Constants.COLOR_TEXT_SUB)
 end
 
@@ -409,7 +409,7 @@ function WaitingRoomScene:keypressed(key)
   end
 end
 
-function WaitingRoomScene:onWsEnvelope(envelope)
+function WaitingRoomScene:onServerEnvelope(envelope)
   if envelope.type == "room.state" then
     if type(envelope.payload) == "table" then
       self._roomState = envelope.payload
@@ -534,31 +534,36 @@ function WaitingRoomScene:onWsEnvelope(envelope)
   end
 end
 
+function WaitingRoomScene:onWsEnvelope(envelope)
+  -- Legacy alias: use onServerEnvelope instead.
+  self:onServerEnvelope(envelope)
+end
+
 function WaitingRoomScene:onAppEvent(event)
   if event.type == "ui_status" then
     self:setStatus(event.text, event.color)
     return
   end
 
-  if event.type == "ws_open" then
+  if event.type == "server_open" then
     self:setStatus(t("waiting_room.status.ws_open"), Constants.COLOR_TEXT_SUB)
     return
   end
-  if event.type == "ws_close" then
+  if event.type == "server_close" then
     self._roomState.guestReady = false
     self:setStatus(t("waiting_room.status.ws_close", {
       reason = tostring(event.reason)
     }), Constants.COLOR_DANGER)
     return
   end
-  if event.type == "ws_error" then
+  if event.type == "server_error" then
     self:setStatus(t("waiting_room.status.ws_error", {
       message = tostring(event.message)
     }), Constants.COLOR_DANGER)
     return
   end
-  if event.type == "ws_envelope" then
-    self:onWsEnvelope(event.envelope)
+  if event.type == "server_envelope" then
+    self:onServerEnvelope(event.envelope)
   end
 end
 

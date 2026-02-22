@@ -737,7 +737,7 @@ function MatchScene:submitPlacement()
     return
   end
 
-  self._app:sendWsEnvelope("client.match.placement.submit", {
+  self._app:sendEnvelope("client.match.placement.submit", {
     stones = cloneStoneList(self._myStoneList)
   })
   self._isSubmitPending = true
@@ -873,7 +873,7 @@ function MatchScene:submitCardPick()
     return
   end
 
-  self._app:sendWsEnvelope("client.match.cards.pick", {
+  self._app:sendEnvelope("client.match.cards.pick", {
     picks = cloneStringList(self._selectedCardList)
   })
   self._isCardPickPending = true
@@ -1005,7 +1005,7 @@ function MatchScene:requestTurnCardUse(cardId)
     cardId = cardId
   }
 
-  self._app:sendWsEnvelope("client.match.turn.cardUse", payload)
+  self._app:sendEnvelope("client.match.turn.cardUse", payload)
   self._isCardUsePending = true
   self:setStatus(t("match.status.card_use_submit"), Constants.COLOR_TEXT_SUB)
   return true
@@ -1063,7 +1063,7 @@ function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
     return true
   end
 
-  self._app:sendWsEnvelope("client.match.turn.cardUse", {
+  self._app:sendEnvelope("client.match.turn.cardUse", {
     turnIndex = self._playingTurnIndex,
     cardId = pendingCardId,
     target = {
@@ -1093,7 +1093,7 @@ function MatchScene:requestSurrender()
   if self._playingCardHandBar then
     self._playingCardHandBar:cancelCardDrag(false)
   end
-  self._app:sendWsEnvelope("client.match.surrender", {})
+  self._app:sendEnvelope("client.match.surrender", {})
   self._isSurrenderPending = true
   self:setStatus(t("match.status.surrender_submit"), Constants.COLOR_DANGER)
 end
@@ -1110,7 +1110,7 @@ function MatchScene:requestResultVote(action)
     return
   end
 
-  self._app:sendWsEnvelope("client.match.rematch.vote", {
+  self._app:sendEnvelope("client.match.rematch.vote", {
     action = action
   })
   self._isResultVotePending = true
@@ -1290,7 +1290,7 @@ function MatchScene:commitAimDrag(_worldX, _worldY)
   end
 
   local power = math.min(Constants.MAX_SHOT_POWER, dragLength * Constants.POWER_PER_PIXEL)
-  self._app:sendWsEnvelope("client.match.turn.shot", {
+  self._app:sendEnvelope("client.match.turn.shot", {
     turnIndex = self._playingTurnIndex,
     stoneId = stone.id,
     dirX = dirCanonicalX / canonicalLen,
@@ -1318,7 +1318,7 @@ function MatchScene:sendHostSnapshotIfNeeded(turnIndex, reason)
   end
 
   self._lastAutoSnapshotTurnIndex = turnIndex
-  self._app:sendWsEnvelope("client.match.turn.snapshot", {
+  self._app:sendEnvelope("client.match.turn.snapshot", {
     turnIndex = turnIndex,
     stones = clonePlayingStoneList(self._playingStoneList)
   })
@@ -2213,7 +2213,7 @@ function MatchScene:keypressed(key)
   end
 end
 
-function MatchScene:onWsEnvelope(envelope)
+function MatchScene:onServerEnvelope(envelope)
   if envelope.type == "room.state" and type(envelope.payload) == "table" then
     self:applyRoomState(envelope.payload)
     return
@@ -2524,6 +2524,11 @@ function MatchScene:onWsEnvelope(envelope)
   end
 end
 
+function MatchScene:onWsEnvelope(envelope)
+  -- Legacy alias: use onServerEnvelope instead.
+  self:onServerEnvelope(envelope)
+end
+
 function MatchScene:onSceneWillChange(_event)
   self:cancelAimDrag(true)
   if self._inGameChat then
@@ -2550,22 +2555,22 @@ function MatchScene:onAppEvent(event)
     return
   end
 
-  if event.type == "ws_envelope" then
+  if event.type == "server_envelope" then
     if self._inGameChat then
-      self._inGameChat:onWsEnvelope(event.envelope)
+      self._inGameChat:onServerEnvelope(event.envelope)
     end
-    self:onWsEnvelope(event.envelope)
+    self:onServerEnvelope(event.envelope)
     return
   end
 
-  if event.type == "ws_close" then
+  if event.type == "server_close" then
     self:setStatus(t("match.status.ws_close", {
       reason = tostring(event.reason)
     }), Constants.COLOR_DANGER)
     return
   end
 
-  if event.type == "ws_error" then
+  if event.type == "server_error" then
     self:setStatus(t("match.status.ws_error", {
       message = tostring(event.message)
     }), Constants.COLOR_DANGER)
