@@ -232,6 +232,63 @@ local function intersectSegmentWithWorldRect(fromX, fromY, toX, toY)
   return clamp(toX, minX, maxX), clamp(toY, minY, maxY)
 end
 
+local SHOT_ERROR_CODE_SET = {
+  not_in_phase = true,
+  invalid_payload = true,
+  turn_mismatch = true,
+  not_your_turn = true,
+  shot_budget_exceeded = true,
+  awaiting_snapshot = true,
+  invalid_shot_power = true,
+  invalid_shot_dir = true,
+  timeout = true,
+  invalid_shot_stone = true,
+  stone_locked_this_turn = true,
+  already_shot = true
+}
+
+local SHOT_DENY_REASON_KEY_MAP = {
+  not_in_phase = "match.shot_deny_reason.not_in_phase",
+  invalid_payload = "match.shot_deny_reason.invalid_payload",
+  turn_mismatch = "match.shot_deny_reason.turn_mismatch",
+  not_your_turn = "match.shot_deny_reason.not_your_turn",
+  shot_budget_exceeded = "match.shot_deny_reason.shot_budget_exceeded",
+  awaiting_snapshot = "match.shot_deny_reason.awaiting_snapshot",
+  invalid_shot_power = "match.shot_deny_reason.invalid_shot_power",
+  invalid_shot_dir = "match.shot_deny_reason.invalid_shot_dir",
+  timeout = "match.shot_deny_reason.timeout",
+  invalid_shot_stone = "match.shot_deny_reason.invalid_shot_stone",
+  stone_locked_this_turn = "match.shot_deny_reason.stone_locked_this_turn",
+  already_shot = "match.shot_deny_reason.shot_budget_exceeded"
+}
+
+local function cloneVelocityMap(velocityMap)
+  local cloned = {}
+  for stoneId, velocity in pairs(velocityMap or {}) do
+    if type(velocity) == "table" then
+      cloned[tostring(stoneId)] = {
+        vx = tonumber(velocity.vx) or 0,
+        vy = tonumber(velocity.vy) or 0
+      }
+    end
+  end
+  return cloned
+end
+
+local function buildStoneMapById(stoneList)
+  local stoneMap = {}
+  for _, stone in ipairs(stoneList or {}) do
+    stoneMap[tostring(stone.id)] = stone
+  end
+  return stoneMap
+end
+
+local function easeOutCubic(value)
+  local tValue = clamp(value, 0, 1)
+  local inverse = 1 - tValue
+  return 1 - inverse * inverse * inverse
+end
+
 function MatchScene.new(app)
   local boardX = (Constants.BASE_WORLD_W - Constants.BOARD_W) * 0.5
   local boardY = (Constants.BASE_WORLD_H - Constants.BOARD_H) * 0.5
@@ -299,6 +356,13 @@ function MatchScene.new(app)
     _simElapsedSec = 0,
     _isShotSimulating = false,
     _shouldSendSnapshotAfterSim = false,
+    _predictiveShotSeq = 0,
+    _predictivePendingShotMap = {},
+    _predictivePendingShotIdList = {},
+    _predictiveGhostStoneIdSet = {},
+    _predictiveRollbackState = nil,
+    _predictiveRollbackInputLockSec = 0,
+    _shotToast = nil,
     _playingCardButtonList = {},
     _playingCardHandBar = nil,
     _inGameChat = nil,
@@ -446,6 +510,9 @@ function MatchScene:enter(params)
   self._simElapsedSec = 0
   self._isShotSimulating = false
   self._shouldSendSnapshotAfterSim = false
+  self._predictiveShotSeq = 0
+  self:clearPredictiveState()
+  self._shotToast = nil
   self._playingCardButtonList = {}
   self._optimisticConsumedCardIdSet = {}
   self._pendingDeclaredTargetCardId = nil
@@ -468,6 +535,333 @@ end
 function MatchScene:setStatus(statusText, statusColor)
   self._statusText = statusText or ""
   self._statusColor = statusColor or Constants.COLOR_TEXT_SUB
+end
+
+function MatchScene:predictiveLog(tag, detail)
+  if Constants.PREDICTIVE_SHOT_DEBUG_LOG ~= true then
+    return
+  end
+  print(string.format("[PREDICTIVE_SHOT][%s] %s", tostring(tag), tostring(detail or "")))
+end
+
+function MatchScene:isShotErrorCode(code)
+  return SHOT_ERROR_CODE_SET[tostring(code)] == true
+end
+
+function MatchScene:getShotDenyToastText(reasonCode)
+  local reasonKey = SHOT_DENY_REASON_KEY_MAP[tostring(reasonCode)]
+  if reasonKey then
+    return t(reasonKey)
+  end
+  return t("match.status.server_error", {
+    code = tostring(reasonCode or t("common.unknown"))
+  })
+end
+
+function MatchScene:showShotToast(text, color, durationSec)
+  if type(text) ~= "string" or text == "" then
+    return
+  end
+  local toastDuration = durationSec or Constants.PREDICTIVE_SHOT_TOAST_SEC
+  self._shotToast = {
+    text = text,
+    color = color or Constants.COLOR_DANGER,
+    remainingSec = toastDuration,
+    totalSec = toastDuration
+  }
+end
+
+function MatchScene:updateShotToast(dt)
+  if not self._shotToast then
+    return
+  end
+  self._shotToast.remainingSec = self._shotToast.remainingSec - dt
+  if self._shotToast.remainingSec <= 0 then
+    self._shotToast = nil
+  end
+end
+
+function MatchScene:drawShotToast()
+  if not self._shotToast then
+    return
+  end
+
+  local toast = self._shotToast
+  local fadeRatio = 1
+  if toast.totalSec > 0 then
+    local nearEndSec = math.min(0.24, toast.totalSec)
+    if toast.remainingSec < nearEndSec then
+      fadeRatio = clamp(toast.remainingSec / nearEndSec, 0, 1)
+    end
+  end
+
+  local panelW = 540
+  local panelH = 38
+  local panelX = (Constants.BASE_WORLD_W - panelW) * 0.5
+  local panelY = self._boardY + Constants.BOARD_H + 18
+  love.graphics.setColor(0.04, 0.05, 0.08, 0.82 * fadeRatio)
+  love.graphics.rectangle("fill", panelX, panelY, panelW, panelH, 8, 8)
+
+  local toastColor = toast.color or Constants.COLOR_DANGER
+  love.graphics.setColor(toastColor[1], toastColor[2], toastColor[3], (toastColor[4] or 1.0) * fadeRatio)
+  love.graphics.setLineWidth(1.2)
+  love.graphics.rectangle("line", panelX, panelY, panelW, panelH, 8, 8)
+  love.graphics.setLineWidth(1)
+
+  love.graphics.setFont(FontManager.getFont("small"))
+  love.graphics.setColor(Constants.COLOR_TEXT[1], Constants.COLOR_TEXT[2], Constants.COLOR_TEXT[3], fadeRatio)
+  love.graphics.printf(toast.text, panelX + 14, panelY + 10, panelW - 28, "center")
+end
+
+function MatchScene:isPredictiveRollbackLocked()
+  return (self._predictiveRollbackInputLockSec or 0) > 0
+end
+
+function MatchScene:hasPendingPredictiveShot()
+  return next(self._predictivePendingShotMap or {}) ~= nil
+end
+
+function MatchScene:refreshPredictiveGhostStone(stoneId)
+  local stoneKey = tostring(stoneId or "")
+  if stoneKey == "" then
+    return
+  end
+  for _, pendingShotId in ipairs(self._predictivePendingShotIdList) do
+    local pendingShot = self._predictivePendingShotMap[pendingShotId]
+    if pendingShot and tostring(pendingShot.stoneId) == stoneKey then
+      self._predictiveGhostStoneIdSet[stoneKey] = true
+      return
+    end
+  end
+  if self._predictiveRollbackState and tostring(self._predictiveRollbackState.stoneId) == stoneKey then
+    self._predictiveGhostStoneIdSet[stoneKey] = true
+    return
+  end
+  self._predictiveGhostStoneIdSet[stoneKey] = nil
+end
+
+function MatchScene:removePredictiveShotById(localShotId, keepGhost)
+  local pendingShot = self._predictivePendingShotMap[localShotId]
+  if not pendingShot then
+    return nil
+  end
+  self._predictivePendingShotMap[localShotId] = nil
+  for index, candidateId in ipairs(self._predictivePendingShotIdList) do
+    if candidateId == localShotId then
+      table.remove(self._predictivePendingShotIdList, index)
+      break
+    end
+  end
+  if not keepGhost then
+    self:refreshPredictiveGhostStone(pendingShot.stoneId)
+  end
+  self._isTurnShotPending = self:hasPendingPredictiveShot()
+  return pendingShot
+end
+
+function MatchScene:clearPredictiveState()
+  self._predictivePendingShotMap = {}
+  self._predictivePendingShotIdList = {}
+  self._predictiveGhostStoneIdSet = {}
+  self._predictiveRollbackState = nil
+  self._predictiveRollbackInputLockSec = 0
+  self._isTurnShotPending = false
+end
+
+function MatchScene:capturePredictivePreShotState()
+  return {
+    playingStoneList = clonePlayingStoneList(self._playingStoneList),
+    stoneVelocityMap = cloneVelocityMap(self._stoneVelocityMap),
+    playingShotUsed = self._playingShotUsed,
+    playingShotBudget = self._playingShotBudget,
+    isPlayingShotCommitted = self._isPlayingShotCommitted,
+    isPlayingAwaitingSnapshot = self._isPlayingAwaitingSnapshot,
+    shockwaveSourceStoneId = self._shockwaveSourceStoneId
+  }
+end
+
+function MatchScene:createPredictiveShot(shotPayload)
+  self._predictiveShotSeq = self._predictiveShotSeq + 1
+  local localShotId = self._predictiveShotSeq
+  local pendingShot = {
+    localShotId = localShotId,
+    turnIndex = shotPayload.turnIndex,
+    shooterPlayerIndex = self:getMyPlayerIndex(),
+    stoneId = shotPayload.stoneId,
+    dirX = shotPayload.dirX,
+    dirY = shotPayload.dirY,
+    power = shotPayload.power,
+    startedAtMs = TimeUtils.nowEpochMs(),
+    preStateSnapshot = self:capturePredictivePreShotState()
+  }
+  self._predictivePendingShotMap[localShotId] = pendingShot
+  self._predictivePendingShotIdList[#self._predictivePendingShotIdList + 1] = localShotId
+  self._predictiveGhostStoneIdSet[tostring(shotPayload.stoneId)] = true
+  self._isTurnShotPending = true
+  return pendingShot
+end
+
+function MatchScene:getLatestPendingPredictiveShot()
+  local listLength = #self._predictivePendingShotIdList
+  if listLength <= 0 then
+    return nil
+  end
+  local localShotId = self._predictivePendingShotIdList[listLength]
+  return self._predictivePendingShotMap[localShotId]
+end
+
+function MatchScene:findPredictiveShotIdByAcceptedPayload(payload)
+  local payloadStoneId = tostring(payload.stoneId or "")
+  local payloadTurnIndex = tonumber(payload.turnIndex)
+  local payloadPlayerIndex = tonumber(payload.playerIndex)
+  local payloadPower = tonumber(payload.power)
+  local payloadDirX = tonumber(payload.dirX)
+  local payloadDirY = tonumber(payload.dirY)
+  for _, localShotId in ipairs(self._predictivePendingShotIdList) do
+    local pendingShot = self._predictivePendingShotMap[localShotId]
+    if pendingShot then
+      local turnMatch = payloadTurnIndex == nil or pendingShot.turnIndex == payloadTurnIndex
+      local stoneMatch = payloadStoneId == "" or tostring(pendingShot.stoneId) == payloadStoneId
+      local playerMatch = payloadPlayerIndex == nil or pendingShot.shooterPlayerIndex == payloadPlayerIndex
+      local powerMatch = payloadPower == nil or math.abs((pendingShot.power or 0) - payloadPower) <= 0.0001
+      local dirMatch = true
+      if payloadDirX ~= nil and payloadDirY ~= nil then
+        dirMatch = math.abs((pendingShot.dirX or 0) - payloadDirX) <= 0.0001
+          and math.abs((pendingShot.dirY or 0) - payloadDirY) <= 0.0001
+      end
+      if turnMatch and stoneMatch and playerMatch and powerMatch and dirMatch then
+        return localShotId
+      end
+    end
+  end
+  return nil
+end
+
+function MatchScene:confirmPredictiveShotByAcceptedPayload(payload)
+  local localShotId = self:findPredictiveShotIdByAcceptedPayload(payload)
+  if not localShotId then
+    return nil
+  end
+  local pendingShot = self:removePredictiveShotById(localShotId, false)
+  if pendingShot then
+    self:predictiveLog("ACCEPT", "localShotId=" .. tostring(localShotId))
+  end
+  return pendingShot
+end
+
+function MatchScene:isPredictiveGhostStone(stoneId)
+  return self._predictiveGhostStoneIdSet[tostring(stoneId or "")] == true
+end
+
+function MatchScene:beginPredictiveRollback(pendingShot, reasonCode)
+  if not pendingShot or type(pendingShot.preStateSnapshot) ~= "table" then
+    return
+  end
+
+  self._shouldSendSnapshotAfterSim = false
+  self:stopShotSimulation()
+  self:cancelAimDrag(true)
+
+  local currentStoneList = clonePlayingStoneList(self._playingStoneList)
+  self._predictiveRollbackState = {
+    elapsedSec = 0,
+    durationSec = math.max(0.01, Constants.PREDICTIVE_SHOT_ROLLBACK_SEC),
+    fromStoneMap = buildStoneMapById(currentStoneList),
+    targetSnapshot = pendingShot.preStateSnapshot,
+    stoneId = pendingShot.stoneId
+  }
+  self._predictiveRollbackInputLockSec = math.max(self._predictiveRollbackInputLockSec or 0, Constants.PREDICTIVE_SHOT_INPUT_LOCK_SEC)
+  self._isTurnShotPending = false
+  self._isPlayingShotCommitted = false
+  self._isPlayingAwaitingSnapshot = false
+  self._predictiveGhostStoneIdSet[tostring(pendingShot.stoneId)] = true
+  self:showShotToast(self:getShotDenyToastText(reasonCode), Constants.COLOR_DANGER, Constants.PREDICTIVE_SHOT_TOAST_SEC)
+  self:predictiveLog("DENY", "localShotId=" .. tostring(pendingShot.localShotId) .. ", code=" .. tostring(reasonCode))
+end
+
+function MatchScene:updatePredictiveRollback(dt)
+  local rollbackState = self._predictiveRollbackState
+  if not rollbackState then
+    return
+  end
+  local targetSnapshot = rollbackState.targetSnapshot
+  if type(targetSnapshot) ~= "table" or type(targetSnapshot.playingStoneList) ~= "table" then
+    self._predictiveRollbackState = nil
+    return
+  end
+
+  rollbackState.elapsedSec = rollbackState.elapsedSec + dt
+  local progress = clamp(rollbackState.elapsedSec / rollbackState.durationSec, 0, 1)
+  local easedProgress = easeOutCubic(progress)
+  local nextStoneList = {}
+  for _, targetStone in ipairs(targetSnapshot.playingStoneList) do
+    local fromStone = rollbackState.fromStoneMap[tostring(targetStone.id)] or targetStone
+    nextStoneList[#nextStoneList + 1] = {
+      id = targetStone.id,
+      ownerPlayerIndex = targetStone.ownerPlayerIndex,
+      alive = targetStone.alive ~= false,
+      x = fromStone.x + (targetStone.x - fromStone.x) * easedProgress,
+      y = fromStone.y + (targetStone.y - fromStone.y) * easedProgress
+    }
+  end
+  self._playingStoneList = nextStoneList
+  self:syncStoneVelocityMap()
+  for _, velocity in pairs(self._stoneVelocityMap) do
+    velocity.vx = 0
+    velocity.vy = 0
+  end
+
+  if progress < 1 then
+    return
+  end
+
+  self._playingStoneList = clonePlayingStoneList(targetSnapshot.playingStoneList)
+  self._stoneVelocityMap = cloneVelocityMap(targetSnapshot.stoneVelocityMap)
+  self._playingShotUsed = targetSnapshot.playingShotUsed or self._playingShotUsed
+  self._playingShotBudget = targetSnapshot.playingShotBudget or self._playingShotBudget
+  self._isPlayingShotCommitted = targetSnapshot.isPlayingShotCommitted == true
+  self._isPlayingAwaitingSnapshot = targetSnapshot.isPlayingAwaitingSnapshot == true
+  self._shockwaveSourceStoneId = targetSnapshot.shockwaveSourceStoneId
+  self._predictiveRollbackState = nil
+  self._isTurnShotPending = self:hasPendingPredictiveShot()
+  self:refreshPredictiveGhostStone(rollbackState.stoneId)
+  self:predictiveLog("ROLLBACK_DONE", "stoneId=" .. tostring(rollbackState.stoneId))
+end
+
+function MatchScene:validateLocalShotAttempt(stone, dirCanonicalX, dirCanonicalY, power)
+  if not self:isPlayingPhase() then
+    return "not_in_phase"
+  end
+  if type(self._playingTurnIndex) ~= "number" then
+    return "turn_mismatch"
+  end
+  if not self:isMyTurn() then
+    return "not_your_turn"
+  end
+  if self._isPlayingAwaitingSnapshot then
+    return "awaiting_snapshot"
+  end
+  if self._playingShotUsed >= self._playingShotBudget then
+    return "shot_budget_exceeded"
+  end
+  if self._turnEndsAtMs and TimeUtils.nowEpochMs() > self._turnEndsAtMs then
+    return "timeout"
+  end
+  if not stone or stone.alive == false or stone.ownerPlayerIndex ~= self:getMyPlayerIndex() then
+    return "invalid_shot_stone"
+  end
+  if self._lockedStoneIdSet[stone.id] then
+    return "stone_locked_this_turn"
+  end
+
+  local directionLength = math.sqrt((dirCanonicalX or 0) * (dirCanonicalX or 0) + (dirCanonicalY or 0) * (dirCanonicalY or 0))
+  if not directionLength or directionLength <= 0 or directionLength ~= directionLength then
+    return "invalid_shot_dir"
+  end
+  if type(power) ~= "number" or power ~= power or power < 0 or power > Constants.MAX_SHOT_POWER then
+    return "invalid_shot_power"
+  end
+  return nil
 end
 
 function MatchScene:getMyRole()
@@ -515,6 +909,9 @@ function MatchScene:isShotInputEnabled()
     and (not self._isPlayingShotCommitted)
     and (not self._isPlayingAwaitingSnapshot)
     and (not self._isTurnShotPending)
+    and (not self:hasPendingPredictiveShot())
+    and (not self._predictiveRollbackState)
+    and (not self:isPredictiveRollbackLocked())
     and (not self._isCardUsePending)
     and (not self._pendingCardTargetId)
 end
@@ -1290,14 +1687,28 @@ function MatchScene:commitAimDrag(_worldX, _worldY)
   end
 
   local power = math.min(Constants.MAX_SHOT_POWER, dragLength * Constants.POWER_PER_PIXEL)
-  self._app:sendEnvelope("client.match.turn.shot", {
+  local normalizedDirX = dirCanonicalX / canonicalLen
+  local normalizedDirY = dirCanonicalY / canonicalLen
+  local localRejectCode = self:validateLocalShotAttempt(stone, normalizedDirX, normalizedDirY, power)
+  if localRejectCode then
+    local toastText = self:getShotDenyToastText(localRejectCode)
+    self:showShotToast(toastText, Constants.COLOR_DANGER, Constants.PREDICTIVE_SHOT_TOAST_SEC)
+    self:setStatus(toastText, Constants.COLOR_DANGER)
+    return
+  end
+
+  local shotPayload = {
     turnIndex = self._playingTurnIndex,
     stoneId = stone.id,
-    dirX = dirCanonicalX / canonicalLen,
-    dirY = dirCanonicalY / canonicalLen,
+    dirX = normalizedDirX,
+    dirY = normalizedDirY,
     power = power
-  })
-  self._isTurnShotPending = true
+  }
+
+  local pendingShot = self:createPredictiveShot(shotPayload)
+  self:applyShotImpulse(shotPayload)
+  self._app:sendEnvelope("client.match.turn.shot", shotPayload)
+  self:predictiveLog("LOCAL_START", "localShotId=" .. tostring(pendingShot.localShotId) .. ", stoneId=" .. tostring(stone.id))
   self:setStatus(t("match.status.shot_submit"), Constants.COLOR_TEXT_SUB)
 end
 
@@ -1488,13 +1899,13 @@ function MatchScene:applyRoomState(payload)
     if type(playing.shotCommitted) == "boolean" then
       self._isPlayingShotCommitted = playing.shotCommitted
       if playing.shotCommitted then
-        self._isTurnShotPending = false
+        self:clearPredictiveState()
       end
     end
     if type(playing.awaitingSnapshot) == "boolean" then
       self._isPlayingAwaitingSnapshot = playing.awaitingSnapshot
       if playing.awaitingSnapshot then
-        self._isTurnShotPending = false
+        self:clearPredictiveState()
         self:cancelAimDrag(true)
       end
     end
@@ -1512,6 +1923,7 @@ function MatchScene:applyRoomState(payload)
   end
 
   if payload.phase ~= Constants.PHASE_PLAYING then
+    self:clearPredictiveState()
     self._shouldSendSnapshotAfterSim = false
     self:stopShotSimulation()
     self:resetStoneVelocities()
@@ -1578,6 +1990,11 @@ end
 
 function MatchScene:update(dt)
   self:updateAimDragInput()
+  if self._predictiveRollbackInputLockSec > 0 then
+    self._predictiveRollbackInputLockSec = math.max(0, self._predictiveRollbackInputLockSec - dt)
+  end
+  self:updatePredictiveRollback(dt)
+  self:updateShotToast(dt)
 
   if self:isCardSelectPhase() and (not self._cardAnimator) then
     self:ensureCardAnimator()
@@ -1642,19 +2059,31 @@ function MatchScene:drawBoardFrame()
 end
 
 function MatchScene:drawStoneList(stoneList, color)
-  love.graphics.setColor(color)
   for _, stone in ipairs(stoneList or {}) do
     if stone.alive ~= false then
+      local isGhostStone = self:isPredictiveGhostStone(stone.id)
+      local alpha = isGhostStone and Constants.PREDICTIVE_SHOT_GHOST_ALPHA or 1.0
       local localX, localY = self:canonicalToLocal(stone.x, stone.y)
+      love.graphics.setColor(color[1], color[2], color[3], alpha)
       love.graphics.circle("fill", self._boardX + localX, self._boardY + localY, Constants.STONE_RADIUS)
     end
   end
 
-  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+  local pulseTime = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
   for _, stone in ipairs(stoneList or {}) do
     if stone.alive ~= false then
+      local isGhostStone = self:isPredictiveGhostStone(stone.id)
+      local alpha = isGhostStone and 0.80 or 1.0
       local localX, localY = self:canonicalToLocal(stone.x, stone.y)
+      love.graphics.setColor(Constants.COLOR_PANEL_BORDER[1], Constants.COLOR_PANEL_BORDER[2], Constants.COLOR_PANEL_BORDER[3], alpha)
       love.graphics.circle("line", self._boardX + localX, self._boardY + localY, Constants.STONE_RADIUS)
+      if isGhostStone then
+        local pulse = math.sin(pulseTime * 10.0) * 1.6
+        love.graphics.setColor(0.96, 0.92, 0.35, 0.75)
+        love.graphics.setLineWidth(1.2)
+        love.graphics.circle("line", self._boardX + localX, self._boardY + localY, Constants.STONE_RADIUS + 3 + pulse)
+        love.graphics.setLineWidth(1)
+      end
     end
   end
 end
@@ -2054,6 +2483,7 @@ function MatchScene:draw()
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(self._statusColor)
   love.graphics.printf(self._statusText, 0, 690, Constants.BASE_WORLD_W, "center")
+  self:drawShotToast()
 
   if self._inGameChat and self:isInGameChatAvailable() then
     self._inGameChat:draw(mouseX, mouseY)
@@ -2103,6 +2533,9 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
   end
 
   if self:isPlayingPhase() then
+    if self._predictiveRollbackState or self:isPredictiveRollbackLocked() then
+      return
+    end
     if self._surrenderButton:isHovered(mouseX, mouseY) and self._surrenderButton.isEnabled then
       self._surrenderButton:onClick()
       return
@@ -2155,6 +2588,9 @@ function MatchScene:mousereleased(mouseX, mouseY, button)
   if button ~= 1 then
     return
   end
+  if self:isPlayingPhase() and (self._predictiveRollbackState or self:isPredictiveRollbackLocked()) then
+    return
+  end
   if self:isPlayingPhase() and self._playingCardHandBar and self._playingCardHandBar:mousereleased(mouseX, mouseY, button) then
     return
   end
@@ -2189,6 +2625,9 @@ end
 
 function MatchScene:keypressed(key)
   if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:keypressed(key) then
+    return
+  end
+  if self:isPlayingPhase() and (self._predictiveRollbackState or self:isPredictiveRollbackLocked()) then
     return
   end
 
@@ -2335,9 +2774,9 @@ function MatchScene:onServerEnvelope(envelope)
     else
       self._hasUsedCardThisTurn = false
     end
+    self:clearPredictiveState()
     self._isPlayingShotCommitted = false
     self._isPlayingAwaitingSnapshot = false
-    self._isTurnShotPending = false
     self._isCardUsePending = false
     self._pendingCardTargetId = nil
     self._pendingDeclaredTargetCardId = nil
@@ -2407,9 +2846,12 @@ function MatchScene:onServerEnvelope(envelope)
     if type(payload.shotBudget) == "number" then
       self._playingShotBudget = payload.shotBudget
     end
-    self:applyShotImpulse(payload)
+    local confirmedPredictiveShot = self:confirmPredictiveShotByAcceptedPayload(payload)
+    if not confirmedPredictiveShot then
+      self:applyShotImpulse(payload)
+    end
     self._isPlayingShotCommitted = self._playingShotUsed >= self._playingShotBudget
-    self._isTurnShotPending = false
+    self._isTurnShotPending = self:hasPendingPredictiveShot()
     self._isCardUsePending = false
     self._pendingCardTargetId = nil
     self._pendingDeclaredTargetCardId = nil
@@ -2429,7 +2871,7 @@ function MatchScene:onServerEnvelope(envelope)
     end
     self._isPlayingAwaitingSnapshot = true
     self._turnEndsAtMs = nil
-    self._isTurnShotPending = false
+    self:clearPredictiveState()
     self._isCardUsePending = false
     self._pendingDeclaredTargetCardId = nil
     self:cancelAimDrag(true)
@@ -2455,7 +2897,7 @@ function MatchScene:onServerEnvelope(envelope)
     if self._effectManager then
       self._effectManager:clear()
     end
-    self._isTurnShotPending = false
+    self:clearPredictiveState()
     self._isCardUsePending = false
     self._pendingCardTargetId = nil
     self._pendingDeclaredTargetCardId = nil
@@ -2501,13 +2943,23 @@ function MatchScene:onServerEnvelope(envelope)
       self._optimisticConsumedCardIdSet = {}
       self:refreshPlayingCardHand()
     end
-    if payload.code == "invalid_shot_power" or payload.code == "invalid_shot_dir" or payload.code == "invalid_shot_stone" or payload.code == "not_your_turn" or payload.code == "timeout" or payload.code == "turn_mismatch" or payload.code == "already_shot" or payload.code == "shot_budget_exceeded" or payload.code == "stone_locked_this_turn" then
-      self._isTurnShotPending = false
-      self._isPlayingShotCommitted = false
-      self:cancelAimDrag(true)
-      self._shouldSendSnapshotAfterSim = false
-      self:stopShotSimulation()
-      self:resetStoneVelocities()
+    if self:isShotErrorCode(payload.code) then
+      local pendingShot = self:getLatestPendingPredictiveShot()
+      if pendingShot then
+        local removedShot = self:removePredictiveShotById(pendingShot.localShotId, true)
+        self:beginPredictiveRollback(removedShot, payload.code)
+      else
+        self._isTurnShotPending = false
+        self._isPlayingShotCommitted = false
+        self:cancelAimDrag(true)
+        self._shouldSendSnapshotAfterSim = false
+        self:stopShotSimulation()
+        self:resetStoneVelocities()
+        local fallbackToastText = self:getShotDenyToastText(payload.code)
+        self:showShotToast(fallbackToastText, Constants.COLOR_DANGER, Constants.PREDICTIVE_SHOT_TOAST_SEC)
+      end
+      self:setStatus(self:getShotDenyToastText(payload.code), Constants.COLOR_DANGER)
+      return
     end
     self:setStatus(t("match.status.server_error", {
       code = tostring(payload.code or t("common.unknown"))
@@ -2525,6 +2977,7 @@ function MatchScene:onServerEnvelope(envelope)
 end
 
 function MatchScene:onSceneWillChange(_event)
+  self:clearPredictiveState()
   self:cancelAimDrag(true)
   if self._inGameChat then
     self._inGameChat:closeImmediate()
@@ -2535,6 +2988,7 @@ function MatchScene:onSceneWillChange(_event)
 end
 
 function MatchScene:exit()
+  self:clearPredictiveState()
   self:cancelAimDrag(true)
   if self._inGameChat then
     self._inGameChat:closeImmediate()

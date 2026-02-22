@@ -285,6 +285,19 @@ local LocaleEn = {
       line = "[{nickname}] {text}",
       system_denied = "[SYSTEM] Chat denied: {reason}"
     },
+    shot_deny_reason = {
+      not_in_phase = "You cannot shoot in the current state.",
+      invalid_payload = "Shot payload is invalid.",
+      turn_mismatch = "Turn information is out of sync.",
+      not_your_turn = "It is not your turn.",
+      shot_budget_exceeded = "No more shots are available this turn.",
+      awaiting_snapshot = "Resolving snapshot. Please wait.",
+      invalid_shot_power = "Shot power is out of range.",
+      invalid_shot_dir = "Shot direction is invalid.",
+      timeout = "Turn time has expired.",
+      invalid_shot_stone = "Selected stone is invalid.",
+      stone_locked_this_turn = "That stone is locked for this turn."
+    },
     button = {
       submit_placement = "Submit Placement",
       confirm_selection = "Confirm Selection",

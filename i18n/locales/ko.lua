@@ -285,6 +285,19 @@ local LocaleKo = {
       line = "[{nickname}] {text}",
       system_denied = "[SYSTEM] 채팅 거부: {reason}"
     },
+    shot_deny_reason = {
+      not_in_phase = "지금은 샷을 할 수 없는 상태입니다.",
+      invalid_payload = "샷 정보가 올바르지 않습니다.",
+      turn_mismatch = "턴 정보가 맞지 않습니다. (동기화 중)",
+      not_your_turn = "내 턴이 아닙니다.",
+      shot_budget_exceeded = "이번 턴에는 더 이상 샷을 할 수 없습니다.",
+      awaiting_snapshot = "정산 중입니다. 잠시만 기다려주세요.",
+      invalid_shot_power = "샷 파워가 범위를 벗어났습니다.",
+      invalid_shot_dir = "샷 방향이 올바르지 않습니다.",
+      timeout = "턴 시간이 종료되었습니다.",
+      invalid_shot_stone = "선택한 알이 유효하지 않습니다.",
+      stone_locked_this_turn = "이번 턴에는 해당 알을 움직일 수 없습니다."
+    },
     button = {
       submit_placement = "배치 제출",
       confirm_selection = "선택 확정",

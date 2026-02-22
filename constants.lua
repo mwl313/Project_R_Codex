@@ -140,6 +140,14 @@ Constants = {
   PHYSICS_STOP_SPEED = readNumberRule("PHYSICS_STOP_SPEED", 12),
   PHYSICS_FIXED_STEP_SEC = readNumberRule("PHYSICS_FIXED_STEP_SEC", 0.016),
   PHYSICS_MAX_SIM_SEC = readNumberRule("PHYSICS_MAX_SIM_SEC", 6.0),
+  -- 예측 샷(릴리즈 즉시 로컬 발사) UX 보정 상수:
+  -- 서버 거절 시 부드러운 스냅백/입력 잠금/고스트 표시를 제어한다.
+  PREDICTIVE_SHOT_ROLLBACK_SEC = 0.20,
+  PREDICTIVE_SHOT_INPUT_LOCK_SEC = 0.22,
+  PREDICTIVE_SHOT_GHOST_ALPHA = 0.70,
+  PREDICTIVE_SHOT_TOAST_SEC = 1.45,
+  -- true면 예측 샷 승인/거절/롤백 흐름을 콘솔 로그로 출력한다.
+  PREDICTIVE_SHOT_DEBUG_LOG = false,
 
   -- 프로젝트 공용 UI 폰트(영문/한글 렌더링 공용).
   FONT_KR_REGULAR_PATH = "assets/fonts/MulmaruMono.ttf",
