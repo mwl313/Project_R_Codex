@@ -162,6 +162,17 @@ export const PLACEMENT_REVEAL_SEC = SHARED_RULES.PLACEMENT_REVEAL_SEC;
 export const CARD_PICK_SEC = SHARED_RULES.CARD_PICK_SEC;
 export const TURN_TIME_LIMIT_SEC = SHARED_RULES.TURN_TIME_LIMIT_SEC;
 export const SNAPSHOT_TIMEOUT_SEC = SHARED_RULES.SNAPSHOT_TIMEOUT_SEC;
+// 카드 사용 직후 재생되는 스킬 컷신 기본 길이(ms).
+// 서버 타이머 pause/resume 기준으로 사용한다.
+export const CUTSCENE_DEFAULT_DURATION_MS = 2200;
+// 카드별 컷신 길이 확장 포인트.
+export const CUTSCENE_DURATION_BY_CARD_ID: Record<string, number> = {
+  reinforcement: 2200,
+  shockwave: 2200,
+  invincible: 2200,
+  rockfall: 2200,
+  agile: 2200
+};
 
 export const CARD_POOL = [...CARD_POOL_FROM_CARD_RULES];
 export type CardId = string;

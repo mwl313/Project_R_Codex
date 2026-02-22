@@ -27,6 +27,8 @@ import {
   STONE_COUNT_PER_PLAYER,
   STONE_RADIUS,
   SNAPSHOT_TIMEOUT_SEC,
+  CUTSCENE_DEFAULT_DURATION_MS,
+  CUTSCENE_DURATION_BY_CARD_ID,
   TURN_TIME_LIMIT_SEC,
   MAX_SHOT_POWER,
   ROCK_OBSTACLE_HEIGHT,
@@ -120,6 +122,26 @@ interface MatchObstacle {
   height: number;
 }
 
+interface PendingCardAppliedEvent {
+  turnIndex: number;
+  playerIndex: 1 | 2;
+  cardId: string;
+  effect: unknown;
+}
+
+interface MatchCutsceneState {
+  active: boolean;
+  cutsceneId: string | null;
+  ownerPlayerIndex: 1 | 2 | null;
+  cardId: string | null;
+  skillName: string | null;
+  durationMs: number;
+  startedAtMs: number | null;
+  endsAtMs: number | null;
+  pausedRemainingMs: number | null;
+  pendingCardApplied: PendingCardAppliedEvent | null;
+}
+
 interface MatchPlayingState {
   turnIndex: number;
   activePlayerIndex: 1 | 2;
@@ -136,6 +158,7 @@ interface MatchPlayingState {
   shockwaveOwnerPlayerIndex: 1 | 2 | null;
   shotCommitted: boolean;
   awaitingSnapshot: boolean;
+  cutscene: MatchCutsceneState;
   stones: MatchPlayingStone[];
 }
 
@@ -164,6 +187,7 @@ interface RoomState {
     phaseEndsAtMs?: number;
     turnEndsAtMs?: number;
     snapshotEndsAtMs?: number;
+    cutsceneEndsAtMs?: number;
   };
   chatLimiter: Record<string, number[]>;
   isClosed: boolean;
@@ -218,6 +242,21 @@ function createEmptySlot(): PlayerSlot {
   };
 }
 
+function createDefaultCutsceneState(): MatchCutsceneState {
+  return {
+    active: false,
+    cutsceneId: null,
+    ownerPlayerIndex: null,
+    cardId: null,
+    skillName: null,
+    durationMs: CUTSCENE_DEFAULT_DURATION_MS,
+    startedAtMs: null,
+    endsAtMs: null,
+    pausedRemainingMs: null,
+    pendingCardApplied: null
+  };
+}
+
 function createDefaultRoomState(): RoomState {
   return {
     roomCode: null,
@@ -263,6 +302,7 @@ function createDefaultRoomState(): RoomState {
         shockwaveOwnerPlayerIndex: null,
         shotCommitted: false,
         awaitingSnapshot: false,
+        cutscene: createDefaultCutsceneState(),
         stones: []
       }
     },
@@ -402,6 +442,7 @@ export class RoomDO {
           shockwaveOwnerPlayerIndex: null,
           shotCommitted: false,
           awaitingSnapshot: false,
+          cutscene: createDefaultCutsceneState(),
           stones: []
         }
       };
@@ -447,6 +488,7 @@ export class RoomDO {
         shockwaveOwnerPlayerIndex: null,
         shotCommitted: false,
         awaitingSnapshot: false,
+        cutscene: createDefaultCutsceneState(),
         stones: []
       };
       return;
@@ -503,6 +545,43 @@ export class RoomDO {
     }
     if (this.room.match.playing.shotUsed > this.room.match.playing.shotBudget) {
       this.room.match.playing.shotUsed = this.room.match.playing.shotBudget;
+    }
+    if (!this.room.match.playing.cutscene || typeof this.room.match.playing.cutscene !== "object") {
+      this.room.match.playing.cutscene = createDefaultCutsceneState();
+    } else {
+      const cutscene = this.room.match.playing.cutscene as Partial<MatchCutsceneState>;
+      this.room.match.playing.cutscene = {
+        active: cutscene.active === true,
+        cutsceneId: typeof cutscene.cutsceneId === "string" ? cutscene.cutsceneId : null,
+        ownerPlayerIndex: cutscene.ownerPlayerIndex === 1 || cutscene.ownerPlayerIndex === 2 ? cutscene.ownerPlayerIndex : null,
+        cardId: typeof cutscene.cardId === "string" ? cutscene.cardId : null,
+        skillName: typeof cutscene.skillName === "string" ? cutscene.skillName : null,
+        durationMs: typeof cutscene.durationMs === "number" && Number.isFinite(cutscene.durationMs) && cutscene.durationMs > 0
+          ? Math.floor(cutscene.durationMs)
+          : CUTSCENE_DEFAULT_DURATION_MS,
+        startedAtMs: typeof cutscene.startedAtMs === "number" && Number.isFinite(cutscene.startedAtMs)
+          ? Math.floor(cutscene.startedAtMs)
+          : null,
+        endsAtMs: typeof cutscene.endsAtMs === "number" && Number.isFinite(cutscene.endsAtMs)
+          ? Math.floor(cutscene.endsAtMs)
+          : null,
+        pausedRemainingMs: typeof cutscene.pausedRemainingMs === "number" && Number.isFinite(cutscene.pausedRemainingMs)
+          ? Math.max(0, Math.floor(cutscene.pausedRemainingMs))
+          : null,
+        pendingCardApplied: cutscene.pendingCardApplied && typeof cutscene.pendingCardApplied === "object"
+          ? {
+              turnIndex: typeof cutscene.pendingCardApplied.turnIndex === "number" ? cutscene.pendingCardApplied.turnIndex : this.room.match.playing.turnIndex,
+              playerIndex: cutscene.pendingCardApplied.playerIndex === 1 || cutscene.pendingCardApplied.playerIndex === 2 ? cutscene.pendingCardApplied.playerIndex : this.room.match.playing.activePlayerIndex,
+              cardId: typeof cutscene.pendingCardApplied.cardId === "string" ? cutscene.pendingCardApplied.cardId : "unknown",
+              effect: (cutscene.pendingCardApplied as { effect?: unknown }).effect
+            }
+          : null
+      };
+    }
+    if (this.room.match.playing.cutscene.active && this.room.match.playing.cutscene.endsAtMs) {
+      this.room.timers.cutsceneEndsAtMs = this.room.match.playing.cutscene.endsAtMs;
+    } else {
+      this.room.timers.cutsceneEndsAtMs = undefined;
     }
 
     if (this.room.result) {
@@ -893,6 +972,17 @@ export class RoomDO {
           shockwaveOwnerPlayerIndex: this.room.match.playing.shockwaveOwnerPlayerIndex,
           shotCommitted: this.room.match.playing.shotCommitted,
           awaitingSnapshot: this.room.match.playing.awaitingSnapshot,
+          cutscene: {
+            active: this.room.match.playing.cutscene.active,
+            cutsceneId: this.room.match.playing.cutscene.cutsceneId,
+            ownerPlayerIndex: this.room.match.playing.cutscene.ownerPlayerIndex,
+            cardId: this.room.match.playing.cutscene.cardId,
+            skillName: this.room.match.playing.cutscene.skillName,
+            durationMs: this.room.match.playing.cutscene.durationMs,
+            startedAtMs: this.room.match.playing.cutscene.startedAtMs,
+            endsAtMs: this.room.match.playing.cutscene.endsAtMs,
+            pausedRemainingMs: this.room.match.playing.cutscene.pausedRemainingMs
+          },
           stones: clonePlayingStones(this.room.match.playing.stones)
         }
       },
@@ -1240,6 +1330,7 @@ export class RoomDO {
     minDeadlineMs = this.considerAlarmDeadline(this.room.timers.phaseEndsAtMs, nowMs, minDeadlineMs);
     minDeadlineMs = this.considerAlarmDeadline(this.room.timers.turnEndsAtMs, nowMs, minDeadlineMs);
     minDeadlineMs = this.considerAlarmDeadline(this.room.timers.snapshotEndsAtMs, nowMs, minDeadlineMs);
+    minDeadlineMs = this.considerAlarmDeadline(this.room.timers.cutsceneEndsAtMs, nowMs, minDeadlineMs);
 
     for (const tokenSession of Object.values(this.pollState.tokenSessionByToken)) {
       if (!tokenSession || typeof tokenSession !== "object") {
@@ -1400,6 +1491,7 @@ export class RoomDO {
           shockwaveOwnerPlayerIndex: null,
           shotCommitted: false,
           awaitingSnapshot: false,
+          cutscene: createDefaultCutsceneState(),
           stones: []
         }
       },
@@ -1911,7 +2003,9 @@ export class RoomDO {
     this.room.timers.phaseEndsAtMs = undefined;
     this.room.timers.turnEndsAtMs = undefined;
     this.room.timers.snapshotEndsAtMs = undefined;
+    this.room.timers.cutsceneEndsAtMs = undefined;
     this.room.match.playing.turnEndsAtMs = null;
+    this.room.match.playing.cutscene = createDefaultCutsceneState();
     this.room.match.playing.awaitingSnapshot = false;
     this.room.match.playing.shotCommitted = false;
 
@@ -2101,8 +2195,10 @@ export class RoomDO {
     this.room.match.playing.shockwaveOwnerPlayerIndex = null;
     this.room.match.playing.shotCommitted = false;
     this.room.match.playing.awaitingSnapshot = false;
+    this.room.match.playing.cutscene = createDefaultCutsceneState();
     this.room.timers.turnEndsAtMs = turnEndsAtMs;
     this.room.timers.snapshotEndsAtMs = undefined;
+    this.room.timers.cutsceneEndsAtMs = undefined;
   }
 
   private broadcastTurnStart(): void {
@@ -2150,6 +2246,8 @@ export class RoomDO {
     this.room.timers.phaseEndsAtMs = undefined;
     this.room.timers.turnEndsAtMs = undefined;
     this.room.timers.snapshotEndsAtMs = undefined;
+    this.room.timers.cutsceneEndsAtMs = undefined;
+    this.room.match.playing.cutscene = createDefaultCutsceneState();
     this.room.match.playing.turnEndsAtMs = null;
 
     await this.saveState();
@@ -2203,8 +2301,10 @@ export class RoomDO {
     const snapshotEndsAtMs = Date.now() + SNAPSHOT_TIMEOUT_SEC * 1000;
     this.room.match.playing.awaitingSnapshot = true;
     this.room.match.playing.turnEndsAtMs = null;
+    this.room.match.playing.cutscene = createDefaultCutsceneState();
     this.room.timers.turnEndsAtMs = undefined;
     this.room.timers.snapshotEndsAtMs = snapshotEndsAtMs;
+    this.room.timers.cutsceneEndsAtMs = undefined;
 
     await this.saveState();
     this.emitBroadcast("match.turn.snapshotRequested", {
@@ -2246,6 +2346,250 @@ export class RoomDO {
     this.broadcastRoomState();
   }
 
+  private getCutsceneDurationByCardId(cardId: string): number {
+    const rawDuration = CUTSCENE_DURATION_BY_CARD_ID[cardId];
+    if (typeof rawDuration === "number" && Number.isFinite(rawDuration) && rawDuration > 0) {
+      return Math.max(300, Math.floor(rawDuration));
+    }
+    return CUTSCENE_DEFAULT_DURATION_MS;
+  }
+
+  private clonePlayingStateForAbility(playing: MatchPlayingState): MatchPlayingState {
+    return {
+      turnIndex: playing.turnIndex,
+      activePlayerIndex: playing.activePlayerIndex,
+      turnEndsAtMs: playing.turnEndsAtMs,
+      shotBudget: playing.shotBudget,
+      shotUsed: playing.shotUsed,
+      hasCardUsedThisTurn: playing.hasCardUsedThisTurn,
+      lockedStoneIds: [...playing.lockedStoneIds],
+      obstacles: cloneObstacles(playing.obstacles),
+      invincibleTurnByPlayer: {
+        1: playing.invincibleTurnByPlayer[1],
+        2: playing.invincibleTurnByPlayer[2]
+      },
+      shockwaveOwnerPlayerIndex: playing.shockwaveOwnerPlayerIndex,
+      shotCommitted: playing.shotCommitted,
+      awaitingSnapshot: playing.awaitingSnapshot,
+      cutscene: {
+        ...playing.cutscene,
+        pendingCardApplied: playing.cutscene.pendingCardApplied
+          ? { ...playing.cutscene.pendingCardApplied }
+          : null
+      },
+      stones: clonePlayingStones(playing.stones)
+    };
+  }
+
+  private applyPendingCardEffectFromPayload(cardId: string, playerIndex: 1 | 2, effectPayload: unknown): void {
+    const effect = effectPayload && typeof effectPayload === "object"
+      ? effectPayload as Record<string, unknown>
+      : {};
+
+    if (cardId === "agile") {
+      const shotBudget = typeof effect.shotBudget === "number" && Number.isFinite(effect.shotBudget)
+        ? Math.max(1, Math.floor(effect.shotBudget))
+        : this.room.match.playing.shotBudget;
+      this.room.match.playing.shotBudget = Math.max(this.room.match.playing.shotBudget, shotBudget);
+      return;
+    }
+
+    if (cardId === "reinforcement") {
+      const spawnStone = effect.spawnStone && typeof effect.spawnStone === "object"
+        ? effect.spawnStone as Record<string, unknown>
+        : null;
+      if (spawnStone) {
+        const stoneId = typeof spawnStone.id === "string" ? spawnStone.id : null;
+        const x = typeof spawnStone.x === "number" && Number.isFinite(spawnStone.x) ? spawnStone.x : null;
+        const y = typeof spawnStone.y === "number" && Number.isFinite(spawnStone.y) ? spawnStone.y : null;
+        if (stoneId && x !== null && y !== null && !this.room.match.playing.stones.some((stone) => stone.id === stoneId)) {
+          const ownerPlayerIndex = spawnStone.ownerPlayerIndex === 1 || spawnStone.ownerPlayerIndex === 2
+            ? spawnStone.ownerPlayerIndex
+            : playerIndex;
+          this.room.match.playing.stones.push({
+            id: stoneId,
+            ownerPlayerIndex,
+            x,
+            y,
+            alive: spawnStone.alive !== false
+          });
+        }
+      }
+      if (Array.isArray(effect.lockedStoneIds)) {
+        const lockedStoneIds = effect.lockedStoneIds
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0);
+        this.room.match.playing.lockedStoneIds = [...new Set(lockedStoneIds)];
+      }
+      return;
+    }
+
+    if (cardId === "rockfall") {
+      const obstacle = effect.obstacle && typeof effect.obstacle === "object"
+        ? effect.obstacle as Record<string, unknown>
+        : null;
+      if (!obstacle) {
+        return;
+      }
+      const obstacleId = typeof obstacle.id === "string" ? obstacle.id : null;
+      const obstacleX = typeof obstacle.x === "number" && Number.isFinite(obstacle.x) ? obstacle.x : null;
+      const obstacleY = typeof obstacle.y === "number" && Number.isFinite(obstacle.y) ? obstacle.y : null;
+      const obstacleWidth = typeof obstacle.width === "number" && Number.isFinite(obstacle.width) ? obstacle.width : ROCK_OBSTACLE_WIDTH;
+      const obstacleHeight = typeof obstacle.height === "number" && Number.isFinite(obstacle.height) ? obstacle.height : ROCK_OBSTACLE_HEIGHT;
+      if (!obstacleId || obstacleX === null || obstacleY === null) {
+        return;
+      }
+      if (this.room.match.playing.obstacles.some((item) => item.id === obstacleId)) {
+        return;
+      }
+      this.room.match.playing.obstacles.push({
+        id: obstacleId,
+        x: obstacleX,
+        y: obstacleY,
+        width: obstacleWidth,
+        height: obstacleHeight
+      });
+      return;
+    }
+
+    if (cardId === "invincible") {
+      const invincible = effect.invincibleTurnByPlayer && typeof effect.invincibleTurnByPlayer === "object"
+        ? effect.invincibleTurnByPlayer as Record<string, unknown>
+        : null;
+      if (!invincible) {
+        this.room.match.playing.invincibleTurnByPlayer[playerIndex] = this.room.match.playing.turnIndex + 1;
+        return;
+      }
+      const nextOne = typeof invincible[1] === "number" && Number.isFinite(invincible[1]) ? Math.floor(invincible[1]) : null;
+      const nextTwo = typeof invincible[2] === "number" && Number.isFinite(invincible[2]) ? Math.floor(invincible[2]) : null;
+      this.room.match.playing.invincibleTurnByPlayer = {
+        1: nextOne,
+        2: nextTwo
+      };
+      return;
+    }
+
+    if (cardId === "shockwave") {
+      const ownerPlayerIndex = effect.shockwaveOwnerPlayerIndex === 1 || effect.shockwaveOwnerPlayerIndex === 2
+        ? effect.shockwaveOwnerPlayerIndex
+        : playerIndex;
+      this.room.match.playing.shockwaveOwnerPlayerIndex = ownerPlayerIndex;
+    }
+  }
+
+  private async beginCardCutscene(
+    cardId: string,
+    ownerPlayerIndex: 1 | 2,
+    target: unknown,
+    effectPayload: unknown
+  ): Promise<void> {
+    const nowMs = Date.now();
+    const turnEndsAtMs = this.room.match.playing.turnEndsAtMs;
+    const remainingMs = turnEndsAtMs ? Math.max(0, turnEndsAtMs - nowMs) : 0;
+    const durationMs = this.getCutsceneDurationByCardId(cardId);
+    const cutsceneId = `cs_${this.room.match.playing.turnIndex}_${ownerPlayerIndex}_${cardId}_${createToken().slice(0, 6)}`;
+    const endsAtMs = nowMs + durationMs;
+
+    this.room.match.playing.turnEndsAtMs = null;
+    this.room.timers.turnEndsAtMs = undefined;
+    this.room.match.playing.cutscene = {
+      active: true,
+      cutsceneId,
+      ownerPlayerIndex,
+      cardId,
+      skillName: cardId,
+      durationMs,
+      startedAtMs: nowMs,
+      endsAtMs,
+      pausedRemainingMs: remainingMs,
+      pendingCardApplied: {
+        turnIndex: this.room.match.playing.turnIndex,
+        playerIndex: ownerPlayerIndex,
+        cardId,
+        effect: effectPayload
+      }
+    };
+    this.room.timers.cutsceneEndsAtMs = endsAtMs;
+
+    await this.saveState();
+    this.emitBroadcast("match.turn.cardCue", {
+      turnIndex: this.room.match.playing.turnIndex,
+      playerIndex: ownerPlayerIndex,
+      cardId,
+      target
+    });
+    this.emitBroadcast("match.card.cutsceneStart", {
+      turnIndex: this.room.match.playing.turnIndex,
+      ownerPlayerIndex,
+      cardId,
+      skillName: cardId,
+      cutsceneId,
+      cutsceneDurationMs: durationMs,
+      pausedRemainingMs: remainingMs
+    });
+    this.broadcastRoomState();
+    await this.scheduleNextAlarm(nowMs);
+  }
+
+  private async finalizeActiveCutscene(nowMs: number): Promise<void> {
+    const cutscene = this.room.match.playing.cutscene;
+    if (!cutscene.active) {
+      return;
+    }
+
+    const finishedCutsceneId = cutscene.cutsceneId;
+    const finishedOwnerPlayerIndex = cutscene.ownerPlayerIndex;
+    const finishedCardId = cutscene.cardId;
+    const pendingCardApplied = cutscene.pendingCardApplied;
+    const remainingMs = typeof cutscene.pausedRemainingMs === "number"
+      ? Math.max(0, Math.floor(cutscene.pausedRemainingMs))
+      : 0;
+
+    cutscene.active = false;
+    cutscene.cutsceneId = null;
+    cutscene.ownerPlayerIndex = null;
+    cutscene.cardId = null;
+    cutscene.skillName = null;
+    cutscene.endsAtMs = null;
+    cutscene.startedAtMs = null;
+    cutscene.pausedRemainingMs = null;
+    cutscene.pendingCardApplied = null;
+    this.room.timers.cutsceneEndsAtMs = undefined;
+
+    if (this.room.phase === PHASE_PLAYING && !this.room.match.playing.awaitingSnapshot) {
+      const resumedTurnEndsAtMs = nowMs + remainingMs;
+      this.room.match.playing.turnEndsAtMs = resumedTurnEndsAtMs;
+      this.room.timers.turnEndsAtMs = resumedTurnEndsAtMs;
+    }
+
+    if (pendingCardApplied) {
+      this.applyPendingCardEffectFromPayload(
+        pendingCardApplied.cardId,
+        pendingCardApplied.playerIndex,
+        pendingCardApplied.effect
+      );
+    }
+
+    await this.saveState();
+    this.emitBroadcast("match.card.cutsceneEnd", {
+      turnIndex: this.room.match.playing.turnIndex,
+      cutsceneId: finishedCutsceneId,
+      ownerPlayerIndex: finishedOwnerPlayerIndex,
+      cardId: finishedCardId
+    });
+    if (pendingCardApplied) {
+      this.emitBroadcast("match.turn.cardApplied", {
+        turnIndex: pendingCardApplied.turnIndex,
+        playerIndex: pendingCardApplied.playerIndex,
+        cardId: pendingCardApplied.cardId,
+        effect: pendingCardApplied.effect
+      });
+    }
+    this.broadcastRoomState();
+    await this.scheduleNextAlarm(nowMs);
+  }
+
   private async handleTurnCardUse(token: string, session: Session, payload: unknown): Promise<void> {
     if (this.room.phase !== PHASE_PLAYING) {
       this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
@@ -2263,6 +2607,10 @@ export class RoomDO {
     }
     if (session.playerIndex !== this.room.match.playing.activePlayerIndex) {
       this.emitToToken(token, "error.generic", errorPayload("not_your_turn"));
+      return;
+    }
+    if (this.room.match.playing.cutscene.active) {
+      this.emitToToken(token, "error.generic", errorPayload("cutscene_active"));
       return;
     }
     if (this.room.match.playing.awaitingSnapshot) {
@@ -2293,10 +2641,11 @@ export class RoomDO {
       return;
     }
 
+    const previewPlayingState = this.clonePlayingStateForAbility(this.room.match.playing);
     const abilityResult = applyTurnCardAbility({
       payload: cardUsePayload,
       playerIndex: session.playerIndex,
-      playing: this.room.match.playing,
+      playing: previewPlayingState,
       createPlayingEntityId: (prefix) => this.createPlayingEntityId(prefix),
       canPlaceStoneAt: (x, y, minDistance) => this.canPlaceStoneAt(x, y, minDistance),
       canPlaceObstacleAt: (x, y, width, height, margin) => this.canPlaceObstacleAt(x, y, width, height, margin)
@@ -2310,25 +2659,21 @@ export class RoomDO {
     this.room.match.playing.hasCardUsedThisTurn = true;
     this.removePickedCardByRole(session.role, abilityResult.appliedCardId);
 
-    await this.saveState();
-    this.emitBroadcast("match.turn.cardCue", {
-      turnIndex: this.room.match.playing.turnIndex,
-      playerIndex: session.playerIndex,
-      cardId: abilityResult.appliedCardId,
-      target: cardUsePayload.target
-    });
-    this.emitBroadcast("match.turn.cardApplied", {
-      turnIndex: this.room.match.playing.turnIndex,
-      playerIndex: session.playerIndex,
-      cardId: abilityResult.appliedCardId,
-      effect: effectPayload
-    });
-    this.broadcastRoomState();
+    await this.beginCardCutscene(
+      abilityResult.appliedCardId,
+      session.playerIndex,
+      cardUsePayload.target,
+      effectPayload
+    );
   }
 
   private async handleTurnShot(token: string, session: Session, payload: unknown): Promise<void> {
     if (this.room.phase !== PHASE_PLAYING) {
       this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
+      return;
+    }
+    if (this.room.match.playing.cutscene.active) {
+      this.emitToToken(token, "error.generic", errorPayload("cutscene_active"));
       return;
     }
 
@@ -2406,6 +2751,10 @@ export class RoomDO {
   private async handleTurnSnapshot(token: string, session: Session, payload: unknown): Promise<void> {
     if (this.room.phase !== PHASE_PLAYING) {
       this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
+      return;
+    }
+    if (this.room.match.playing.cutscene.active) {
+      this.emitToToken(token, "error.generic", errorPayload("cutscene_active"));
       return;
     }
     if (session.role !== "host") {
@@ -2633,6 +2982,27 @@ export class RoomDO {
     await this.processPresenceTimeouts(nowMs);
 
     if (this.room.phase === PHASE_PLAYING) {
+      if (this.room.match.playing.cutscene.active) {
+        let cutsceneEndsAtMs = this.room.timers.cutsceneEndsAtMs;
+        if (!cutsceneEndsAtMs) {
+          const fallbackEndsAtMs = this.room.match.playing.cutscene.endsAtMs;
+          if (typeof fallbackEndsAtMs === "number" && Number.isFinite(fallbackEndsAtMs)) {
+            cutsceneEndsAtMs = fallbackEndsAtMs;
+          } else {
+            cutsceneEndsAtMs = nowMs + this.room.match.playing.cutscene.durationMs;
+            this.room.match.playing.cutscene.endsAtMs = cutsceneEndsAtMs;
+          }
+          this.room.timers.cutsceneEndsAtMs = cutsceneEndsAtMs;
+          await this.saveState();
+        }
+        if (nowMs >= cutsceneEndsAtMs) {
+          await this.finalizeActiveCutscene(nowMs);
+          return;
+        }
+        await this.scheduleNextAlarm(nowMs);
+        return;
+      }
+
       if (this.room.match.playing.awaitingSnapshot) {
         let snapshotEndsAtMs = this.room.timers.snapshotEndsAtMs;
         if (!snapshotEndsAtMs) {

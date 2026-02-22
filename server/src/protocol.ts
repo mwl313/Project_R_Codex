@@ -12,6 +12,8 @@ export type ServerEventType =
   | "match.cards.dealt"
   | "match.cards.locked"
   | "match.turn.cardCue"
+  | "match.card.cutsceneStart"
+  | "match.card.cutsceneEnd"
   | "match.turn.cardApplied"
   | "match.turn.start"
   | "match.turn.shotAccepted"

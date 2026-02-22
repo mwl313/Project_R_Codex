@@ -22,6 +22,7 @@ local UIDraw = require("ui.ui_draw")
 local CardAnimator = require("ui.card_animator")
 local CardHandBar = require("ui.card_hand_bar")
 local InGameChat = require("ui.in_game_chat")
+local CutsceneManager = require("ui.cutscene_manager")
 local EffectManager = require("effects.effect_manager")
 local Abilities = require("abilities")
 local GameMechanics = require("game_mechanics")
@@ -239,6 +240,7 @@ local SHOT_ERROR_CODE_SET = {
   not_your_turn = true,
   shot_budget_exceeded = true,
   awaiting_snapshot = true,
+  cutscene_active = true,
   invalid_shot_power = true,
   invalid_shot_dir = true,
   timeout = true,
@@ -254,6 +256,7 @@ local SHOT_DENY_REASON_KEY_MAP = {
   not_your_turn = "match.shot_deny_reason.not_your_turn",
   shot_budget_exceeded = "match.shot_deny_reason.shot_budget_exceeded",
   awaiting_snapshot = "match.shot_deny_reason.awaiting_snapshot",
+  cutscene_active = "match.shot_deny_reason.cutscene_active",
   invalid_shot_power = "match.shot_deny_reason.invalid_shot_power",
   invalid_shot_dir = "match.shot_deny_reason.invalid_shot_dir",
   timeout = "match.shot_deny_reason.timeout",
@@ -366,6 +369,17 @@ function MatchScene.new(app)
     _playingCardButtonList = {},
     _playingCardHandBar = nil,
     _inGameChat = nil,
+    _cutsceneManager = nil,
+    _serverCutsceneState = {
+      active = false,
+      cutsceneId = nil,
+      ownerPlayerIndex = nil,
+      cardId = nil,
+      skillName = nil,
+      cutsceneDurationMs = nil,
+      pausedRemainingMs = nil
+    },
+    _cutsceneFrozenRemainSec = nil,
     _optimisticConsumedCardIdSet = {},
     _pendingDeclaredTargetCardId = nil,
     _surrenderButton = nil,
@@ -450,6 +464,7 @@ function MatchScene.new(app)
     end
   })
   instance._inGameChat = InGameChat.new(app)
+  instance._cutsceneManager = CutsceneManager.new()
 
   return instance
 end
@@ -519,8 +534,21 @@ function MatchScene:enter(params)
   self._isResultVotePending = false
   self._myResultVote = nil
   self._opponentResultVote = nil
+  self._serverCutsceneState = {
+    active = false,
+    cutsceneId = nil,
+    ownerPlayerIndex = nil,
+    cardId = nil,
+    skillName = nil,
+    cutsceneDurationMs = nil,
+    pausedRemainingMs = nil
+  }
+  self._cutsceneFrozenRemainSec = nil
   if self._inGameChat then
     self._inGameChat:reset()
+  end
+  if self._cutsceneManager then
+    self._cutsceneManager:reset()
   end
   if self._effectManager then
     self._effectManager:clear()
@@ -535,6 +563,127 @@ end
 function MatchScene:setStatus(statusText, statusColor)
   self._statusText = statusText or ""
   self._statusColor = statusColor or Constants.COLOR_TEXT_SUB
+end
+
+function MatchScene:isServerCutsceneActive()
+  return self._serverCutsceneState and self._serverCutsceneState.active == true
+end
+
+function MatchScene:isCutsceneInputBlocked()
+  if self._cutsceneManager and self._cutsceneManager:isInputBlocked() then
+    return true
+  end
+  return self:isServerCutsceneActive()
+end
+
+function MatchScene:resolveCutsceneSkillName(cardId, fallbackSkillName)
+  if cardId and cardId ~= "" then
+    return getCardLabel(cardId)
+  end
+  return tostring(fallbackSkillName or t("common.unknown"))
+end
+
+function MatchScene:startSkillCutscene(params)
+  if not self._cutsceneManager then
+    return
+  end
+  local payload = params or {}
+  local ownerPlayerIndex = payload.ownerPlayerIndex == 1 and 1 or 2
+  local cardId = tostring(payload.cardId or "")
+  local cutsceneId = tostring(payload.cutsceneId or "")
+  local skillName = self:resolveCutsceneSkillName(cardId, payload.skillName)
+  local isLocalUser = ownerPlayerIndex == self:getMyPlayerIndex()
+  local wasStarted = self._cutsceneManager:start({
+    cutsceneId = cutsceneId ~= "" and cutsceneId or nil,
+    cardId = cardId,
+    ownerPlayerIndex = ownerPlayerIndex,
+    isLocalUser = isLocalUser,
+    skillName = skillName,
+    cutsceneDurationMs = payload.cutsceneDurationMs
+  })
+  self._cutsceneManager:setBlockedByServerPaused(true)
+  self._serverCutsceneState = {
+    active = true,
+    cutsceneId = cutsceneId,
+    ownerPlayerIndex = ownerPlayerIndex,
+    cardId = cardId,
+    skillName = tostring(payload.skillName or cardId),
+    cutsceneDurationMs = tonumber(payload.cutsceneDurationMs),
+    pausedRemainingMs = tonumber(payload.pausedRemainingMs)
+  }
+  if type(payload.pausedRemainingMs) == "number" then
+    self._cutsceneFrozenRemainSec = math.max(0, math.ceil(payload.pausedRemainingMs / 1000))
+  elseif self._turnEndsAtMs then
+    self._cutsceneFrozenRemainSec = TimeUtils.getRemainingSeconds(self._turnEndsAtMs)
+  end
+  self._pendingCardTargetId = nil
+  self:cancelAimDrag(true)
+  if self._playingCardHandBar then
+    self._playingCardHandBar:cancelCardDrag(false)
+  end
+  self:cutsceneLog("START", string.format("id=%s card=%s owner=%s", tostring(cutsceneId), tostring(cardId), tostring(ownerPlayerIndex)))
+  if wasStarted then
+    self:setStatus(t("match.status.cutscene_playing", {
+      cardLabel = skillName
+    }), Constants.COLOR_TEXT_SUB)
+  end
+end
+
+function MatchScene:stopSkillCutscene()
+  if self._cutsceneManager then
+    self._cutsceneManager:setBlockedByServerPaused(false)
+  end
+  self:cutsceneLog("END", tostring(self._serverCutsceneState and self._serverCutsceneState.cutsceneId or ""))
+  self._serverCutsceneState = {
+    active = false,
+    cutsceneId = nil,
+    ownerPlayerIndex = nil,
+    cardId = nil,
+    skillName = nil,
+    cutsceneDurationMs = nil,
+    pausedRemainingMs = nil
+  }
+  self._cutsceneFrozenRemainSec = nil
+end
+
+function MatchScene:syncCutsceneStateFromRoomState()
+  local playing = self._roomState and self._roomState.match and self._roomState.match.playing or nil
+  local cutscene = playing and playing.cutscene or nil
+  if type(cutscene) == "table" and cutscene.active == true then
+    local incomingCutsceneId = tostring(cutscene.cutsceneId or "")
+    local currentCutsceneId = self._serverCutsceneState and tostring(self._serverCutsceneState.cutsceneId or "") or ""
+    local shouldRestart = incomingCutsceneId ~= "" and incomingCutsceneId ~= currentCutsceneId
+    local ownerPlayerIndex = cutscene.ownerPlayerIndex == 1 and 1 or 2
+    local cardId = tostring(cutscene.cardId or "")
+    if shouldRestart or (not self:isServerCutsceneActive()) then
+      self:startSkillCutscene({
+        cutsceneId = incomingCutsceneId,
+        ownerPlayerIndex = ownerPlayerIndex,
+        cardId = cardId,
+        skillName = cutscene.skillName,
+        cutsceneDurationMs = cutscene.durationMs,
+        pausedRemainingMs = cutscene.pausedRemainingMs
+      })
+    else
+      self._serverCutsceneState.active = true
+      self._serverCutsceneState.pausedRemainingMs = tonumber(cutscene.pausedRemainingMs)
+      if self._cutsceneManager then
+        self._cutsceneManager:setBlockedByServerPaused(true)
+      end
+    end
+    if type(cutscene.pausedRemainingMs) == "number" then
+      self._cutsceneFrozenRemainSec = math.max(0, math.ceil(cutscene.pausedRemainingMs / 1000))
+    end
+    return
+  end
+  self:stopSkillCutscene()
+end
+
+function MatchScene:cutsceneLog(tag, detail)
+  if Constants.CUTSCENE_DEBUG_LOG ~= true then
+    return
+  end
+  print(string.format("[CUTSCENE][MATCH][%s] %s", tostring(tag), tostring(detail or "")))
 end
 
 function MatchScene:predictiveLog(tag, detail)
@@ -905,6 +1054,9 @@ function MatchScene:isMyTurn()
 end
 
 function MatchScene:isShotInputEnabled()
+  if self:isCutsceneInputBlocked() then
+    return false
+  end
   return self:isMyTurn()
     and (not self._isPlayingShotCommitted)
     and (not self._isPlayingAwaitingSnapshot)
@@ -1303,6 +1455,9 @@ function MatchScene:getResultPanelRect()
 end
 
 function MatchScene:canUseCardInTurn(cardId)
+  if self:isCutsceneInputBlocked() then
+    return false
+  end
   if not self:isPlayingPhase() then
     return false
   end
@@ -1429,6 +1584,9 @@ function MatchScene:canPlaceReinforcementAtCanonical(canonicalX, canonicalY)
 end
 
 function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
+  if self:isCutsceneInputBlocked() then
+    return true
+  end
   if self._pendingCardTargetId ~= "rockfall" and self._pendingCardTargetId ~= "reinforcement" then
     return false
   end
@@ -1921,6 +2079,7 @@ function MatchScene:applyRoomState(payload)
     end
     self:rebuildPlayingCardButtons()
   end
+  self:syncCutsceneStateFromRoomState()
 
   if payload.phase ~= Constants.PHASE_PLAYING then
     self:clearPredictiveState()
@@ -1966,7 +2125,12 @@ function MatchScene:applyRoomState(payload)
   elseif payload.phase == Constants.PHASE_CARD_SELECT then
     self:setStatus(t("match.status.card_select_phase"), Constants.COLOR_TEXT_SUB)
   elseif payload.phase == Constants.PHASE_PLAYING then
-    if self._pendingCardTargetId then
+    if self:isServerCutsceneActive() then
+      local cardLabel = self:resolveCutsceneSkillName(self._serverCutsceneState.cardId, self._serverCutsceneState.skillName)
+      self:setStatus(t("match.status.cutscene_playing", {
+        cardLabel = cardLabel
+      }), Constants.COLOR_TEXT_SUB)
+    elseif self._pendingCardTargetId then
       self:setStatus(Abilities.getPendingTargetStartStatus(self._pendingCardTargetId), Constants.COLOR_TEXT_SUB)
     elseif self:isMyTurn() then
       self:setStatus(t("match.status.my_turn_guide"), Constants.COLOR_TEXT_SUB)
@@ -1995,6 +2159,9 @@ function MatchScene:update(dt)
   end
   self:updatePredictiveRollback(dt)
   self:updateShotToast(dt)
+  if self._cutsceneManager then
+    self._cutsceneManager:update(dt)
+  end
 
   if self:isCardSelectPhase() and (not self._cardAnimator) then
     self:ensureCardAnimator()
@@ -2140,11 +2307,15 @@ function MatchScene:drawPlayingInfo()
   local remainSec = 0
   if self._turnEndsAtMs then
     remainSec = TimeUtils.getRemainingSeconds(self._turnEndsAtMs)
+  elseif self:isServerCutsceneActive() and type(self._cutsceneFrozenRemainSec) == "number" then
+    remainSec = self._cutsceneFrozenRemainSec
   end
 
   local turnOwnerText = self._activePlayerIndex == self:getMyPlayerIndex() and t("match.info.turn_owner_me") or t("match.info.turn_owner_other")
   local stateText = t("match.info.state_aim")
-  if self._isPlayingAwaitingSnapshot then
+  if self:isServerCutsceneActive() then
+    stateText = t("match.info.state_cutscene_paused")
+  elseif self._isPlayingAwaitingSnapshot then
     stateText = t("match.info.state_wait_snapshot")
   elseif self._pendingCardTargetId then
     stateText = t("match.info.state_pick_card_target")
@@ -2488,10 +2659,19 @@ function MatchScene:draw()
   if self._inGameChat and self:isInGameChatAvailable() then
     self._inGameChat:draw(mouseX, mouseY)
   end
+  if self._cutsceneManager then
+    self._cutsceneManager:draw(mouseX, mouseY)
+  end
 end
 
 function MatchScene:mousepressed(mouseX, mouseY, button)
   if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:mousepressed(mouseX, mouseY, button) then
+    return
+  end
+  if self._cutsceneManager and self._cutsceneManager:mousepressed(mouseX, mouseY, button) then
+    return
+  end
+  if self:isCutsceneInputBlocked() then
     return
   end
 
@@ -2577,6 +2757,12 @@ function MatchScene:mousereleased(mouseX, mouseY, button)
   if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:mousereleased(mouseX, mouseY, button) then
     return
   end
+  if self._cutsceneManager and self._cutsceneManager:mousereleased(mouseX, mouseY, button) then
+    return
+  end
+  if self:isCutsceneInputBlocked() then
+    return
+  end
 
   if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:isInputBlocking() then
     return
@@ -2600,30 +2786,48 @@ function MatchScene:mousereleased(mouseX, mouseY, button)
 end
 
 function MatchScene:mousemoved(mouseX, mouseY, dx, dy)
+  if self:isCutsceneInputBlocked() then
+    return
+  end
   if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:mousemoved(mouseX, mouseY, dx, dy) then
     return
   end
 end
 
 function MatchScene:wheelmoved(mouseX, mouseY, dx, dy)
+  if self:isCutsceneInputBlocked() then
+    return
+  end
   if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:wheelmoved(mouseX, mouseY, dx, dy) then
     return
   end
 end
 
 function MatchScene:textinput(text)
+  if self:isCutsceneInputBlocked() then
+    return
+  end
   if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:textinput(text) then
     return
   end
 end
 
 function MatchScene:textedited(text, start, length)
+  if self:isCutsceneInputBlocked() then
+    return
+  end
   if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:textedited(text, start, length) then
     return
   end
 end
 
 function MatchScene:keypressed(key)
+  if self._cutsceneManager and self._cutsceneManager:keypressed(key) then
+    return
+  end
+  if self:isCutsceneInputBlocked() then
+    return
+  end
   if self._inGameChat and self:isInGameChatAvailable() and self._inGameChat:keypressed(key) then
     return
   end
@@ -2811,6 +3015,24 @@ function MatchScene:onServerEnvelope(envelope)
     return
   end
 
+  if envelope.type == "match.card.cutsceneStart" then
+    local payload = envelope.payload or {}
+    self:startSkillCutscene({
+      cutsceneId = payload.cutsceneId,
+      ownerPlayerIndex = payload.ownerPlayerIndex,
+      cardId = payload.cardId,
+      skillName = payload.skillName,
+      cutsceneDurationMs = payload.cutsceneDurationMs,
+      pausedRemainingMs = payload.pausedRemainingMs
+    })
+    return
+  end
+
+  if envelope.type == "match.card.cutsceneEnd" then
+    self:stopSkillCutscene()
+    return
+  end
+
   if envelope.type == "match.turn.cardApplied" then
     local payload = envelope.payload or {}
     local myPlayerIndex = self:getMyPlayerIndex()
@@ -2934,7 +3156,7 @@ function MatchScene:onServerEnvelope(envelope)
         self._cardAnimator:setWaitingLock(false)
       end
     end
-    if payload.code == "card_already_used" or payload.code == "card_use_window_closed" or payload.code == "card_not_owned" or payload.code == "card_not_implemented" or payload.code == "invalid_card_id" or payload.code == "invalid_card_target" then
+    if payload.code == "card_already_used" or payload.code == "card_use_window_closed" or payload.code == "card_not_owned" or payload.code == "card_not_implemented" or payload.code == "invalid_card_id" or payload.code == "invalid_card_target" or payload.code == "cutscene_active" then
       self._isCardUsePending = false
       if self._pendingDeclaredTargetCardId and self._pendingCardTargetId == self._pendingDeclaredTargetCardId then
         self._pendingCardTargetId = nil
