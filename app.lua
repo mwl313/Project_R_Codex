@@ -172,7 +172,7 @@ function App.new(renderScale)
     _displayMode = Constants.DISPLAY_MODE_WINDOWED,
     _language = "ko",
     _serverEnv = Constants.SERVER_ENV_DEFAULT,
-    _wsConnected = false,
+    _serverStreamConnected = false,
     _fontWarningText = FontManager.getWarningMessage(),
     _worldMouseX = 0,
     _worldMouseY = 0,
@@ -551,7 +551,7 @@ function App:startPolling()
   self:resetPollState()
   self._poll.isActive = true
   self._poll.nextPollAtMs = self:getNowMs()
-  self._wsConnected = true
+  self._serverStreamConnected = true
   self:networkLog("POLL_START", {
     roomCode = self._session.roomCode,
     token = shortToken(self._session.token),
@@ -566,11 +566,11 @@ function App:startPolling()
 end
 
 function App:stopPolling(reason)
-  if not self._poll.isActive and not self._wsConnected then
+  if not self._poll.isActive and not self._serverStreamConnected then
     return
   end
   self:resetPollState()
-  self._wsConnected = false
+  self._serverStreamConnected = false
   self:networkLog("POLL_STOP", {
     reason = reason or "poll_stopped",
     roomCode = self._session.roomCode,
@@ -650,11 +650,6 @@ function App:sendEnvelope(envelopeType, payload)
   self:sendClientEnvelope(envelopeType, payload, {
     critical = criticalEnvelopeTypeMap[envelopeType] == true
   })
-end
-
-function App:sendWsEnvelope(envelopeType, payload)
-  -- Legacy alias: use sendEnvelope instead.
-  self:sendEnvelope(envelopeType, payload)
 end
 
 function App:sendChat(text)
@@ -910,11 +905,6 @@ function App:handleServerEnvelope(envelope)
     type = "server_envelope",
     envelope = envelope
   })
-end
-
-function App:handleWsEnvelope(envelope)
-  -- Legacy alias: use handleServerEnvelope instead.
-  self:handleServerEnvelope(envelope)
 end
 
 function App:issuePollRequest(nowMs)

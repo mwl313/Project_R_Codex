@@ -86,6 +86,8 @@ node tools/i18n_audit.js
 - 클립보드 붙여넣기 버튼
 - 네트워크 트랜스포트
 - HTTP long-poll(`/room/poll`) + HTTP send(`/room/send`) 고정
+- 클라 내부 앱 이벤트 네이밍
+- `server_open`, `server_close`, `server_error`, `server_envelope` 사용 (구 `ws_*` 명칭 제거)
 
 ### Phase 3 (게임 플로우)
 

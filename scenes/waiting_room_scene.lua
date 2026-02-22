@@ -52,7 +52,7 @@ function WaitingRoomScene.new(app)
     _app = app,
     _roomState = createDefaultRoomState(),
     _chatMessageList = {},
-    _statusText = t("waiting_room.status.ws_waiting"),
+    _statusText = t("waiting_room.status.server_waiting"),
     _statusColor = Constants.COLOR_TEXT_SUB,
     _chatInput = chatInput,
     _startButton = nil,
@@ -534,11 +534,6 @@ function WaitingRoomScene:onServerEnvelope(envelope)
   end
 end
 
-function WaitingRoomScene:onWsEnvelope(envelope)
-  -- Legacy alias: use onServerEnvelope instead.
-  self:onServerEnvelope(envelope)
-end
-
 function WaitingRoomScene:onAppEvent(event)
   if event.type == "ui_status" then
     self:setStatus(event.text, event.color)
@@ -546,18 +541,18 @@ function WaitingRoomScene:onAppEvent(event)
   end
 
   if event.type == "server_open" then
-    self:setStatus(t("waiting_room.status.ws_open"), Constants.COLOR_TEXT_SUB)
+    self:setStatus(t("waiting_room.status.server_open"), Constants.COLOR_TEXT_SUB)
     return
   end
   if event.type == "server_close" then
     self._roomState.guestReady = false
-    self:setStatus(t("waiting_room.status.ws_close", {
+    self:setStatus(t("waiting_room.status.server_close", {
       reason = tostring(event.reason)
     }), Constants.COLOR_DANGER)
     return
   end
   if event.type == "server_error" then
-    self:setStatus(t("waiting_room.status.ws_error", {
+    self:setStatus(t("waiting_room.status.server_error_event", {
       message = tostring(event.message)
     }), Constants.COLOR_DANGER)
     return

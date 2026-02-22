@@ -687,11 +687,6 @@ function InGameChat:onServerEnvelope(envelope)
   end
 end
 
-function InGameChat:onWsEnvelope(envelope)
-  -- Legacy alias: use onServerEnvelope instead.
-  self:onServerEnvelope(envelope)
-end
-
 function InGameChat:onFocusLost()
   self._textInput:setFocus(false)
 end

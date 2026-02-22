@@ -44,12 +44,10 @@ local LocaleKo = {
   },
   app = {
     ui = {
-      ws_url_missing = "WS URL이 없습니다.",
+      server_url_missing = "서버 URL이 없습니다.",
       response_parse_failed = "응답 파싱 실패",
       request_failed = "요청 실패: {reason}",
-      ws_message_parse_failed = "WS 메시지 파싱 실패",
-      ws_retry_insecure_cloud = "클라우드 WSS 연결 실패로 WS 연결을 재시도합니다.",
-      ws_connected_insecure_cloud = "클라우드 WS(비보안)로 연결되었습니다.",
+      server_message_parse_failed = "서버 메시지 파싱 실패",
       rules_version_mismatch = "룰 버전 불일치: 클라이언트 {clientVersion} / 서버 {serverVersion}",
       poll_session_invalid = "세션이 유효하지 않습니다({reason}). 서버 혼용(local/cloud)/서버 재시작/세션 만료를 확인하세요. env={env}, base={base}",
       ui_skin_toggle = "UI skin: {state}"
@@ -214,7 +212,7 @@ local LocaleKo = {
       waiting = "대기중"
     },
     status = {
-      ws_waiting = "서버 이벤트 연결 대기 중...",
+      server_waiting = "서버 이벤트 연결 대기 중...",
       left_room = "대기방에서 나왔습니다.",
       start_condition_not_met = "게임 시작 조건이 충족되지 않았습니다.",
       start_request_sent = "게임 시작 요청 전송...",
@@ -230,9 +228,9 @@ local LocaleKo = {
       turn_order = "선공 결정: P{playerIndex}",
       room_closed = "방이 종료되었습니다: {reason}",
       server_error = "서버 오류: {code}",
-      ws_open = "서버 이벤트 연결 성공",
-      ws_close = "서버 이벤트 연결 종료: {reason}",
-      ws_error = "서버 이벤트 오류: {message}"
+      server_open = "서버 이벤트 연결 성공",
+      server_close = "서버 이벤트 연결 종료: {reason}",
+      server_error_event = "서버 이벤트 오류: {message}"
     },
     system = {
       player_joined = "[SYSTEM] player {playerIndex} joined",
@@ -351,8 +349,8 @@ local LocaleKo = {
       result_winner = "결과: winner P{winner}",
       server_error = "서버 오류: {code}",
       room_closed = "방이 종료되었습니다.",
-      ws_close = "서버 이벤트 연결 종료: {reason}",
-      ws_error = "서버 이벤트 오류: {message}"
+      server_close = "서버 이벤트 연결 종료: {reason}",
+      server_error_event = "서버 이벤트 오류: {message}"
     },
     result = {
       title = "RESULT - {title}",

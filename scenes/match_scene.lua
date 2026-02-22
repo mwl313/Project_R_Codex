@@ -2524,11 +2524,6 @@ function MatchScene:onServerEnvelope(envelope)
   end
 end
 
-function MatchScene:onWsEnvelope(envelope)
-  -- Legacy alias: use onServerEnvelope instead.
-  self:onServerEnvelope(envelope)
-end
-
 function MatchScene:onSceneWillChange(_event)
   self:cancelAimDrag(true)
   if self._inGameChat then
@@ -2564,14 +2559,14 @@ function MatchScene:onAppEvent(event)
   end
 
   if event.type == "server_close" then
-    self:setStatus(t("match.status.ws_close", {
+    self:setStatus(t("match.status.server_close", {
       reason = tostring(event.reason)
     }), Constants.COLOR_DANGER)
     return
   end
 
   if event.type == "server_error" then
-    self:setStatus(t("match.status.ws_error", {
+    self:setStatus(t("match.status.server_error_event", {
       message = tostring(event.message)
     }), Constants.COLOR_DANGER)
     return
