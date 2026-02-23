@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "relics": [
+    {
+      "relicId": "relic_stub_01",
+      "rarity": "COMMON",
+      "tags": ["UTILITY"],
+      "tunables": {
+        "value": 1
+      }
+    }
+  ]
+}

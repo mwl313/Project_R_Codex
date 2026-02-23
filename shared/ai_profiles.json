@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "aiProfileId": "ai_easy_01",
+      "aimErrorDeg": 6.0,
+      "aggression": 0.4,
+      "riskTolerance": 0.3,
+      "skillUseRate": 0.2
+    },
+    {
+      "aiProfileId": "ai_boss_01",
+      "aimErrorDeg": 3.0,
+      "aggression": 0.7,
+      "riskTolerance": 0.6,
+      "skillUseRate": 0.6
+    }
+  ]
+}

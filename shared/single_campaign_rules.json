@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "deck": {
+    "startPickCount": 5,
+    "maxSize": 15,
+    "maxDuplicatePerCard": 3,
+    "drawPerBattle": 5
+  },
+  "rarityWeights": {
+    "base": {
+      "COMMON": 0.65,
+      "RARE": 0.27,
+      "EPIC": 0.08
+    },
+    "bossBonus": {
+      "EPIC": 0.15
+    },
+    "stageScaling": [
+      {
+        "stageIndex": 1,
+        "COMMON": 0.75,
+        "RARE": 0.22,
+        "EPIC": 0.03
+      },
+      {
+        "stageIndex": 2,
+        "COMMON": 0.65,
+        "RARE": 0.27,
+        "EPIC": 0.08
+      }
+    ]
+  },
+  "legendaryPolicy": {
+    "bossOnly": true
+  }
+}

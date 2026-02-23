@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "encounters": [
+    {
+      "encounterId": "stage1_mob_01",
+      "type": "mob",
+      "stageIndex": 1,
+      "aiProfileId": "ai_easy_01",
+      "enemyModifiers": {
+        "extraStones": 0,
+        "maxShotPowerMul": 1.0
+      },
+      "gimmicks": []
+    },
+    {
+      "encounterId": "stage1_boss_01",
+      "type": "boss",
+      "stageIndex": 1,
+      "aiProfileId": "ai_boss_01",
+      "enemyModifiers": {
+        "extraStones": 1,
+        "maxShotPowerMul": 1.05
+      },
+      "gimmicks": ["boss_gimmick_stub"]
+    }
+  ]
+}

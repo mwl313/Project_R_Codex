@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "rewardContexts": [
+    {
+      "contextId": "combat_mob",
+      "nodeTypes": ["mob"],
+      "offerCount": 3,
+      "rarityWeightsRef": "base",
+      "allowLegendary": false,
+      "filters": {
+        "mode": "single",
+        "tagsAny": []
+      }
+    },
+    {
+      "contextId": "combat_boss",
+      "nodeTypes": ["boss"],
+      "offerCount": 3,
+      "rarityWeightsRef": "base",
+      "allowLegendary": true,
+      "filters": {
+        "mode": "single",
+        "tagsAny": []
+      }
+    }
+  ]
+}
