@@ -16,6 +16,7 @@ local CardRegistry = require("single.card_registry")
 local SingleProfileStore = require("single.single_profile_store")
 local SingleDeckManager = require("single.single_deck_manager")
 local SingleRunManager = require("single.single_run_manager")
+local SingleDiscardOverlay = require("overlays.single_discard_overlay")
 
 local SingleRewardScene = {}
 SingleRewardScene.__index = SingleRewardScene
@@ -34,6 +35,14 @@ local function getDefaultDeck(profile)
     end
   end
   return profile.decks[1]
+end
+
+local function cardNameById(cardId)
+  local card = CardRegistry.getCard(cardId)
+  if card and type(card.nameKo) == "string" then
+    return card.nameKo
+  end
+  return tostring(cardId or "")
 end
 
 local function createRng()
@@ -56,7 +65,10 @@ function SingleRewardScene.new(app)
     _confirmButton = nil,
     _statusText = "",
     _statusColor = Constants.COLOR_TEXT_SUB,
-    _lastLanguage = app:getLanguage()
+    _lastLanguage = app:getLanguage(),
+    _discardOverlay = nil,
+    _isAwaitingForcedDiscard = false,
+    _isResolvingReward = false
   }
   setmetatable(instance, SingleRewardScene)
   instance:rebuildLocalizedUi()
@@ -66,6 +78,41 @@ end
 function SingleRewardScene:setStatus(text, color)
   self._statusText = tostring(text or "")
   self._statusColor = color or Constants.COLOR_TEXT_SUB
+end
+
+function SingleRewardScene:isBlockedByDiscardOverlay()
+  return self._isAwaitingForcedDiscard and self._discardOverlay ~= nil
+end
+
+function SingleRewardScene:openForcedDiscardOverlay(deck)
+  self._isAwaitingForcedDiscard = true
+  self._discardOverlay = SingleDiscardOverlay.new({
+    titleText = t("single.discard_overlay.title"),
+    messageText = t("single.discard_overlay.message", {
+      maxSize = tostring(SingleDeckManager.MAX_DECK_SIZE)
+    }),
+    maxDeckSize = SingleDeckManager.MAX_DECK_SIZE,
+    deckCards = deck.cards,
+    resolveCardName = cardNameById,
+    onDiscard = function(discardIndex)
+      local removed = SingleDeckManager.removeFromDeck(deck, discardIndex)
+      if not removed then
+        return false, t("single.discard_overlay.status.discard_failed")
+      end
+
+      local saveOk, saveErr = SingleProfileStore.save(self._profile)
+      if not saveOk then
+        return false, t("single.reward.status.save_failed", {
+          error = tostring(saveErr or "unknown")
+        })
+      end
+
+      self._isAwaitingForcedDiscard = false
+      self._discardOverlay = nil
+      self:continueAfterReward()
+      return true
+    end
+  })
 end
 
 function SingleRewardScene:rebuildChoiceButtons()
@@ -120,6 +167,10 @@ function SingleRewardScene:continueAfterReward()
 end
 
 function SingleRewardScene:confirmReward()
+  if self:isBlockedByDiscardOverlay() or self._isResolvingReward then
+    return
+  end
+
   if not self._selectedIndex then
     self:setStatus(t("single.reward.status.select_required"), Constants.COLOR_DANGER)
     return
@@ -137,6 +188,7 @@ function SingleRewardScene:confirmReward()
   end
 
   local cardId = selectedCard.id
+  self._isResolvingReward = true
   collectionCards[cardId] = collectionCards[cardId] or { ownedCount = 0 }
   local previousOwned = tonumber(collectionCards[cardId].ownedCount) or 0
   local nextOwned = math.max(0, math.min(3, math.floor(previousOwned + 1)))
@@ -144,6 +196,7 @@ function SingleRewardScene:confirmReward()
 
   local deck = getDefaultDeck(self._profile)
   if not deck then
+    self._isResolvingReward = false
     self:setStatus(t("single.reward.status.deck_missing"), Constants.COLOR_DANGER)
     return
   end
@@ -161,6 +214,7 @@ function SingleRewardScene:confirmReward()
 
   local saveOk, saveErr = SingleProfileStore.save(self._profile)
   if not saveOk then
+    self._isResolvingReward = false
     self:setStatus(t("single.reward.status.save_failed", {
       error = tostring(saveErr or "unknown")
     }), Constants.COLOR_DANGER)
@@ -168,34 +222,12 @@ function SingleRewardScene:confirmReward()
   end
 
   if #deck.cards > SingleDeckManager.MAX_DECK_SIZE then
-    local nextNode = SingleRunManager.advanceNode(self._runState)
-    local nextSceneName = "single_result"
-    local nextParams = {
-      profile = self._profile,
-      runState = self._runState,
-      result = "win"
-    }
-    if nextNode then
-      nextSceneName = "single_map"
-      nextParams = {
-        backScene = "single_campaign",
-        profile = self._profile,
-        runState = self._runState
-      }
-    else
-      self._runState.finished = true
-      self._runState.isVictory = true
-    end
-
-    self._app:goScene("single_discard", {
-      profile = self._profile,
-      runState = self._runState,
-      nextSceneName = nextSceneName,
-      nextSceneParams = nextParams
-    }, Config.TRANSITION_FORWARD)
+    self._isResolvingReward = false
+    self:openForcedDiscardOverlay(deck)
     return
   end
 
+  self._isResolvingReward = false
   self:continueAfterReward()
 end
 
@@ -205,11 +237,17 @@ function SingleRewardScene:enter(params)
   self._isBoss = params and params.isBoss == true or false
   self._choiceList = CardRegistry.getRewardChoices(self._isBoss, createRng())
   self._selectedIndex = nil
+  self._discardOverlay = nil
+  self._isAwaitingForcedDiscard = false
+  self._isResolvingReward = false
   self:rebuildLocalizedUi()
   self:setStatus(t("single.reward.status.choose_one"), Constants.COLOR_TEXT_SUB)
 end
 
-function SingleRewardScene:update(_dt)
+function SingleRewardScene:update(dt)
+  if self._discardOverlay then
+    self._discardOverlay:update(dt)
+  end
   if self._lastLanguage ~= self._app:getLanguage() then
     self:rebuildLocalizedUi()
   end
@@ -239,12 +277,22 @@ function SingleRewardScene:draw()
 
   self._confirmButton:draw(mouseX, mouseY)
 
+  if self._discardOverlay then
+    self._discardOverlay:draw(mouseX, mouseY)
+  end
+
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(self._statusColor)
   love.graphics.printf(self._statusText, 0, 688, Constants.BASE_WORLD_W, "center")
 end
 
 function SingleRewardScene:mousepressed(mouseX, mouseY, button)
+  if self._discardOverlay then
+    if self._discardOverlay:mousepressed(mouseX, mouseY, button) then
+      return
+    end
+  end
+
   if button ~= 1 then
     return
   end
@@ -264,7 +312,20 @@ function SingleRewardScene:mousepressed(mouseX, mouseY, button)
   end
 end
 
+function SingleRewardScene:wheelmoved(x, y)
+  if self._discardOverlay then
+    self._discardOverlay:wheelmoved(x, y)
+    return
+  end
+end
+
 function SingleRewardScene:keypressed(key)
+  if self._discardOverlay then
+    if self._discardOverlay:keypressed(key) then
+      return
+    end
+  end
+
   if key == "escape" then
     self._app:goScene("single_map", {
       backScene = "single_campaign",

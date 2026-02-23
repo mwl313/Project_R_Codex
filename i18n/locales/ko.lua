@@ -183,7 +183,10 @@ local LocaleKo = {
       status = {
         ready = "전투를 시작할 수 있습니다.",
         deck_invalid = "덱이 유효하지 않습니다. 카드 관리에서 수정하세요.",
-        deck_missing = "기본 덱이 없습니다."
+        deck_missing = "기본 덱이 없습니다.",
+        selected = "선택됨: {nodeTitle}",
+        select_invalid = "현재 깊이에서 선택할 수 없는 노드입니다.",
+        select_blocked = "해당 선택은 스테이지 구성 제약과 충돌합니다."
       }
     },
     combat = {
@@ -227,6 +230,18 @@ local LocaleKo = {
         remove_fail = "카드 제거에 실패했습니다.",
         selected = "선택됨: {card}",
         save_failed = "저장 실패: {error}"
+      }
+    },
+    discard_overlay = {
+      title = "카드가 너무 많습니다",
+      message = "덱 상한({maxSize})을 초과했습니다. 버릴 카드를 1장 선택하세요.",
+      button = {
+        confirm = "확정"
+      },
+      status = {
+        select_required = "버릴 카드를 먼저 선택하세요.",
+        selected = "선택됨: {card}",
+        discard_failed = "카드 제거에 실패했습니다."
       }
     },
     result = {

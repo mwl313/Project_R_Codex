@@ -4,6 +4,10 @@
 
 역할:
 - 덱이 15장을 초과했을 때 카드 1장 강제 제거를 처리한다.
+
+주의:
+- Deprecated: 강제 버리기 UX는 overlays/single_discard_overlay.lua로 대체되었다.
+- 하위 호환/안전 롤백 목적의 보존 파일이며, 신규 흐름에서는 이 씬으로 전환하지 않는다.
 ]]
 
 local Constants = require("constants")

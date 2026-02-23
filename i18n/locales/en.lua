@@ -183,7 +183,10 @@ local LocaleEn = {
       status = {
         ready = "Ready to start combat.",
         deck_invalid = "Deck is invalid. Fix it in deck manage.",
-        deck_missing = "Default deck is missing."
+        deck_missing = "Default deck is missing.",
+        selected = "Selected: {nodeTitle}",
+        select_invalid = "This node cannot be selected at the current depth.",
+        select_blocked = "This choice conflicts with stage path constraints."
       }
     },
     combat = {
@@ -227,6 +230,18 @@ local LocaleEn = {
         remove_fail = "Failed to remove the card.",
         selected = "Selected: {card}",
         save_failed = "Save failed: {error}"
+      }
+    },
+    discard_overlay = {
+      title = "Too Many Cards",
+      message = "Deck limit ({maxSize}) exceeded. Select 1 card to discard.",
+      button = {
+        confirm = "Confirm"
+      },
+      status = {
+        select_required = "Select a card to discard first.",
+        selected = "Selected: {card}",
+        discard_failed = "Failed to remove the selected card."
       }
     },
     result = {
