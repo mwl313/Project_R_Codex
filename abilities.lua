@@ -30,13 +30,10 @@ local CardRules = require("shared.card_rules")
 
 local Abilities = {}
 
-Abilities.TURN_CARD_SET = {
-  agile = CardRules.isTurnCardEnabled("agile"),
-  reinforcement = CardRules.isTurnCardEnabled("reinforcement"),
-  rockfall = CardRules.isTurnCardEnabled("rockfall"),
-  invincible = CardRules.isTurnCardEnabled("invincible"),
-  shockwave = CardRules.isTurnCardEnabled("shockwave")
-}
+Abilities.TURN_CARD_SET = {}
+for _, cardId in ipairs(CardRules.getCardPool(CardRules.GAME_MODE_MULTI)) do
+  Abilities.TURN_CARD_SET[cardId] = CardRules.isTurnCardEnabled(cardId)
+end
 
 local function t(key, vars)
   return I18n.t(key, vars)
@@ -92,6 +89,26 @@ local function readTurnIndexByPlayer(value, playerIndex)
   return nil
 end
 
+local PENDING_TARGET_HINT_KEY_BY_CARD_ID = {
+  reinforcement = "abilities.hint.reinforcement_click",
+  rockfall = "abilities.hint.rockfall_click"
+}
+
+local PENDING_TARGET_START_KEY_BY_CARD_ID = {
+  reinforcement = "abilities.hint.reinforcement_start",
+  rockfall = "abilities.hint.rockfall_start"
+}
+
+local PENDING_TARGET_OUT_OF_BOARD_KEY_BY_CARD_ID = {
+  reinforcement = "abilities.hint.reinforcement_out_of_board",
+  rockfall = "abilities.hint.rockfall_out_of_board"
+}
+
+local PENDING_TARGET_REQUEST_KEY_BY_CARD_ID = {
+  reinforcement = "abilities.hint.reinforcement_sending",
+  rockfall = "abilities.hint.rockfall_sending"
+}
+
 function Abilities.getCardLabel(cardId)
   local key = "abilities.card_label." .. tostring(cardId)
   local localized = t(key)
@@ -103,6 +120,10 @@ end
 
 function Abilities.isSupportedTurnCard(cardId)
   return Abilities.TURN_CARD_SET[cardId] == true
+end
+
+function Abilities.isPointTargetCard(cardId)
+  return CardRules.getTargetMode(cardId) == CardRules.TARGET_MODE_POINT
 end
 
 function Abilities.normalizeInvincibleTurnByPlayer(value)
@@ -235,31 +256,56 @@ function Abilities.canPlaceReinforcementAtCanonical(scene, canonicalX, canonical
 end
 
 function Abilities.getPendingTargetHint(cardId)
-  if cardId == "reinforcement" then
-    return t("abilities.hint.reinforcement_click")
+  local key = PENDING_TARGET_HINT_KEY_BY_CARD_ID[tostring(cardId or "")]
+  if key then
+    return t(key)
   end
-  return t("abilities.hint.rockfall_click")
+  return t("match.status.card_target_cannot_place")
 end
 
 function Abilities.getPendingTargetStartStatus(cardId)
-  if cardId == "reinforcement" then
-    return t("abilities.hint.reinforcement_start")
+  local key = PENDING_TARGET_START_KEY_BY_CARD_ID[tostring(cardId or "")]
+  if key then
+    return t(key)
   end
-  return t("abilities.hint.rockfall_start")
+  return t("match.status.cannot_use_card_now")
 end
 
 function Abilities.getPendingTargetOutOfBoardStatus(cardId)
-  if cardId == "reinforcement" then
-    return t("abilities.hint.reinforcement_out_of_board")
+  local key = PENDING_TARGET_OUT_OF_BOARD_KEY_BY_CARD_ID[tostring(cardId or "")]
+  if key then
+    return t(key)
   end
-  return t("abilities.hint.rockfall_out_of_board")
+  return t("match.status.card_target_cannot_place")
 end
 
 function Abilities.getPendingTargetRequestStatus(cardId)
-  if cardId == "reinforcement" then
-    return t("abilities.hint.reinforcement_sending")
+  local key = PENDING_TARGET_REQUEST_KEY_BY_CARD_ID[tostring(cardId or "")]
+  if key then
+    return t(key)
   end
-  return t("abilities.hint.rockfall_sending")
+  return t("match.status.card_use_submit")
+end
+
+local function validateRockfallTarget(scene, canonicalX, canonicalY)
+  return Abilities.canPlaceRockfallAtCanonical(scene, canonicalX, canonicalY)
+end
+
+local function validateReinforcementTarget(scene, canonicalX, canonicalY)
+  return Abilities.canPlaceReinforcementAtCanonical(scene, canonicalX, canonicalY)
+end
+
+local PENDING_TARGET_VALIDATOR_BY_CARD_ID = {
+  rockfall = validateRockfallTarget,
+  reinforcement = validateReinforcementTarget
+}
+
+function Abilities.validatePendingTargetAtCanonical(scene, cardId, canonicalX, canonicalY)
+  local validator = PENDING_TARGET_VALIDATOR_BY_CARD_ID[tostring(cardId or "")]
+  if type(validator) ~= "function" then
+    return false, t("match.status.card_target_cannot_place")
+  end
+  return validator(scene, canonicalX, canonicalY)
 end
 
 function Abilities.applyServerCardEffect(scene, effectPayload)
@@ -299,7 +345,7 @@ function Abilities.applyServerCardEffect(scene, effectPayload)
 end
 
 function Abilities.drawPendingCardPreview(scene, mouseX, mouseY)
-  if scene._pendingCardTargetId ~= "rockfall" and scene._pendingCardTargetId ~= "reinforcement" then
+  if not Abilities.isPointTargetCard(scene._pendingCardTargetId) then
     return
   end
   if not scene:isPlayingPhase() or not scene:isMyTurn() then
@@ -313,8 +359,9 @@ function Abilities.drawPendingCardPreview(scene, mouseX, mouseY)
 
   local canonicalX, canonicalY = scene:localToCanonical(boardLocalX, boardLocalY)
   local canPlace = false
-  if scene._pendingCardTargetId == "rockfall" then
-    canPlace = Abilities.canPlaceRockfallAtCanonical(scene, canonicalX, canonicalY)
+  local pendingCardId = tostring(scene._pendingCardTargetId or "")
+  canPlace = Abilities.validatePendingTargetAtCanonical(scene, pendingCardId, canonicalX, canonicalY)
+  if pendingCardId == "rockfall" then
     local rockfallRule = CardRules.getRockfallRule()
     local width = math.max(1, rockfallRule.width or Constants.ROCK_OBSTACLE_WIDTH)
     local height = math.max(1, rockfallRule.height or Constants.ROCK_OBSTACLE_HEIGHT)

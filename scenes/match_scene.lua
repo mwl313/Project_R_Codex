@@ -1525,7 +1525,7 @@ function MatchScene:handleHandCardDeclared(cardId)
   end
 
   self._optimisticConsumedCardIdSet[cardId] = true
-  if cardId == "rockfall" or cardId == "reinforcement" then
+  if Abilities.isPointTargetCard(cardId) then
     self._pendingDeclaredTargetCardId = cardId
   else
     self._pendingDeclaredTargetCardId = nil
@@ -1545,7 +1545,7 @@ function MatchScene:requestTurnCardUse(cardId)
     return false
   end
 
-  if cardId == "rockfall" or cardId == "reinforcement" then
+  if Abilities.isPointTargetCard(cardId) then
     self._pendingCardTargetId = cardId
     self:cancelAimDrag(true)
     self:setStatus(Abilities.getPendingTargetStartStatus(cardId), Constants.COLOR_TEXT_SUB)
@@ -1587,7 +1587,7 @@ function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
   if self:isCutsceneInputBlocked() then
     return true
   end
-  if self._pendingCardTargetId ~= "rockfall" and self._pendingCardTargetId ~= "reinforcement" then
+  if not Abilities.isPointTargetCard(self._pendingCardTargetId) then
     return false
   end
   local pendingCardId = self._pendingCardTargetId
@@ -1607,12 +1607,7 @@ function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
   end
 
   local canonicalX, canonicalY = self:localToCanonical(boardLocalX, boardLocalY)
-  local canPlace, reason
-  if pendingCardId == "rockfall" then
-    canPlace, reason = self:canPlaceRockfallAtCanonical(canonicalX, canonicalY)
-  else
-    canPlace, reason = self:canPlaceReinforcementAtCanonical(canonicalX, canonicalY)
-  end
+  local canPlace, reason = Abilities.validatePendingTargetAtCanonical(self, pendingCardId, canonicalX, canonicalY)
   if not canPlace then
     self:setStatus(reason or t("match.status.card_target_cannot_place"), Constants.COLOR_DANGER)
     return true

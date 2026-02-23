@@ -120,6 +120,128 @@ local LocaleKo = {
       multi_player = "멀티플레이어"
     }
   },
+  single = {
+    campaign = {
+      title = "싱글 캠페인",
+      subtitle = "SP-01 세로 슬라이스",
+      summary = "기본 덱: {deckSize}장 | 보유 카드 종류: {ownedKinds}",
+      button = {
+        run_start = "런 시작",
+        deck_manage = "카드 관리"
+      },
+      status = {
+        profile_loaded = "싱글 프로필을 불러왔습니다.",
+        profile_recovered = "프로필을 복구해 기본값으로 불러왔습니다.",
+        deck_missing = "기본 덱을 찾을 수 없습니다.",
+        deck_invalid = "덱 유효성 검사 실패: {reason}"
+      }
+    },
+    deck = {
+      title = "카드 관리",
+      summary = "덱 크기: {deckSize}/{maxSize} | 페이지 {page}/{maxPage}",
+      row_owned = "보유: {owned}",
+      row_in_deck = "덱 포함: {count}",
+      owned_max = "3/3 (MAX)",
+      button = {
+        prev = "이전",
+        next = "다음",
+        add = "추가",
+        remove = "제거"
+      },
+      status = {
+        loaded = "덱 편집 화면입니다.",
+        profile_recovered = "프로필을 복구해 기본값으로 불러왔습니다.",
+        save_failed = "저장 실패: {error}",
+        deck_missing = "기본 덱이 없습니다.",
+        add_ok = "카드를 덱에 추가했습니다.",
+        add_fail = "추가 실패: {reason}",
+        remove_ok = "카드를 덱에서 제거했습니다.",
+        remove_fail = "해당 카드를 덱에서 찾지 못했습니다."
+      }
+    },
+    map = {
+      title = "런 맵",
+      node_default = "다음 노드",
+      node_line = "노드 {index}/{total} | 타입: {nodeType}",
+      node = {
+        combat = "전투",
+        elite = "엘리트",
+        boss = "보스"
+      },
+      button = {
+        start_combat = "전투 시작"
+      },
+      status = {
+        ready = "전투를 시작할 수 있습니다.",
+        deck_invalid = "덱이 유효하지 않습니다. 카드 관리에서 수정하세요.",
+        deck_missing = "기본 덱이 없습니다."
+      }
+    },
+    combat = {
+      title = "싱글 전투 (테스트)",
+      subtitle = "SP-01 플레이스홀더 전투 화면",
+      button = {
+        win_test = "승리 (테스트)",
+        lose_test = "패배 (테스트)"
+      },
+      status = {
+        placeholder = "테스트 버튼으로 전투 결과를 선택하세요."
+      }
+    },
+    reward = {
+      title = "전투 보상",
+      subtitle = "카드 3장 중 1장을 선택하세요.",
+      button = {
+        confirm = "선택 적용"
+      },
+      status = {
+        choose_one = "보상 카드를 선택하세요.",
+        select_required = "카드를 먼저 선택하세요.",
+        profile_invalid = "프로필 데이터가 올바르지 않습니다.",
+        deck_missing = "기본 덱이 없습니다.",
+        add_skipped = "덱 제한으로 보상 카드 추가를 건너뛰었습니다.",
+        picked = "보상 카드 선택: {card}",
+        selected = "선택 카드 #{index}",
+        save_failed = "저장 실패: {error}"
+      }
+    },
+    discard = {
+      title = "카드 버리기",
+      subtitle = "덱 크기 {deckSize}/{maxSize} - 1장을 버려야 진행할 수 있습니다.",
+      button = {
+        confirm = "선택 카드 버리기"
+      },
+      status = {
+        guide = "버릴 카드를 선택한 뒤 확정하세요.",
+        deck_missing = "기본 덱이 없습니다.",
+        select_required = "버릴 카드를 선택하세요.",
+        remove_fail = "카드 제거에 실패했습니다.",
+        selected = "선택됨: {card}",
+        save_failed = "저장 실패: {error}"
+      }
+    },
+    result = {
+      title = "런 결과",
+      title_win = "승리",
+      title_lose = "패배",
+      subtitle_win = "다음 단계로 진행합니다.",
+      subtitle_lose = "캠페인 화면으로 복귀합니다.",
+      button = {
+        proceed = "진행"
+      }
+    },
+    reason = {
+      invalid_deck = "유효하지 않은 덱입니다.",
+      unknown_card_id = "알 수 없는 카드입니다.",
+      duplicate_limit = "같은 카드는 3장까지만 넣을 수 있습니다.",
+      duplicate_limit_exceeded = "같은 카드가 허용 수량을 초과했습니다.",
+      owned_count = "보유 수량을 초과해 추가할 수 없습니다.",
+      owned_count_exceeded = "덱이 보유 수량 제한을 초과했습니다.",
+      deck_full = "덱이 가득 찼습니다.",
+      deck_size_exceeded = "덱 크기가 최대치를 초과했습니다.",
+      deck_too_small = "덱 크기가 최소 조건(5장)보다 작습니다."
+    }
+  },
   multiplayer = {
     title = "멀티플레이어",
     subtitle = "방 생성 또는 방 찾기를 선택하세요",

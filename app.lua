@@ -80,6 +80,27 @@ local function createSceneFactoryTable()
     roomSearch = function(app)
       return require("scenes.room_search_scene").new(app)
     end,
+    single_campaign = function(app)
+      return require("scenes.single_campaign_scene").new(app)
+    end,
+    single_deck_manage = function(app)
+      return require("scenes.single_deck_manage_scene").new(app)
+    end,
+    single_map = function(app)
+      return require("scenes.single_map_scene").new(app)
+    end,
+    single_combat = function(app)
+      return require("scenes.single_combat_scene").new(app)
+    end,
+    single_reward = function(app)
+      return require("scenes.single_reward_scene").new(app)
+    end,
+    single_discard = function(app)
+      return require("scenes.single_discard_scene").new(app)
+    end,
+    single_result = function(app)
+      return require("scenes.single_result_scene").new(app)
+    end,
     singleDummy = function(app)
       return require("scenes.single_dummy_scene").new(app)
     end,
@@ -418,6 +439,34 @@ end
 
 function App:goSingleDummy(params, transitionDirection, transitionOpts)
   self:goScene("singleDummy", params, transitionDirection, transitionOpts)
+end
+
+function App:goSingleCampaign(params, transitionDirection, transitionOpts)
+  self:goScene("single_campaign", params, transitionDirection, transitionOpts)
+end
+
+function App:goSingleDeckManage(params, transitionDirection, transitionOpts)
+  self:goScene("single_deck_manage", params, transitionDirection, transitionOpts)
+end
+
+function App:goSingleMap(params, transitionDirection, transitionOpts)
+  self:goScene("single_map", params, transitionDirection, transitionOpts)
+end
+
+function App:goSingleCombat(params, transitionDirection, transitionOpts)
+  self:goScene("single_combat", params, transitionDirection, transitionOpts)
+end
+
+function App:goSingleReward(params, transitionDirection, transitionOpts)
+  self:goScene("single_reward", params, transitionDirection, transitionOpts)
+end
+
+function App:goSingleDiscard(params, transitionDirection, transitionOpts)
+  self:goScene("single_discard", params, transitionDirection, transitionOpts)
+end
+
+function App:goSingleResult(params, transitionDirection, transitionOpts)
+  self:goScene("single_result", params, transitionDirection, transitionOpts)
 end
 
 function App:goWaitingRoom(params, transitionDirection, transitionOpts)

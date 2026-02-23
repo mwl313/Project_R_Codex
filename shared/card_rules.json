@@ -1,38 +1,79 @@
 {
-  "RULES_VERSION": 1,
-  "card_pool": [
+  "version": 1,
+  "card_order": [
     "reinforcement",
     "shockwave",
     "invincible",
     "rockfall",
-    "agile"
+    "agile",
+    "single_example_card"
   ],
   "cards": {
     "reinforcement": {
+      "id": "reinforcement",
+      "mode": "MULTI_OK",
       "enabled": true,
-      "min_place_distance": 19,
-      "lock_spawned_stone_for_turn": true
+      "tags": ["UTILITY", "TRICK"],
+      "tunables": {
+        "target_mode": "POINT",
+        "min_place_distance": 19,
+        "lock_spawned_stone_for_turn": true
+      }
     },
     "shockwave": {
+      "id": "shockwave",
+      "mode": "MULTI_OK",
       "enabled": true,
-      "radius_multiplier": 4.0,
-      "strength": 200,
-      "exclude_source_stone": true,
-      "ignore_invincible_targets": true
+      "tags": ["OFFENSE", "CONTROL"],
+      "tunables": {
+        "target_mode": "NONE",
+        "radius_multiplier": 4.0,
+        "strength": 200,
+        "exclude_source_stone": true,
+        "ignore_invincible_targets": true
+      }
     },
     "invincible": {
+      "id": "invincible",
+      "mode": "MULTI_OK",
       "enabled": true,
-      "protect_after_turn_offset": 1
+      "tags": ["DEFENSE", "UTILITY"],
+      "tunables": {
+        "target_mode": "NONE",
+        "protect_after_turn_offset": 1
+      }
     },
     "rockfall": {
+      "id": "rockfall",
+      "mode": "MULTI_OK",
       "enabled": true,
-      "width": 100,
-      "height": 50,
-      "margin": 5
+      "tags": ["OBSTACLE", "CONTROL"],
+      "tunables": {
+        "target_mode": "POINT",
+        "width": 100,
+        "height": 50,
+        "margin": 5
+      }
     },
     "agile": {
+      "id": "agile",
+      "mode": "MULTI_OK",
       "enabled": true,
-      "shot_budget": 2
+      "tags": ["OFFENSE", "TRICK"],
+      "tunables": {
+        "target_mode": "NONE",
+        "shot_budget": 2
+      }
+    },
+    "single_example_card": {
+      "id": "single_example_card",
+      "mode": "SINGLE_ONLY",
+      "enabled": true,
+      "tags": ["UTILITY"],
+      "tunables": {
+        "target_mode": "NONE",
+        "drawCount": 2
+      }
     }
   }
 }

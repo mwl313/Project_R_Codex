@@ -363,6 +363,8 @@ function CutsceneManager:_drawBandAndCharacter(centerX, centerY)
   local bandH = cutsceneDef.bandHeight or Constants.CUTSCENE_BAND_HEIGHT
   local bandTiltPx = (cutsceneDef.bandTiltPx or Constants.CUTSCENE_BAND_TILT_PX) * self._current.directionSign
   local bandShakePx = cutsceneDef.bandShakePx or Constants.CUTSCENE_BAND_SHAKE_PX
+  local rearHeightScale = cutsceneDef.bandRearHeightScale or Constants.CUTSCENE_BAND_REAR_HEIGHT_SCALE
+  local frontHeightScale = cutsceneDef.bandFrontHeightScale or Constants.CUTSCENE_BAND_FRONT_HEIGHT_SCALE
 
   local bandCenterX = centerX
   local bandCenterY = centerY - 10
@@ -385,13 +387,38 @@ function CutsceneManager:_drawBandAndCharacter(centerX, centerY)
   end
 
   local halfBandW = bandW * 0.5 * bandWidthScale
-  local halfBandH = bandH * 0.5
-  local leftTopX = bandCenterX - halfBandW + bandTiltPx
-  local rightTopX = bandCenterX + halfBandW + bandTiltPx
-  local rightBottomX = bandCenterX + halfBandW - bandTiltPx
-  local leftBottomX = bandCenterX - halfBandW - bandTiltPx
-  local topY = bandCenterY - halfBandH
-  local bottomY = bandCenterY + halfBandH
+  local rearHalfH = (bandH * 0.5) * rearHeightScale
+  local frontHalfH = (bandH * 0.5) * frontHeightScale
+  local rearX = bandCenterX - halfBandW
+  local frontX = bandCenterX + halfBandW
+  local leftTopX
+  local rightTopX
+  local rightBottomX
+  local leftBottomX
+  local topYLeft
+  local topYRight
+  local bottomYRight
+  local bottomYLeft
+
+  if self._current.directionSign > 0 then
+    leftTopX = rearX + bandTiltPx
+    rightTopX = frontX + bandTiltPx
+    rightBottomX = frontX - bandTiltPx
+    leftBottomX = rearX - bandTiltPx
+    topYLeft = bandCenterY - rearHalfH
+    topYRight = bandCenterY - frontHalfH
+    bottomYRight = bandCenterY + frontHalfH
+    bottomYLeft = bandCenterY + rearHalfH
+  else
+    leftTopX = rearX - bandTiltPx
+    rightTopX = frontX - bandTiltPx
+    rightBottomX = frontX + bandTiltPx
+    leftBottomX = rearX + bandTiltPx
+    topYLeft = bandCenterY - frontHalfH
+    topYRight = bandCenterY - rearHalfH
+    bottomYRight = bandCenterY + rearHalfH
+    bottomYLeft = bandCenterY + frontHalfH
+  end
 
   local bandColor = copyColor(cutsceneDef.bandColor, { 0.17, 0.30, 0.52, 0.90 })
   local borderColor = copyColor(cutsceneDef.bandBorderColor, { 0.55, 0.74, 0.96, 0.92 })
@@ -399,10 +426,10 @@ function CutsceneManager:_drawBandAndCharacter(centerX, centerY)
   borderColor[4] = (borderColor[4] or 1) * bandAlpha
 
   love.graphics.setColor(bandColor)
-  love.graphics.polygon("fill", leftTopX, topY, rightTopX, topY, rightBottomX, bottomY, leftBottomX, bottomY)
+  love.graphics.polygon("fill", leftTopX, topYLeft, rightTopX, topYRight, rightBottomX, bottomYRight, leftBottomX, bottomYLeft)
   love.graphics.setColor(borderColor)
   love.graphics.setLineWidth(2)
-  love.graphics.polygon("line", leftTopX, topY, rightTopX, topY, rightBottomX, bottomY, leftBottomX, bottomY)
+  love.graphics.polygon("line", leftTopX, topYLeft, rightTopX, topYRight, rightBottomX, bottomYRight, leftBottomX, bottomYLeft)
   love.graphics.setLineWidth(1)
 
   love.graphics.setFont(FontManager.getFont("title"))

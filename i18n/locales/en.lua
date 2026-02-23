@@ -120,6 +120,128 @@ local LocaleEn = {
       multi_player = "Multiplayer"
     }
   },
+  single = {
+    campaign = {
+      title = "Single Campaign",
+      subtitle = "SP-01 Vertical Slice",
+      summary = "Default Deck: {deckSize} cards | Owned Card Kinds: {ownedKinds}",
+      button = {
+        run_start = "Start Run",
+        deck_manage = "Deck Manage"
+      },
+      status = {
+        profile_loaded = "Single profile loaded.",
+        profile_recovered = "Profile was recovered with defaults.",
+        deck_missing = "Default deck not found.",
+        deck_invalid = "Deck validation failed: {reason}"
+      }
+    },
+    deck = {
+      title = "Deck Manage",
+      summary = "Deck Size: {deckSize}/{maxSize} | Page {page}/{maxPage}",
+      row_owned = "Owned: {owned}",
+      row_in_deck = "In Deck: {count}",
+      owned_max = "3/3 (MAX)",
+      button = {
+        prev = "Prev",
+        next = "Next",
+        add = "Add",
+        remove = "Remove"
+      },
+      status = {
+        loaded = "Deck edit view loaded.",
+        profile_recovered = "Profile was recovered with defaults.",
+        save_failed = "Save failed: {error}",
+        deck_missing = "Default deck is missing.",
+        add_ok = "Card added to deck.",
+        add_fail = "Add failed: {reason}",
+        remove_ok = "Card removed from deck.",
+        remove_fail = "Card not found in deck."
+      }
+    },
+    map = {
+      title = "Run Map",
+      node_default = "Next Node",
+      node_line = "Node {index}/{total} | Type: {nodeType}",
+      node = {
+        combat = "Combat",
+        elite = "Elite",
+        boss = "Boss"
+      },
+      button = {
+        start_combat = "Start Combat"
+      },
+      status = {
+        ready = "Ready to start combat.",
+        deck_invalid = "Deck is invalid. Fix it in deck manage.",
+        deck_missing = "Default deck is missing."
+      }
+    },
+    combat = {
+      title = "Single Combat (Test)",
+      subtitle = "SP-01 Placeholder Combat Scene",
+      button = {
+        win_test = "Win (Test)",
+        lose_test = "Lose (Test)"
+      },
+      status = {
+        placeholder = "Choose combat result with test buttons."
+      }
+    },
+    reward = {
+      title = "Combat Reward",
+      subtitle = "Pick 1 card out of 3.",
+      button = {
+        confirm = "Apply Reward"
+      },
+      status = {
+        choose_one = "Choose a reward card.",
+        select_required = "Select a card first.",
+        profile_invalid = "Profile data is invalid.",
+        deck_missing = "Default deck not found.",
+        add_skipped = "Skipped adding reward card due to deck/card limits.",
+        picked = "Reward selected: {card}",
+        selected = "Selected card #{index}",
+        save_failed = "Save failed: {error}"
+      }
+    },
+    discard = {
+      title = "Discard Card",
+      subtitle = "Deck size {deckSize}/{maxSize} - discard 1 card to continue.",
+      button = {
+        confirm = "Discard Selected Card"
+      },
+      status = {
+        guide = "Select one card to discard, then confirm.",
+        deck_missing = "Default deck is missing.",
+        select_required = "Please select a card to discard.",
+        remove_fail = "Failed to remove the card.",
+        selected = "Selected: {card}",
+        save_failed = "Save failed: {error}"
+      }
+    },
+    result = {
+      title = "Run Result",
+      title_win = "Victory",
+      title_lose = "Defeat",
+      subtitle_win = "Proceeding to the next step.",
+      subtitle_lose = "Returning to campaign.",
+      button = {
+        proceed = "Proceed"
+      }
+    },
+    reason = {
+      invalid_deck = "Deck is invalid.",
+      unknown_card_id = "Unknown card.",
+      duplicate_limit = "You can include up to 3 copies of the same card.",
+      duplicate_limit_exceeded = "Deck exceeds duplicate copy limit.",
+      owned_count = "Cannot add beyond owned count.",
+      owned_count_exceeded = "Deck exceeds owned count limit.",
+      deck_full = "Deck is full.",
+      deck_size_exceeded = "Deck size exceeds the maximum.",
+      deck_too_small = "Deck size is below the minimum (5 cards)."
+    }
+  },
   multiplayer = {
     title = "Multiplayer",
     subtitle = "Choose create room or find room",
