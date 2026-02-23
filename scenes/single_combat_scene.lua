@@ -28,6 +28,9 @@ function SingleCombatScene.new(app)
     _backScene = "single_map",
     _profile = nil,
     _runState = nil,
+    _nodeType = "mob",
+    _nodeId = "",
+    _stageIndex = 1,
     _statusText = "",
     _statusColor = Constants.COLOR_TEXT_SUB,
     _lastLanguage = app:getLanguage(),
@@ -97,8 +100,18 @@ function SingleCombatScene:enter(params)
   self._backScene = (params and params.backScene) or "single_map"
   self._profile = params and params.profile or nil
   self._runState = params and params.runState or nil
+  self._nodeType = tostring((params and params.nodeType) or "mob")
+  self._nodeId = tostring((params and params.nodeId) or "")
+  self._stageIndex = math.max(1, math.floor(tonumber(params and params.stageIndex) or 1))
   self:rebuildLocalizedUi()
-  self:setStatus(t("single.combat.status.placeholder"), Constants.COLOR_TEXT_SUB)
+  self:setStatus(string.format(
+    "%s (type=%s, nodeId=%s, stage=%d)",
+    t("single.combat.status.placeholder"),
+    self._nodeType,
+    self._nodeId,
+    self._stageIndex
+  ), Constants.COLOR_TEXT_SUB)
+  print(string.format("[SingleCombat] enter nodeType=%s nodeId=%s stage=%d", self._nodeType, self._nodeId, self._stageIndex))
 end
 
 function SingleCombatScene:update(_dt)

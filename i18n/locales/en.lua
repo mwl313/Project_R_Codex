@@ -159,10 +159,19 @@ local LocaleEn = {
         remove_fail = "Card not found in deck."
       }
     },
+    node = {
+      mob = "Mob Combat",
+      elite = "Elite Combat",
+      boss = "Boss Combat",
+      shop = "Shop",
+      rest = "Rest",
+      deck_clean = "Deck Clean",
+      event = "Event"
+    },
     map = {
       title = "Run Map",
       node_default = "Next Node",
-      node_line = "Node {index}/{total} | Type: {nodeType}",
+      node_line = "{nodeIndex}/{nodeCount} - {nodeTitle}",
       node = {
         combat = "Combat",
         elite = "Elite",

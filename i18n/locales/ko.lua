@@ -159,10 +159,19 @@ local LocaleKo = {
         remove_fail = "해당 카드를 덱에서 찾지 못했습니다."
       }
     },
+    node = {
+      mob = "잡몹 전투",
+      elite = "엘리트 전투",
+      boss = "보스 전투",
+      shop = "상점",
+      rest = "휴식",
+      deck_clean = "덱 정리",
+      event = "이벤트"
+    },
     map = {
       title = "런 맵",
       node_default = "다음 노드",
-      node_line = "노드 {index}/{total} | 타입: {nodeType}",
+      node_line = "{nodeIndex}/{nodeCount} - {nodeTitle}",
       node = {
         combat = "전투",
         elite = "엘리트",

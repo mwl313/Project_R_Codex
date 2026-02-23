@@ -89,7 +89,10 @@ function SingleMapScene:startCombat()
   self._app:goScene("single_combat", {
     backScene = "single_map",
     profile = self._profile,
-    runState = self._runState
+    runState = self._runState,
+    nodeType = currentNode.type,
+    nodeId = currentNode.nodeId,
+    stageIndex = currentNode.stageIndex
   }, Config.TRANSITION_FORWARD)
 end
 
@@ -127,16 +130,27 @@ function SingleMapScene:draw()
   local mouseX, mouseY = self._app:getMouseWorldPosition()
   local node = SingleRunManager.getCurrentNode(self._runState)
   local nodeIndex = self._runState and self._runState.currentNodeIndex or 1
+  local nodeCount = (self._runState and type(self._runState.nodes) == "table") and #self._runState.nodes or 0
 
-  local nodeTypeLabel = t("single.map.node.combat")
   local nodeTitle = t("single.map.node_default")
   if node then
-    if node.type == "boss" then
-      nodeTypeLabel = t("single.map.node.boss")
-    elseif node.type == "elite" then
-      nodeTypeLabel = t("single.map.node.elite")
+    if type(node.titleKey) == "string" and node.titleKey ~= "" then
+      local translated = t(node.titleKey)
+      if type(translated) == "string" and not translated:find("^%[%[missing:") then
+        nodeTitle = translated
+      elseif type(node.fallbackTitleKo) == "string" and node.fallbackTitleKo ~= "" then
+        nodeTitle = node.fallbackTitleKo
+      elseif type(node.titleKo) == "string" and node.titleKo ~= "" then
+        nodeTitle = node.titleKo
+      end
+    elseif type(node.titleKo) == "string" and node.titleKo ~= "" then
+      nodeTitle = node.titleKo
+    elseif type(node.nodeId) == "string" and node.nodeId ~= "" then
+      nodeTitle = node.nodeId
     end
-    nodeTitle = tostring(node.titleKo or node.nodeId)
+    if type(node.nodeIndex) == "number" then
+      nodeIndex = node.nodeIndex
+    end
   end
 
   love.graphics.setFont(FontManager.getFont("title"))
@@ -146,9 +160,9 @@ function SingleMapScene:draw()
   love.graphics.setFont(FontManager.getFont("ui"))
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
   love.graphics.printf(t("single.map.node_line", {
-    index = tostring(nodeIndex),
-    total = "3",
-    nodeType = nodeTypeLabel
+    nodeIndex = tostring(nodeIndex),
+    nodeCount = tostring(math.max(1, nodeCount)),
+    nodeTitle = nodeTitle
   }), 0, 150, Constants.BASE_WORLD_W, "center")
 
   love.graphics.setColor(Constants.COLOR_TEXT)

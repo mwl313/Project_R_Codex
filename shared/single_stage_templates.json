@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "templates": [
+    {
+      "templateId": "template_a",
+      "stageIndex": 1,
+      "nodeCount": 10,
+      "bossAtEnd": true,
+      "restBeforeBoss": true,
+      "weights": {
+        "mob": 0.55,
+        "elite": 0.1,
+        "shop": 0.1,
+        "rest": 0.0,
+        "deck_clean": 0.1,
+        "event": 0.15
+      },
+      "limits": {
+        "eliteMin": 1,
+        "eliteMax": 1,
+        "shopMin": 1,
+        "shopMax": 1,
+        "deckCleanMin": 1,
+        "deckCleanMax": 1,
+        "eventMin": 1,
+        "eventMax": 1
+      },
+      "constraints": {
+        "noSameTypeStreak": 3,
+        "noBackToBack": [
+          "shop",
+          "rest",
+          "deck_clean"
+        ]
+      }
+    }
+  ]
+}

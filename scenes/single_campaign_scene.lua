@@ -143,7 +143,10 @@ function SingleCampaignScene:startRun()
     return
   end
 
-  local runState = SingleRunManager.newRun("default")
+  local runState = SingleRunManager.newRun("default", {
+    templateId = "template_a",
+    stageIndex = 1
+  })
   self._app:goScene("single_map", {
     backScene = "single_campaign",
     profile = self._profile,
