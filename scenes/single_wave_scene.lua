@@ -49,6 +49,7 @@ local DECK_ZONE_RECT = {
 
 local HAND_MAX_COUNT = 8
 local INTRO_PANEL_TOTAL_SEC = 1.02
+local INTRO_HAND_FOLD_SEC = 0.42
 local INTRO_DECK_MOVE_SEC = 0.55
 local UPGRADE_RESOLVE_SEC = 0.35
 
@@ -95,11 +96,25 @@ local function getHandOpenBaseY()
     - Constants.CARD_HAND_OPEN_RISE_PX
 end
 
+local function getHandClosedBaseY()
+  return Constants.BASE_WORLD_H
+    + Constants.CARD_H * 0.5
+    - Constants.CARD_HAND_PEEK_HEIGHT
+end
+
 local function getHandSlotPosition(index, count)
   local centerIndex = (count + 1) * 0.5
   local offset = index - centerIndex
   local x = Constants.BASE_WORLD_W * 0.5 + offset * Constants.CARD_HAND_OPEN_SPACING
   local y = getHandOpenBaseY() + math.abs(offset) * Constants.CARD_HAND_OPEN_ARC_PX
+  return x, y
+end
+
+local function getHandClosedSlotPosition(index, count)
+  local centerIndex = (count + 1) * 0.5
+  local offset = index - centerIndex
+  local x = Constants.BASE_WORLD_W * 0.5 + offset * Constants.CARD_HAND_CLOSED_SPACING
+  local y = getHandClosedBaseY()
   return x, y
 end
 
@@ -153,8 +168,10 @@ function SingleWaveScene.new(app)
       phase = "none",
       panelElapsedSec = 0,
       cardTimelineSec = 0,
+      handFoldElapsedSec = 0,
       deckMoveElapsedSec = 0,
       introDeckTotalCount = 0,
+      handFoldCardList = {},
       cardAnimator = nil
     }
   }
@@ -206,8 +223,10 @@ function SingleWaveScene:startIntroSequence()
     phase = "panels",
     panelElapsedSec = 0,
     cardTimelineSec = 0,
+    handFoldElapsedSec = 0,
     deckMoveElapsedSec = 0,
     introDeckTotalCount = totalCountBeforeDeal,
+    handFoldCardList = {},
     cardAnimator = introCardAnimator
   }
   self._core = nil
@@ -763,6 +782,34 @@ function SingleWaveScene:updateIntro(dt)
     end
     self._intro.cardTimelineSec = self._intro.cardTimelineSec + dt
     if (not self._intro.cardAnimator) or (not self._intro.cardAnimator:isOverlayVisible()) then
+      local handCardIdList = self._waveManager and self._waveManager:getHandCardIdList() or {}
+      local count = #handCardIdList
+      local handFoldCardList = {}
+      for index, saveCardId in ipairs(handCardIdList) do
+        local cardDef = CardRegistry.getCard(saveCardId)
+        local startX, startY = getHandSlotPosition(index, count)
+        local targetX, targetY = getHandClosedSlotPosition(index, count)
+        handFoldCardList[#handFoldCardList + 1] = {
+          label = tostring((cardDef and cardDef.nameKo) or saveCardId),
+          startX = startX,
+          startY = startY,
+          targetX = targetX,
+          targetY = targetY
+        }
+      end
+      self._intro.handFoldCardList = handFoldCardList
+      self._intro.handFoldElapsedSec = 0
+      self._intro.phase = (#handFoldCardList > 0) and "hand_fold" or "deck_move"
+      if self._intro.phase == "deck_move" then
+        self._intro.deckMoveElapsedSec = 0
+      end
+    end
+    return
+  end
+
+  if self._intro.phase == "hand_fold" then
+    self._intro.handFoldElapsedSec = self._intro.handFoldElapsedSec + dt
+    if self._intro.handFoldElapsedSec >= INTRO_HAND_FOLD_SEC then
       self._intro.phase = "deck_move"
       self._intro.deckMoveElapsedSec = 0
     end
@@ -811,14 +858,12 @@ function SingleWaveScene:drawPanel(panelId)
 end
 
 function SingleWaveScene:drawWavePanel()
-  local x, y, w, _ = self:drawPanel("wave")
-  love.graphics.setFont(FontManager.getFont("ui"))
-  love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf(t("single.wave.hud.wave_title"), x + 12, y + 10, w - 24, "left")
+  local x, y, w, h = self:drawPanel("wave")
   love.graphics.setFont(FontManager.getFont("title"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
   love.graphics.printf(t("single.wave.hud.wave_value", {
     wave = tostring(self._waveManager and self._waveManager:getWaveIndex() or 1)
-  }), x + 12, y + 42, w - 24, "left")
+  }), x + 12, y + (h - FontManager.getFont("title"):getHeight()) * 0.5 + 2, w - 24, "left")
 end
 
 function SingleWaveScene:drawScorePanel()
@@ -880,31 +925,55 @@ function SingleWaveScene:drawRelicPanel()
 end
 
 function SingleWaveScene:drawDeckZone()
-  love.graphics.setColor(Constants.COLOR_PANEL)
-  love.graphics.rectangle("fill", DECK_ZONE_RECT.x, DECK_ZONE_RECT.y, DECK_ZONE_RECT.w, DECK_ZONE_RECT.h, 10, 10)
-  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
-  love.graphics.rectangle("line", DECK_ZONE_RECT.x, DECK_ZONE_RECT.y, DECK_ZONE_RECT.w, DECK_ZONE_RECT.h, 10, 10)
-  love.graphics.setFont(FontManager.getFont("ui"))
-  love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf(t("single.wave.hud.deck_title"), DECK_ZONE_RECT.x, DECK_ZONE_RECT.y + 16, DECK_ZONE_RECT.w, "center")
-  love.graphics.setFont(FontManager.getFont("small"))
-  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
-  love.graphics.printf(t("single.wave.hud.deck_count", {
-    drawCount = tostring(self._waveManager and self._waveManager:getDrawPileCount() or 0),
-    discardCount = tostring(self._waveManager and self._waveManager:getDiscardPileCount() or 0),
-    handCount = tostring(self._waveManager and self._waveManager:getHandCount() or 0),
-    handMax = tostring(HAND_MAX_COUNT)
-  }), DECK_ZONE_RECT.x + 8, DECK_ZONE_RECT.y + 54, DECK_ZONE_RECT.w - 16, "center")
+  -- 덱존은 패널 없이 덱 스택만 유지한다.
 end
 
 function SingleWaveScene:drawDeckStackPrimitive(centerX, centerY, count, alpha)
   local drawCount = math.max(1, math.floor(tonumber(count) or 1))
   local safeAlpha = clamp(tonumber(alpha) or 1.0, 0, 1)
   for depth = 1, drawCount do
-    love.graphics.setColor(0.21, 0.28, 0.44, 0.95 * safeAlpha)
-    love.graphics.rectangle("fill", centerX - 36 + depth * 2, centerY - 52 + depth * 2, 72, 104, 7, 7)
-    love.graphics.setColor(Constants.COLOR_PANEL_BORDER[1], Constants.COLOR_PANEL_BORDER[2], Constants.COLOR_PANEL_BORDER[3], safeAlpha)
-    love.graphics.rectangle("line", centerX - 36 + depth * 2, centerY - 52 + depth * 2, 72, 104, 7, 7)
+    CardView.drawCard({
+      x = centerX + depth * 1.8,
+      y = centerY + depth * 1.2,
+      w = Constants.CARD_W,
+      h = Constants.CARD_H,
+      label = "",
+      backLabel = "?",
+      isFaceUp = false,
+      scale = 1.0,
+      alpha = safeAlpha,
+      flipScaleX = 1.0,
+      borderThickness = Constants.CARD_BORDER_THICKNESS,
+      glowAlpha = Constants.CARD_GLOW_ALPHA,
+      isHovered = false,
+      isSelected = false
+    })
+  end
+end
+
+function SingleWaveScene:drawIntroHandFoldCards(progress)
+  local cardList = self._intro.handFoldCardList or {}
+  local clamped = clamp(progress, 0, 1)
+  local eased = easeOutCubic(clamped)
+  local flipScaleX = math.max(0.06, math.abs(math.cos(clamped * math.pi)))
+  local isFaceUp = clamped >= 0.5
+  for _, card in ipairs(cardList) do
+    CardView.drawCard({
+      x = lerp(card.startX, card.targetX, eased),
+      y = lerp(card.startY, card.targetY, eased),
+      w = Constants.CARD_W,
+      h = Constants.CARD_H,
+      label = tostring(card.label or ""),
+      backLabel = "?",
+      isFaceUp = isFaceUp,
+      scale = 1.0,
+      alpha = 1.0,
+      flipScaleX = flipScaleX,
+      borderThickness = Constants.CARD_BORDER_THICKNESS,
+      glowAlpha = Constants.CARD_GLOW_ALPHA,
+      isHovered = false,
+      isSelected = false
+    })
   end
 end
 
@@ -917,7 +986,13 @@ function SingleWaveScene:drawIntroOverlay()
     self._intro.cardAnimator:draw()
   end
 
+  if phase == "hand_fold" then
+    local progress = clamp(self._intro.handFoldElapsedSec / INTRO_HAND_FOLD_SEC, 0, 1)
+    self:drawIntroHandFoldCards(progress)
+  end
+
   if phase == "deck_move" then
+    self:drawIntroHandFoldCards(1.0)
     local progress = clamp(self._intro.deckMoveElapsedSec / INTRO_DECK_MOVE_SEC, 0, 1)
     local eased = easeOutCubic(progress)
     local targetX, targetY = self:getDeckCenter()
@@ -1102,15 +1177,12 @@ function SingleWaveScene:draw()
   self:drawWavePanel()
   self:drawScorePanel()
   self:drawRelicPanel()
-  local shouldDrawDeckZone = (not self._intro.isActive) or self._intro.phase == "deck_move"
-  if shouldDrawDeckZone then
-    self:drawDeckZone()
-    if not (self._intro.isActive and self._intro.phase == "deck_move") then
-      local deckX, deckY = self:getDeckCenter()
-      local drawCount = self._waveManager and self._waveManager:getDrawPileCount() or 0
-      local stackCount = math.min(10, math.max(4, math.floor(math.max(4, drawCount) * 0.16)))
-      self:drawDeckStackPrimitive(deckX, deckY, stackCount, 1.0)
-    end
+  local shouldDrawDeckStack = (not self._intro.isActive) or self._intro.phase == "deck_move"
+  if shouldDrawDeckStack and not (self._intro.isActive and self._intro.phase == "deck_move") then
+    local deckX, deckY = self:getDeckCenter()
+    local drawCount = self._waveManager and self._waveManager:getDrawPileCount() or 0
+    local stackCount = math.min(10, math.max(4, math.floor(math.max(4, drawCount) * 0.16)))
+    self:drawDeckStackPrimitive(deckX, deckY, stackCount, 1.0)
   end
 
   love.graphics.setFont(FontManager.getFont("title"))
