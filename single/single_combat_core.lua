@@ -18,6 +18,7 @@ local Abilities = require("abilities")
 local CardHandBar = require("ui.card_hand_bar")
 local EffectManager = require("effects.effect_manager")
 local SingleAI = require("single.single_ai")
+local InputCaptureGuard = require("utils.input_capture_guard")
 
 local SingleCombatCore = {}
 SingleCombatCore.__index = SingleCombatCore
@@ -34,6 +35,39 @@ local function clamp(v, minV, maxV)
     return maxV
   end
   return v
+end
+
+local function intersectSegmentWithWorldRect(startX, startY, endX, endY)
+  local minX = 0
+  local maxX = Constants.BASE_WORLD_W
+  local minY = 0
+  local maxY = Constants.BASE_WORLD_H
+  local dx = endX - startX
+  local dy = endY - startY
+  local bestT = 1
+
+  local function consider(t)
+    if t == nil then
+      return
+    end
+    if t < 0 or t > 1 then
+      return
+    end
+    if t < bestT then
+      bestT = t
+    end
+  end
+
+  if dx ~= 0 then
+    consider((minX - startX) / dx)
+    consider((maxX - startX) / dx)
+  end
+  if dy ~= 0 then
+    consider((minY - startY) / dy)
+    consider((maxY - startY) / dy)
+  end
+
+  return startX + dx * bestT, startY + dy * bestT
 end
 
 local function getDeck(profile, deckId)
@@ -113,9 +147,14 @@ function SingleCombatCore.new(params)
     _shouldSendSnapshotAfterSim = false,
 
     _isAimDragging = false,
+    _isAimRelativeMode = false,
     _aimStoneId = nil,
-    _aimWorldX = nil,
-    _aimWorldY = nil,
+    _aimStartWorldX = nil,
+    _aimStartWorldY = nil,
+    _aimAccumWorldDX = 0,
+    _aimAccumWorldDY = 0,
+    _aimLastMouseWorldX = nil,
+    _aimLastMouseWorldY = nil,
 
     _isFinished = false,
     _result = nil,
@@ -245,8 +284,7 @@ function SingleCombatCore:startTurn(playerIndex, initial)
   self._pendingCardTargetId = nil
   self._pendingCardTargetEntryId = nil
   self._pendingCardTargetCardId = nil
-  self._isAimDragging = false
-  self._aimStoneId = nil
+  self:cancelAimDrag(true)
   if playerIndex == 2 then
     self._aiThinkRemainSec = 0.20
     self:setStatus(t("single.combat.status.ai_turn"), Constants.COLOR_TEXT_SUB)
@@ -254,6 +292,148 @@ function SingleCombatCore:startTurn(playerIndex, initial)
     self._aiThinkRemainSec = 0
     self:setStatus(t("single.combat.status.player_turn"), Constants.COLOR_TEXT_SUB)
   end
+end
+
+function SingleCombatCore:beginAimDrag(worldX, worldY, stone)
+  if not stone then
+    return false
+  end
+  self._isAimDragging = true
+  self._aimStoneId = stone.id
+  self._aimStartWorldX = worldX
+  self._aimStartWorldY = worldY
+  self._aimAccumWorldDX = 0
+  self._aimAccumWorldDY = 0
+  self._aimLastMouseWorldX = worldX
+  self._aimLastMouseWorldY = worldY
+  self._isAimRelativeMode = InputCaptureGuard.captureRelativeMouse()
+  if self._isAimRelativeMode then
+    self._aimLastMouseWorldX = nil
+    self._aimLastMouseWorldY = nil
+  end
+  return true
+end
+
+function SingleCombatCore:getAimCursorWorldPosition()
+  local startWorldX = self._aimStartWorldX or 0
+  local startWorldY = self._aimStartWorldY or 0
+  return startWorldX + self._aimAccumWorldDX, startWorldY + self._aimAccumWorldDY
+end
+
+function SingleCombatCore:resolveAimRestoreScreenPosition(stoneWorldX, stoneWorldY)
+  local aimWorldX, aimWorldY = self:getAimCursorWorldPosition()
+  local restoreWorldX, restoreWorldY = intersectSegmentWithWorldRect(stoneWorldX, stoneWorldY, aimWorldX, aimWorldY)
+  return self._app:worldToScreen(restoreWorldX, restoreWorldY)
+end
+
+function SingleCombatCore:updateAimDragInput()
+  if not self._isAimDragging then
+    return
+  end
+
+  if self._isAimRelativeMode then
+    local relativeDx, relativeDy, isRelative = InputCaptureGuard.consumeRelativeDelta()
+    if isRelative then
+      local worldDx, worldDy = self._app:screenDeltaToWorldDelta(relativeDx, relativeDy)
+      self._aimAccumWorldDX = self._aimAccumWorldDX + worldDx
+      self._aimAccumWorldDY = self._aimAccumWorldDY + worldDy
+      return
+    end
+    self._isAimRelativeMode = false
+    InputCaptureGuard.release()
+  end
+
+  local mouseWorldX, mouseWorldY = self._app:getMouseWorldPosition()
+  if self._aimLastMouseWorldX ~= nil and self._aimLastMouseWorldY ~= nil then
+    self._aimAccumWorldDX = self._aimAccumWorldDX + (mouseWorldX - self._aimLastMouseWorldX)
+    self._aimAccumWorldDY = self._aimAccumWorldDY + (mouseWorldY - self._aimLastMouseWorldY)
+  end
+  self._aimLastMouseWorldX = mouseWorldX
+  self._aimLastMouseWorldY = mouseWorldY
+end
+
+function SingleCombatCore:cancelAimDrag(silent)
+  local restoreScreenX = nil
+  local restoreScreenY = nil
+  if self._isAimDragging then
+    self:updateAimDragInput()
+    local stone = self:getAliveStoneById(self._aimStoneId)
+    if stone then
+      local stoneWorldX = self._boardX + stone.x
+      local stoneWorldY = self._boardY + stone.y
+      restoreScreenX, restoreScreenY = self:resolveAimRestoreScreenPosition(stoneWorldX, stoneWorldY)
+    end
+  end
+
+  InputCaptureGuard.release(restoreScreenX, restoreScreenY)
+  self._isAimDragging = false
+  self._isAimRelativeMode = false
+  self._aimStoneId = nil
+  self._aimStartWorldX = nil
+  self._aimStartWorldY = nil
+  self._aimAccumWorldDX = 0
+  self._aimAccumWorldDY = 0
+  self._aimLastMouseWorldX = nil
+  self._aimLastMouseWorldY = nil
+
+  if not silent then
+    self:setStatus("", Constants.COLOR_TEXT_SUB)
+  end
+end
+
+function SingleCombatCore:commitAimDrag()
+  if not self._isAimDragging then
+    return
+  end
+
+  self:updateAimDragInput()
+  local stone = self:getAliveStoneById(self._aimStoneId)
+  local aimWorldX, aimWorldY = self:getAimCursorWorldPosition()
+  local restoreScreenX = nil
+  local restoreScreenY = nil
+  if stone then
+    local stoneWorldX = self._boardX + stone.x
+    local stoneWorldY = self._boardY + stone.y
+    restoreScreenX, restoreScreenY = self:resolveAimRestoreScreenPosition(stoneWorldX, stoneWorldY)
+  end
+
+  InputCaptureGuard.release(restoreScreenX, restoreScreenY)
+  self._isAimDragging = false
+  self._isAimRelativeMode = false
+  self._aimStoneId = nil
+  self._aimStartWorldX = nil
+  self._aimStartWorldY = nil
+
+  if not stone then
+    self._aimAccumWorldDX = 0
+    self._aimAccumWorldDY = 0
+    self._aimLastMouseWorldX = nil
+    self._aimLastMouseWorldY = nil
+    return
+  end
+
+  local stoneWorldX = self._boardX + stone.x
+  local stoneWorldY = self._boardY + stone.y
+  local dx = stoneWorldX - aimWorldX
+  local dy = stoneWorldY - aimWorldY
+  self._aimAccumWorldDX = 0
+  self._aimAccumWorldDY = 0
+  self._aimLastMouseWorldX = nil
+  self._aimLastMouseWorldY = nil
+  local len = math.sqrt(dx * dx + dy * dy)
+  if len < 8 then
+    self:setStatus(t("single.combat.status.shot_too_short"), Constants.COLOR_DANGER)
+    return
+  end
+
+  GameMechanics.applyShotImpulse(self, {
+    stoneId = stone.id,
+    dirX = dx / len,
+    dirY = dy / len,
+    power = clamp(len * Constants.POWER_PER_PIXEL, 0, Constants.MAX_SHOT_POWER)
+  })
+  self._playingShotUsed = self._playingShotUsed + 1
+  self._isTurnShotCommitted = true
 end
 
 function SingleCombatCore:isPlayingPhase() return not self._isFinished end
@@ -411,6 +591,7 @@ end
 
 function SingleCombatCore:update(dt, mouseX, mouseY)
   if self._isFinished then return end
+  self:updateAimDragInput()
   self._effectManager:update(dt)
   self._playingCardHandBar:update(dt, mouseX, mouseY, { isPlayingPhase = true, isStoneDragging = self._isAimDragging })
   if self._turnEndsAtMs and TimeUtils.nowEpochMs() >= self._turnEndsAtMs and (not self._isShotSimulating) then
@@ -445,6 +626,7 @@ end
 
 function SingleCombatCore:finish(result)
   if self._isFinished then return end
+  self:cancelAimDrag(true)
   self._isFinished = true
   self._result = result
   if type(self._onCombatEnd) == "function" then
@@ -483,8 +665,7 @@ function SingleCombatCore:draw(mouseX, mouseY)
     if stone then
       local sx = self._boardX + stone.x
       local sy = self._boardY + stone.y
-      local ax = self._aimWorldX or sx
-      local ay = self._aimWorldY or sy
+      local ax, ay = self:getAimCursorWorldPosition()
       local dx = sx - ax
       local dy = sy - ay
       local dist = math.sqrt(dx * dx + dy * dy)
@@ -526,8 +707,7 @@ function SingleCombatCore:mousepressed(worldX, worldY, button)
       self:setStatus(t("single.combat.status.card_target_cancel"), Constants.COLOR_TEXT_SUB)
       return
     end
-    self._isAimDragging = false
-    self._aimStoneId = nil
+    self:cancelAimDrag(true)
     return
   end
   if button ~= 1 then return end
@@ -540,10 +720,7 @@ function SingleCombatCore:mousepressed(worldX, worldY, button)
     if stone.alive ~= false and stone.ownerPlayerIndex == 1 and self._lockedStoneIdSet[stone.id] ~= true then
       local dx, dy = stone.x - lx, stone.y - ly
       if dx * dx + dy * dy <= (Constants.STONE_RADIUS + 4) ^ 2 then
-        self._isAimDragging = true
-        self._aimStoneId = stone.id
-        self._aimWorldX = worldX
-        self._aimWorldY = worldY
+        self:beginAimDrag(worldX, worldY, stone)
         return
       end
     end
@@ -553,28 +730,10 @@ end
 function SingleCombatCore:mousereleased(worldX, worldY, button)
   if self._isFinished or button ~= 1 then return end
   if self._playingCardHandBar:mousereleased(worldX, worldY, button) then return end
-  if not self._isAimDragging then return end
-  local stone = self:getAliveStoneById(self._aimStoneId)
-  self._isAimDragging = false
-  self._aimStoneId = nil
-  if not stone then return end
-  local sx = self._boardX + stone.x
-  local sy = self._boardY + stone.y
-  local dx = sx - worldX
-  local dy = sy - worldY
-  local len = math.sqrt(dx * dx + dy * dy)
-  if len < 8 then
-    self:setStatus(t("single.combat.status.shot_too_short"), Constants.COLOR_DANGER)
-    return
-  end
-  GameMechanics.applyShotImpulse(self, { stoneId = stone.id, dirX = dx / len, dirY = dy / len, power = clamp(len * Constants.POWER_PER_PIXEL, 0, Constants.MAX_SHOT_POWER) })
-  self._playingShotUsed = self._playingShotUsed + 1
-  self._isTurnShotCommitted = true
+  self:commitAimDrag()
 end
 
-function SingleCombatCore:mousemoved(worldX, worldY, _dx, _dy)
-  self._aimWorldX = worldX
-  self._aimWorldY = worldY
+function SingleCombatCore:mousemoved(_worldX, _worldY, _dx, _dy)
 end
 
 function SingleCombatCore:wheelmoved(_worldX, _worldY, _dx, _dy) end
@@ -587,7 +746,28 @@ function SingleCombatCore:keypressed(key)
     self:setStatus(t("single.combat.status.card_target_cancel"), Constants.COLOR_TEXT_SUB)
     return true
   end
+  if key == "escape" and self._isAimDragging then
+    self:cancelAimDrag(true)
+    return true
+  end
   return false
+end
+
+function SingleCombatCore:onAppEvent(event)
+  if type(event) ~= "table" then
+    return
+  end
+  if event.type == "focus_lost" then
+    self:cancelAimDrag(true)
+  end
+end
+
+function SingleCombatCore:onSceneWillChange(_event)
+  self:cancelAimDrag(true)
+end
+
+function SingleCombatCore:exit()
+  self:cancelAimDrag(true)
 end
 
 return SingleCombatCore

@@ -153,6 +153,21 @@ function SingleCombatScene:keypressed(key)
 end
 
 function SingleCombatScene:onAppEvent(_event)
+  if self._core then
+    self._core:onAppEvent(_event)
+  end
+end
+
+function SingleCombatScene:onSceneWillChange(event)
+  if self._core then
+    self._core:onSceneWillChange(event)
+  end
+end
+
+function SingleCombatScene:exit()
+  if self._core then
+    self._core:exit()
+  end
 end
 
 return SingleCombatScene
