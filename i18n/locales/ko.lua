@@ -321,6 +321,7 @@ local LocaleKo = {
         ai = "AI"
       },
       info_line = "턴 {turnIndex} | {turnOwner} | 남은 시간 {remainSec}s | 샷 {shotUsed}/{shotBudget}",
+      info_line_no_timer = "턴 {turnIndex} | {turnOwner} | 샷 {shotUsed}/{shotBudget}",
       status = {
         player_turn = "내 턴입니다. 알을 드래그해 발사하세요.",
         ai_turn = "상대 턴입니다.",
@@ -342,6 +343,85 @@ local LocaleKo = {
         auto_rockfall = "보스 기믹: 자동 낙석",
         blackhole_pulse = "보스 기믹: 블랙홀 맥동",
         bind_random_enemy = "보스 기믹: 무작위 결박"
+      }
+    },
+    wave = {
+      title = "싱글 웨이브 무한모드",
+      stage_line = "Stage {stage} / Wave {wave}",
+      hud = {
+        wave_title = "Wave",
+        wave_value = "Wave {wave}",
+        score_title = "Score",
+        max_combo = "Max Combo: {value}",
+        enemies_killed = "Enemies Killed: {value}",
+        relic_title = "Relic Buff",
+        deck_title = "덱존",
+        deck_count = "Draw {drawCount} | Discard {discardCount}\nHand {handCount}/{handMax}"
+      },
+      status = {
+        profile_recovered = "싱글 프로필을 복구해 로드했습니다.",
+        intro_playing = "런 시작 연출 재생 중...",
+        wave_start = "Wave {wave} 시작",
+        run_end = "런이 종료되었습니다."
+      },
+      upgrade = {
+        title = "업그레이드 선택",
+        subtitle = "3개 중 1개를 선택하고 확정하세요.",
+        category = {
+          card = "카드",
+          relic = "유물",
+          hand_ops = "패조작"
+        },
+        button = {
+          confirm = "확정",
+          reopen = "업그레이드 다시 열기"
+        },
+        status = {
+          choose = "업그레이드를 선택하세요.",
+          select_required = "선택 후 확정할 수 있습니다.",
+          reopen_required = "업그레이드 선택이 필요합니다.",
+          card_to_hand = "카드를 손패에 추가했습니다.",
+          card_to_deck = "손패가 가득 차 덱에 추가 후 셔플했습니다.",
+          relic_added = "유물을 획득했습니다.",
+          relic_skip = "이미 보유 중인 유물이라 적용되지 않았습니다.",
+          hand_op_applied = "패조작 효과를 적용했습니다.",
+          apply_failed = "업그레이드 적용에 실패했습니다."
+        },
+        hand_op = {
+          hand_draw_one = {
+            title = "빠른 드로우",
+            desc = "덱에서 카드 1장을 즉시 뽑습니다."
+          },
+          hand_draw_two = {
+            title = "연속 드로우",
+            desc = "덱에서 카드 2장을 즉시 뽑습니다."
+          },
+          hand_shuffle_deck = {
+            title = "덱 셔플",
+            desc = "현재 드로우 덱을 즉시 셔플합니다."
+          },
+          hand_recycle_discard = {
+            title = "버림 더미 회수",
+            desc = "버림 더미를 덱으로 되돌려 셔플합니다."
+          }
+        }
+      },
+      pause = {
+        title = "일시정지",
+        button = {
+          resume = "계속하기",
+          lobby = "로비로",
+          reset = "리셋",
+          settings = "환경설정"
+        },
+        status = {
+          settings_saved = "환경설정을 저장했습니다."
+        }
+      },
+      result = {
+        lose = "런 실패",
+        draw = "런 무승부",
+        subtitle = "리셋 또는 로비 복귀를 선택하세요."
       }
     },
     relic_reward = {

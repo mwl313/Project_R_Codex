@@ -143,6 +143,8 @@ function SingleCombatCore.new(params)
     _nodeId = tostring(params.nodeId or ""),
     _stageIndex = math.max(1, math.floor(tonumber(params.stageIndex) or 1)),
     _onCombatEnd = params.onCombatEnd,
+    _onCardConsumed = params.onCardConsumed,
+    _onShotResolved = params.onShotResolved,
     _boardX = boardX,
     _boardY = boardY,
     _statusText = "",
@@ -194,6 +196,10 @@ function SingleCombatCore.new(params)
 
     _baseDrawPerBattle = 5,
     _maxShotPower = Constants.MAX_SHOT_POWER,
+    _isTurnTimerDisabled = params.disableTurnTimer == true,
+    _isHudSuppressed = params.suppressHud == true,
+    _initialHandCardIdList = type(params.initialHandCardIdList) == "table" and params.initialHandCardIdList or nil,
+    _pendingShotResolution = nil,
     _bossId = nil,
     _bossGimmickList = {},
     _bossBindUntilTurnByStoneId = {},
@@ -420,6 +426,18 @@ end
 function SingleCombatCore:initializeHand()
   self._handEntryList = {}
   self._handEntryById = {}
+  if type(self._initialHandCardIdList) == "table" and #self._initialHandCardIdList > 0 then
+    for _, saveCardId in ipairs(self._initialHandCardIdList) do
+      local entryId = self:createId("card")
+      local runtimeCardId = CardRegistry.toRuntimeCardId(saveCardId)
+      local entry = { entryId = entryId, cardId = runtimeCardId, label = Abilities.getCardLabel(runtimeCardId) }
+      self._handEntryList[#self._handEntryList + 1] = entry
+      self._handEntryById[entryId] = entry
+    end
+    self:refreshHandUi()
+    return
+  end
+
   local deck = SingleRunState.getRunDeck(self._runState, self._profile)
   if type(deck) ~= "table" then
     deck = getDeck(self._profile, self._runState and self._runState.deckId)
@@ -471,7 +489,11 @@ function SingleCombatCore:startTurn(playerIndex, initial)
   if not initial then
     self._playingTurnIndex = self._playingTurnIndex + 1
   end
-  self._turnEndsAtMs = TimeUtils.nowEpochMs() + Constants.TURN_TIME_LIMIT_SEC * 1000
+  if self._isTurnTimerDisabled then
+    self._turnEndsAtMs = nil
+  else
+    self._turnEndsAtMs = TimeUtils.nowEpochMs() + Constants.TURN_TIME_LIMIT_SEC * 1000
+  end
   self._playingShotBudget = 1
   self._playingShotUsed = 0
   self._hasUsedCardThisTurn = false
@@ -484,6 +506,7 @@ function SingleCombatCore:startTurn(playerIndex, initial)
   self._pendingCardTargetId = nil
   self._pendingCardTargetEntryId = nil
   self._pendingCardTargetCardId = nil
+  self._pendingShotResolution = nil
   self:cancelAimDrag(true)
   if playerIndex == 2 then
     self._aiThinkRemainSec = 0.20
@@ -637,6 +660,11 @@ function SingleCombatCore:commitAimDrag()
     dirY = dy / len,
     power = clamp(len * Constants.POWER_PER_PIXEL, 0, self._maxShotPower)
   })
+  self._pendingShotResolution = {
+    ownerPlayerIndex = 1,
+    firstAliveBefore = countAlive(self._playingStoneList, 1),
+    secondAliveBefore = countAlive(self._playingStoneList, 2)
+  }
   self._playingShotUsed = self._playingShotUsed + 1
   self._isTurnShotCommitted = true
 end
@@ -777,6 +805,9 @@ function SingleCombatCore:onCardDeclared(entryId)
       break
     end
   end
+  if type(self._onCardConsumed) == "function" then
+    self._onCardConsumed(CardRegistry.fromRuntimeCardId(entry.cardId), entry.cardId)
+  end
   self._handEntryById[entry.entryId] = nil
   self:refreshHandUi()
   self:setStatus(t("single.combat.status.card_used", { card = entry.label }), Constants.COLOR_TEXT_SUB)
@@ -807,6 +838,9 @@ function SingleCombatCore:commitPendingTarget(worldX, worldY)
       break
     end
   end
+  if type(self._onCardConsumed) == "function" then
+    self._onCardConsumed(CardRegistry.fromRuntimeCardId(entry.cardId), entry.cardId)
+  end
   self._handEntryById[entry.entryId] = nil
   self._pendingCardTargetEntryId = nil
   self._pendingCardTargetCardId = nil
@@ -820,14 +854,35 @@ function SingleCombatCore:update(dt, mouseX, mouseY)
   self:updateAimDragInput()
   self._effectManager:update(dt)
   self._playingCardHandBar:update(dt, mouseX, mouseY, { isPlayingPhase = true, isStoneDragging = self._isAimDragging })
-  if self._turnEndsAtMs and TimeUtils.nowEpochMs() >= self._turnEndsAtMs and (not self._isShotSimulating) then
+  if (not self._isTurnTimerDisabled) and self._turnEndsAtMs and TimeUtils.nowEpochMs() >= self._turnEndsAtMs and (not self._isShotSimulating) then
     self:startTurn(self._activePlayerIndex == 1 and 2 or 1, false)
   end
   local wasSim = self._isShotSimulating
   GameMechanics.updateShotSimulation(self, dt)
   if wasSim and (not self._isShotSimulating) then
-    local myAlive = countAlive(self._playingStoneList, 1)
-    local enemyAlive = countAlive(self._playingStoneList, 2)
+    local firstAliveNow = countAlive(self._playingStoneList, 1)
+    local secondAliveNow = countAlive(self._playingStoneList, 2)
+    if self._pendingShotResolution and type(self._onShotResolved) == "function" then
+      local meta = self._pendingShotResolution
+      local enemyOut = 0
+      local selfOut = 0
+      if meta.ownerPlayerIndex == 1 then
+        enemyOut = math.max(0, math.floor((meta.secondAliveBefore or 0) - secondAliveNow))
+        selfOut = math.max(0, math.floor((meta.firstAliveBefore or 0) - firstAliveNow))
+      else
+        enemyOut = math.max(0, math.floor((meta.firstAliveBefore or 0) - firstAliveNow))
+        selfOut = math.max(0, math.floor((meta.secondAliveBefore or 0) - secondAliveNow))
+      end
+      self._onShotResolved({
+        ownerPlayerIndex = meta.ownerPlayerIndex,
+        enemyOut = enemyOut,
+        selfOut = selfOut
+      })
+    end
+    self._pendingShotResolution = nil
+
+    local myAlive = firstAliveNow
+    local enemyAlive = secondAliveNow
     if myAlive <= 0 and enemyAlive <= 0 then self:finish("draw") return end
     if enemyAlive <= 0 then self:finish("win") return end
     if myAlive <= 0 then self:finish("lose") return end
@@ -848,6 +903,11 @@ function SingleCombatCore:update(dt, mouseX, mouseY)
       })
       if shot then
         GameMechanics.applyShotImpulse(self, shot)
+        self._pendingShotResolution = {
+          ownerPlayerIndex = 2,
+          firstAliveBefore = countAlive(self._playingStoneList, 1),
+          secondAliveBefore = countAlive(self._playingStoneList, 2)
+        }
         self._playingShotUsed = self._playingShotUsed + 1
         self._isTurnShotCommitted = true
       else
@@ -916,18 +976,35 @@ function SingleCombatCore:draw(mouseX, mouseY)
   end
   self._effectManager:draw(self._boardX, self._boardY, function(x, y) return x, y end)
   self._playingCardHandBar:draw()
-  love.graphics.setFont(FontManager.getFont("title"))
-  love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf(t("single.combat.title"), 0, 16, Constants.BASE_WORLD_W, "center")
-  love.graphics.setFont(FontManager.getFont("small"))
-  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
-  local nodeTitle = t(NODE_TITLE_KEY_BY_TYPE[self._nodeType] or "single.node.mob")
-  love.graphics.printf(t("single.combat.node_line", { nodeType = nodeTitle, nodeId = self._nodeId }), 0, 52, Constants.BASE_WORLD_W, "center")
-  local remain = self._turnEndsAtMs and TimeUtils.getRemainingSeconds(self._turnEndsAtMs) or 0
-  local owner = self._activePlayerIndex == 1 and t("single.combat.turn_owner.player") or t("single.combat.turn_owner.ai")
-  love.graphics.printf(t("single.combat.info_line", { turnIndex = tostring(self._playingTurnIndex), turnOwner = owner, remainSec = tostring(remain), shotUsed = tostring(self._playingShotUsed), shotBudget = tostring(self._playingShotBudget) }), 0, 636, Constants.BASE_WORLD_W, "center")
-  love.graphics.setColor(self._statusColor)
-  love.graphics.printf(self._statusText, 0, 688, Constants.BASE_WORLD_W, "center")
+  if not self._isHudSuppressed then
+    love.graphics.setFont(FontManager.getFont("title"))
+    love.graphics.setColor(Constants.COLOR_TEXT)
+    love.graphics.printf(t("single.combat.title"), 0, 16, Constants.BASE_WORLD_W, "center")
+    love.graphics.setFont(FontManager.getFont("small"))
+    love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+    local nodeTitle = t(NODE_TITLE_KEY_BY_TYPE[self._nodeType] or "single.node.mob")
+    love.graphics.printf(t("single.combat.node_line", { nodeType = nodeTitle, nodeId = self._nodeId }), 0, 52, Constants.BASE_WORLD_W, "center")
+    local remain = self._turnEndsAtMs and TimeUtils.getRemainingSeconds(self._turnEndsAtMs) or 0
+    local owner = self._activePlayerIndex == 1 and t("single.combat.turn_owner.player") or t("single.combat.turn_owner.ai")
+    if self._isTurnTimerDisabled then
+      love.graphics.printf(t("single.combat.info_line_no_timer", {
+        turnIndex = tostring(self._playingTurnIndex),
+        turnOwner = owner,
+        shotUsed = tostring(self._playingShotUsed),
+        shotBudget = tostring(self._playingShotBudget)
+      }), 0, 636, Constants.BASE_WORLD_W, "center")
+    else
+      love.graphics.printf(t("single.combat.info_line", {
+        turnIndex = tostring(self._playingTurnIndex),
+        turnOwner = owner,
+        remainSec = tostring(remain),
+        shotUsed = tostring(self._playingShotUsed),
+        shotBudget = tostring(self._playingShotBudget)
+      }), 0, 636, Constants.BASE_WORLD_W, "center")
+    end
+    love.graphics.setColor(self._statusColor)
+    love.graphics.printf(self._statusText, 0, 688, Constants.BASE_WORLD_W, "center")
+  end
 end
 
 function SingleCombatCore:mousepressed(worldX, worldY, button)
@@ -1001,6 +1078,25 @@ end
 
 function SingleCombatCore:exit()
   self:cancelAimDrag(true)
+end
+
+function SingleCombatCore:getCurrentHandCardIdList()
+  local list = {}
+  for _, entry in ipairs(self._handEntryList or {}) do
+    list[#list + 1] = CardRegistry.fromRuntimeCardId(entry.cardId)
+  end
+  return list
+end
+
+function SingleCombatCore:getAliveStoneCount(ownerPlayerIndex)
+  return countAlive(self._playingStoneList, ownerPlayerIndex)
+end
+
+function SingleCombatCore:getStatusSnapshot()
+  return {
+    text = tostring(self._statusText or ""),
+    color = self._statusColor or Constants.COLOR_TEXT_SUB
+  }
 end
 
 return SingleCombatCore

@@ -1,0 +1,1276 @@
+--[[
+파일명: single_wave_scene.lua
+모듈명: SingleWaveScene
+
+역할:
+- 싱글 웨이브 무한모드 메인 씬.
+- 런 시작 연출, 웨이브 전투, 업그레이드 오버레이, 일시정지 모달을 통합 관리한다.
+]]
+
+local Constants = require("constants")
+local Config = require("config")
+local I18n = require("i18n.i18n")
+local FontManager = require("assets.font_manager")
+local Button = require("ui.button")
+local SingleProfileStore = require("single.single_profile_store")
+local SingleWaveManager = require("single.single_wave_manager")
+local SingleCombatCore = require("single.single_combat_core")
+local UpgradeDraft = require("single.upgrade_draft")
+
+local SingleWaveScene = {}
+SingleWaveScene.__index = SingleWaveScene
+
+local PANEL_LAYOUT = {
+  wave = { order = 3, x = 24, y = 24, w = 286, h = 92 },
+  score = { order = 2, x = 24, y = 130, w = 286, h = 128 },
+  relic = { order = 1, x = 24, y = 272, w = 286, h = 410 }
+}
+
+local DECK_ZONE_RECT = {
+  x = Constants.BASE_WORLD_W - 230,
+  y = 258,
+  w = 186,
+  h = 228
+}
+
+local HAND_MAX_COUNT = 8
+
+local function t(key, vars)
+  return I18n.t(key, vars)
+end
+
+local function clamp(value, minValue, maxValue)
+  if value < minValue then
+    return minValue
+  end
+  if value > maxValue then
+    return maxValue
+  end
+  return value
+end
+
+local function lerp(fromValue, toValue, alpha)
+  return fromValue + (toValue - fromValue) * alpha
+end
+
+local function easeOutCubic(alpha)
+  local tValue = clamp(alpha, 0, 1)
+  local inv = 1 - tValue
+  return 1 - inv * inv * inv
+end
+
+local function easeOutBack(alpha)
+  local tValue = clamp(alpha, 0, 1)
+  local c1 = 1.70158
+  local c3 = c1 + 1
+  local value = tValue - 1
+  return 1 + c3 * value * value * value + c1 * value * value
+end
+
+local function pointInRect(x, y, rect)
+  return rect and x >= rect.x and x <= rect.x + rect.w and y >= rect.y and y <= rect.y + rect.h
+end
+
+local function randomOffscreenPoint(rng, index)
+  local side = ((index - 1) % 4) + 1
+  local margin = 120
+  local function randomInt(minValue, maxValue)
+    if rng and type(rng.random) == "function" then
+      return rng:random(minValue, maxValue)
+    end
+    return math.random(minValue, maxValue)
+  end
+  if side == 1 then
+    return randomInt(-margin, Constants.BASE_WORLD_W + margin), -margin
+  end
+  if side == 2 then
+    return Constants.BASE_WORLD_W + margin, randomInt(-margin, Constants.BASE_WORLD_H + margin)
+  end
+  if side == 3 then
+    return randomInt(-margin, Constants.BASE_WORLD_W + margin), Constants.BASE_WORLD_H + margin
+  end
+  return -margin, randomInt(-margin, Constants.BASE_WORLD_H + margin)
+end
+
+function SingleWaveScene.new(app)
+  local instance = {
+    _app = app,
+    _profile = nil,
+    _waveManager = nil,
+    _core = nil,
+    _lastLanguage = app:getLanguage(),
+    _statusText = "",
+    _statusColor = Constants.COLOR_TEXT_SUB,
+
+    _isUpgradePending = false,
+    _isUpgradeOverlayVisible = false,
+    _isUpgradeHiddenByEsc = false,
+    _upgradeOptionList = {},
+    _upgradeButtonList = {},
+    _selectedUpgradeIndex = nil,
+    _confirmUpgradeButton = nil,
+    _reopenUpgradeButton = nil,
+
+    _isPauseOverlayVisible = false,
+    _pauseResumeButton = nil,
+    _pauseLobbyButton = nil,
+    _pauseResetButton = nil,
+    _pauseSettingsButton = nil,
+
+    _isSettingsOverlayVisible = false,
+    _settingsModeWindowedButton = nil,
+    _settingsModeFullscreenButton = nil,
+    _settingsLanguageKoButton = nil,
+    _settingsLanguageEnButton = nil,
+    _settingsSaveButton = nil,
+    _settingsCancelButton = nil,
+    _settingsDisplayMode = Constants.DISPLAY_MODE_WINDOWED,
+    _settingsLanguage = "ko",
+
+    _isRunEnded = false,
+    _runEndResult = nil,
+
+    _relicScrollOffset = 0,
+    _isRelicPanelDragging = false,
+    _isRelicScrollbarDragging = false,
+    _relicDragStartY = 0,
+    _relicDragStartOffset = 0,
+
+    _intro = {
+      isActive = false,
+      phase = "none",
+      phaseElapsedSec = 0,
+      panelElapsedSec = 0,
+      cardVisualList = {},
+      dealVisualList = {}
+    }
+  }
+  setmetatable(instance, SingleWaveScene)
+  instance:rebuildLocalizedUi()
+  return instance
+end
+
+function SingleWaveScene:setStatus(text, color)
+  self._statusText = tostring(text or "")
+  self._statusColor = color or Constants.COLOR_TEXT_SUB
+end
+
+function SingleWaveScene:loadProfileOrDefault()
+  local profile, loadError = SingleProfileStore.load()
+  self._profile = SingleProfileStore.ensureDefaults(profile)
+  if loadError then
+    self:setStatus(t("single.wave.status.profile_recovered"), Constants.COLOR_TEXT_SUB)
+  end
+end
+
+function SingleWaveScene:buildIntroCardVisuals()
+  local cardVisualList = {}
+  local centerX = Constants.BASE_WORLD_W * 0.5
+  local centerY = Constants.BASE_WORLD_H * 0.5
+  local count = 12
+  local rng = self._waveManager and self._waveManager:getRng() or nil
+  for index = 1, count do
+    local startX, startY = randomOffscreenPoint(rng, index)
+    cardVisualList[#cardVisualList + 1] = {
+      startX = startX,
+      startY = startY,
+      endX = centerX,
+      endY = centerY,
+      delaySec = (index - 1) * 0.07
+    }
+  end
+  return cardVisualList
+end
+
+function SingleWaveScene:buildDealVisualTargets()
+  local list = {}
+  local count = 5
+  local spacing = 132
+  local centerX = Constants.BASE_WORLD_W * 0.5
+  local y = Constants.BASE_WORLD_H - 72
+  for index = 1, count do
+    local offset = (index - (count + 1) * 0.5) * spacing
+    list[#list + 1] = {
+      x = centerX + offset,
+      y = y,
+      delaySec = (index - 1) * 0.12
+    }
+  end
+  return list
+end
+
+function SingleWaveScene:startIntroSequence()
+  self._intro = {
+    isActive = true,
+    phase = "panels",
+    phaseElapsedSec = 0,
+    panelElapsedSec = 0,
+    cardVisualList = self:buildIntroCardVisuals(),
+    dealVisualList = self:buildDealVisualTargets()
+  }
+  self._core = nil
+  self._isPauseOverlayVisible = false
+  self._isSettingsOverlayVisible = false
+  self._isUpgradePending = false
+  self._isUpgradeOverlayVisible = false
+  self._isUpgradeHiddenByEsc = false
+  self._upgradeOptionList = {}
+  self._upgradeButtonList = {}
+  self._selectedUpgradeIndex = nil
+  self._isRunEnded = false
+  self._runEndResult = nil
+  self:setStatus(t("single.wave.status.intro_playing"), Constants.COLOR_TEXT_SUB)
+end
+
+function SingleWaveScene:startRun()
+  self:loadProfileOrDefault()
+  self._waveManager = SingleWaveManager.new(self._profile)
+  self._relicScrollOffset = 0
+  self:startIntroSequence()
+end
+
+function SingleWaveScene:startCurrentWaveCombat()
+  local nodeType = self._waveManager:getCurrentNodeType()
+  local nodeId = self._waveManager:getCurrentNodeId()
+  local stageIndex = self._waveManager:getStageIndex()
+  self._core = SingleCombatCore.new({
+    app = self._app,
+    profile = self._profile,
+    runState = self._waveManager:getRuntimeState(),
+    nodeType = nodeType,
+    nodeId = nodeId,
+    stageIndex = stageIndex,
+    disableTurnTimer = true,
+    suppressHud = true,
+    initialHandCardIdList = self._waveManager:getHandCardIdList(),
+    onCardConsumed = function(saveCardId)
+      self._waveManager:addConsumedCard(saveCardId)
+    end,
+    onShotResolved = function(meta)
+      self:onShotResolved(meta)
+    end,
+    onCombatEnd = function(result)
+      self:onWaveCombatEnd(result)
+    end
+  })
+  self:setStatus(t("single.wave.status.wave_start", {
+    wave = tostring(self._waveManager:getWaveIndex())
+  }), Constants.COLOR_TEXT_SUB)
+end
+
+function SingleWaveScene:onShotResolved(meta)
+  if type(meta) ~= "table" then
+    return
+  end
+  if tonumber(meta.ownerPlayerIndex) ~= 1 then
+    return
+  end
+  local enemyOut = math.max(0, math.floor(tonumber(meta.enemyOut) or 0))
+  self._waveManager:addEnemiesKilled(enemyOut)
+  self._waveManager:updateCombo(enemyOut)
+end
+
+function SingleWaveScene:openUpgradeOverlay()
+  self._isUpgradePending = true
+  self._isUpgradeOverlayVisible = true
+  self._isUpgradeHiddenByEsc = false
+  self._selectedUpgradeIndex = nil
+  self._upgradeOptionList = UpgradeDraft.build({
+    rng = self._waveManager:getRng(),
+    relicIdList = self._waveManager:getRelicIdList()
+  })
+  self:rebuildUpgradeButtons()
+  self:setStatus(t("single.wave.upgrade.status.choose"), Constants.COLOR_TEXT_SUB)
+end
+
+function SingleWaveScene:onWaveCombatEnd(result)
+  if self._core then
+    self._waveManager:setHandCardIdList(self._core:getCurrentHandCardIdList())
+  end
+  self._core = nil
+
+  if result == "win" then
+    self:openUpgradeOverlay()
+    return
+  end
+
+  self._isRunEnded = true
+  self._runEndResult = (result == "draw") and "draw" or "lose"
+  self:setStatus(t("single.wave.status.run_end"), Constants.COLOR_DANGER)
+end
+
+function SingleWaveScene:getPanelX(panelId)
+  local layout = PANEL_LAYOUT[panelId]
+  if not layout then
+    return 0
+  end
+  if not self._intro.isActive and self._intro.phase ~= "panels" then
+    return layout.x
+  end
+  local durationSec = 0.52
+  local delaySec = (layout.order - 1) * 0.14
+  local progress = clamp((self._intro.panelElapsedSec - delaySec) / durationSec, 0, 1)
+  local eased = easeOutBack(progress)
+  return lerp(-layout.w - 56, layout.x, eased)
+end
+
+function SingleWaveScene:getRelicListViewportRect()
+  local panelX = self:getPanelX("relic")
+  local panel = PANEL_LAYOUT.relic
+  return {
+    x = panelX + 14,
+    y = panel.y + 56,
+    w = panel.w - 32,
+    h = panel.h - 72
+  }
+end
+
+function SingleWaveScene:getRelicScrollMetrics()
+  local viewport = self:getRelicListViewportRect()
+  local relicList = self._waveManager and self._waveManager:getRelicBuffEntryList() or {}
+  local lineHeight = 22
+  local contentHeight = #relicList * lineHeight
+  local maxOffset = math.max(0, contentHeight - viewport.h)
+  local ratio = (contentHeight > 0) and clamp(viewport.h / contentHeight, 0, 1) or 1
+  local handleHeight = math.max(26, viewport.h * ratio)
+  local handleTravel = math.max(0, viewport.h - handleHeight)
+  local offsetRatio = (maxOffset > 0) and (self._relicScrollOffset / maxOffset) or 0
+  local handleY = viewport.y + handleTravel * offsetRatio
+  return {
+    viewport = viewport,
+    contentHeight = contentHeight,
+    maxOffset = maxOffset,
+    lineHeight = lineHeight,
+    handleRect = {
+      x = viewport.x + viewport.w - 8,
+      y = handleY,
+      w = 8,
+      h = handleHeight
+    }
+  }
+end
+
+function SingleWaveScene:scrollRelicList(delta)
+  local metrics = self:getRelicScrollMetrics()
+  self._relicScrollOffset = clamp(self._relicScrollOffset + delta, 0, metrics.maxOffset)
+end
+
+function SingleWaveScene:scrollRelicListToBottom()
+  local metrics = self:getRelicScrollMetrics()
+  self._relicScrollOffset = metrics.maxOffset
+end
+
+function SingleWaveScene:applyUpgradeOption(option)
+  if type(option) ~= "table" then
+    return false
+  end
+
+  if option.category == UpgradeDraft.CATEGORY_CARD then
+    local cardId = option.payload and option.payload.cardId
+    local isAdded, target = self._waveManager:addCardReward(cardId, HAND_MAX_COUNT)
+    if not isAdded then
+      self:setStatus(t("single.wave.upgrade.status.apply_failed"), Constants.COLOR_DANGER)
+      return false
+    end
+    if target == "hand" then
+      self:setStatus(t("single.wave.upgrade.status.card_to_hand"), Constants.COLOR_TEXT_SUB)
+    else
+      self:setStatus(t("single.wave.upgrade.status.card_to_deck"), Constants.COLOR_TEXT_SUB)
+    end
+    return true
+  end
+
+  if option.category == UpgradeDraft.CATEGORY_RELIC then
+    local relicId = option.payload and option.payload.relicId
+    local isAdded = self._waveManager:addRelic(relicId)
+    if isAdded then
+      self:scrollRelicListToBottom()
+      self:setStatus(t("single.wave.upgrade.status.relic_added"), Constants.COLOR_TEXT_SUB)
+    else
+      self:setStatus(t("single.wave.upgrade.status.relic_skip"), Constants.COLOR_TEXT_SUB)
+    end
+    return true
+  end
+
+  if option.category == UpgradeDraft.CATEGORY_HAND_OP then
+    local handOpId = option.payload and option.payload.handOpId
+    local result = self._waveManager:applyHandOperation(handOpId, HAND_MAX_COUNT)
+    if result.isApplied then
+      self:setStatus(t("single.wave.upgrade.status.hand_op_applied"), Constants.COLOR_TEXT_SUB)
+      return true
+    end
+    self:setStatus(t("single.wave.upgrade.status.apply_failed"), Constants.COLOR_DANGER)
+    return false
+  end
+
+  return false
+end
+
+function SingleWaveScene:confirmUpgradeSelection()
+  if not self._isUpgradeOverlayVisible or not self._isUpgradePending then
+    return
+  end
+  if not self._selectedUpgradeIndex then
+    self:setStatus(t("single.wave.upgrade.status.select_required"), Constants.COLOR_DANGER)
+    return
+  end
+  local option = self._upgradeOptionList[self._selectedUpgradeIndex]
+  if not self:applyUpgradeOption(option) then
+    return
+  end
+
+  self._isUpgradePending = false
+  self._isUpgradeOverlayVisible = false
+  self._isUpgradeHiddenByEsc = false
+  self._selectedUpgradeIndex = nil
+  self._upgradeOptionList = {}
+  self._upgradeButtonList = {}
+  self._waveManager:advanceWave()
+  self:startCurrentWaveCombat()
+end
+
+function SingleWaveScene:rebuildUpgradeButtons()
+  self._upgradeButtonList = {}
+  local count = math.max(1, #self._upgradeOptionList)
+  local buttonWidth = 256
+  local buttonHeight = 196
+  local gap = 22
+  local totalWidth = count * buttonWidth + (count - 1) * gap
+  local startX = (Constants.BASE_WORLD_W - totalWidth) * 0.5
+  local y = 224
+  for index = 1, count do
+    self._upgradeButtonList[index] = Button.new({
+      x = startX + (index - 1) * (buttonWidth + gap),
+      y = y,
+      w = buttonWidth,
+      h = buttonHeight,
+      label = "",
+      onClick = function()
+        self._selectedUpgradeIndex = index
+      end
+    })
+  end
+end
+
+function SingleWaveScene:getUpgradeOptionTitle(option)
+  if type(option) ~= "table" then
+    return "-"
+  end
+  if option.titleKey and option.titleKey ~= "" then
+    local translated = t(option.titleKey)
+    if type(translated) == "string" and not translated:find("^%[%[missing:") then
+      return translated
+    end
+  end
+  if option.category == UpgradeDraft.CATEGORY_RELIC and option.payload and option.payload.relicId then
+    local key = "single.relic.name." .. tostring(option.payload.relicId)
+    local translated = t(key)
+    if type(translated) == "string" and not translated:find("^%[%[missing:") then
+      return translated
+    end
+  end
+  return tostring(option.titleText or option.optionId or "-")
+end
+
+function SingleWaveScene:getUpgradeOptionDesc(option)
+  if type(option) ~= "table" then
+    return ""
+  end
+  if option.descKey and option.descKey ~= "" then
+    local translated = t(option.descKey)
+    if type(translated) == "string" and not translated:find("^%[%[missing:") then
+      return translated
+    end
+  end
+  if option.category == UpgradeDraft.CATEGORY_RELIC and option.payload and option.payload.relicId then
+    local key = "single.relic.desc." .. tostring(option.payload.relicId)
+    local translated = t(key)
+    if type(translated) == "string" and not translated:find("^%[%[missing:") then
+      return translated
+    end
+  end
+  return tostring(option.descText or "")
+end
+
+function SingleWaveScene:getUpgradeCategoryLabel(option)
+  if not option then
+    return ""
+  end
+  if option.category == UpgradeDraft.CATEGORY_CARD then
+    return t("single.wave.upgrade.category.card")
+  end
+  if option.category == UpgradeDraft.CATEGORY_RELIC then
+    return t("single.wave.upgrade.category.relic")
+  end
+  return t("single.wave.upgrade.category.hand_ops")
+end
+
+function SingleWaveScene:openSettingsOverlay()
+  self._isSettingsOverlayVisible = true
+  self._settingsDisplayMode = self._app:getDisplayMode()
+  self._settingsLanguage = self._app:getLanguage()
+end
+
+function SingleWaveScene:closeSettingsOverlay()
+  self._isSettingsOverlayVisible = false
+end
+
+function SingleWaveScene:applySettingsOverlay()
+  local isSaved, warning = self._app:savePersistentSettings({
+    displayMode = self._settingsDisplayMode,
+    language = self._settingsLanguage
+  })
+  if not isSaved then
+    self:setStatus(tostring(warning or ""), Constants.COLOR_DANGER)
+    return
+  end
+  if warning then
+    self:setStatus(tostring(warning), Constants.COLOR_TEXT_SUB)
+  else
+    self:setStatus(t("single.wave.pause.status.settings_saved"), Constants.COLOR_TEXT_SUB)
+  end
+  self:closeSettingsOverlay()
+  self:rebuildLocalizedUi()
+end
+
+function SingleWaveScene:rebuildLocalizedUi()
+  self._lastLanguage = self._app:getLanguage()
+
+  self._confirmUpgradeButton = Button.new({
+    x = (Constants.BASE_WORLD_W - 280) * 0.5,
+    y = 542,
+    w = 280,
+    h = 52,
+    label = t("single.wave.upgrade.button.confirm"),
+    onClick = function()
+      self:confirmUpgradeSelection()
+    end
+  })
+
+  self._reopenUpgradeButton = Button.new({
+    x = (Constants.BASE_WORLD_W - 260) * 0.5,
+    y = (Constants.BASE_WORLD_H - 48) * 0.5,
+    w = 260,
+    h = 48,
+    label = t("single.wave.upgrade.button.reopen"),
+    onClick = function()
+      self._isUpgradeOverlayVisible = true
+      self._isUpgradeHiddenByEsc = false
+    end
+  })
+
+  self._pauseResumeButton = Button.new({
+    x = (Constants.BASE_WORLD_W - 260) * 0.5,
+    y = 252,
+    w = 260,
+    h = 46,
+    label = t("single.wave.pause.button.resume"),
+    onClick = function()
+      self._isPauseOverlayVisible = false
+    end
+  })
+
+  self._pauseLobbyButton = Button.new({
+    x = (Constants.BASE_WORLD_W - 260) * 0.5,
+    y = 304,
+    w = 260,
+    h = 46,
+    label = t("single.wave.pause.button.lobby"),
+    onClick = function()
+      self._app:goScene("lobby", nil, Config.TRANSITION_BACK)
+    end
+  })
+
+  self._pauseResetButton = Button.new({
+    x = (Constants.BASE_WORLD_W - 260) * 0.5,
+    y = 356,
+    w = 260,
+    h = 46,
+    label = t("single.wave.pause.button.reset"),
+    onClick = function()
+      self:startRun()
+    end
+  })
+
+  self._pauseSettingsButton = Button.new({
+    x = (Constants.BASE_WORLD_W - 260) * 0.5,
+    y = 408,
+    w = 260,
+    h = 46,
+    label = t("single.wave.pause.button.settings"),
+    onClick = function()
+      self:openSettingsOverlay()
+    end
+  })
+
+  local panelX = (Constants.BASE_WORLD_W - 560) * 0.5
+  local panelY = 186
+  self._settingsModeWindowedButton = Button.new({
+    x = panelX + 40,
+    y = panelY + 92,
+    w = 230,
+    h = 42,
+    label = t("lobby.display_mode.option_windowed"),
+    onClick = function()
+      self._settingsDisplayMode = Constants.DISPLAY_MODE_WINDOWED
+    end
+  })
+
+  self._settingsModeFullscreenButton = Button.new({
+    x = panelX + 290,
+    y = panelY + 92,
+    w = 230,
+    h = 42,
+    label = t("lobby.display_mode.option_fullscreen"),
+    onClick = function()
+      self._settingsDisplayMode = Constants.DISPLAY_MODE_FULLSCREEN
+    end
+  })
+
+  self._settingsLanguageKoButton = Button.new({
+    x = panelX + 40,
+    y = panelY + 156,
+    w = 230,
+    h = 42,
+    label = t("lobby.language.option_ko"),
+    onClick = function()
+      self._settingsLanguage = "ko"
+    end
+  })
+
+  self._settingsLanguageEnButton = Button.new({
+    x = panelX + 290,
+    y = panelY + 156,
+    w = 230,
+    h = 42,
+    label = t("lobby.language.option_en"),
+    onClick = function()
+      self._settingsLanguage = "en"
+    end
+  })
+
+  self._settingsSaveButton = Button.new({
+    x = panelX + 96,
+    y = panelY + 252,
+    w = 160,
+    h = 44,
+    label = t("common.button.save"),
+    onClick = function()
+      self:applySettingsOverlay()
+    end
+  })
+
+  self._settingsCancelButton = Button.new({
+    x = panelX + 304,
+    y = panelY + 252,
+    w = 160,
+    h = 44,
+    label = t("common.button.cancel"),
+    onClick = function()
+      self:closeSettingsOverlay()
+    end
+  })
+
+  self:rebuildUpgradeButtons()
+end
+
+function SingleWaveScene:enter(_params)
+  self:rebuildLocalizedUi()
+  self:startRun()
+end
+
+function SingleWaveScene:updateIntro(dt)
+  self._intro.panelElapsedSec = self._intro.panelElapsedSec + dt
+  self._intro.phaseElapsedSec = self._intro.phaseElapsedSec + dt
+
+  if self._intro.phase == "panels" and self._intro.phaseElapsedSec >= 0.82 then
+    self._intro.phase = "cards_to_center"
+    self._intro.phaseElapsedSec = 0
+    return
+  end
+  if self._intro.phase == "cards_to_center" and self._intro.phaseElapsedSec >= 1.36 then
+    self._intro.phase = "shuffle"
+    self._intro.phaseElapsedSec = 0
+    return
+  end
+  if self._intro.phase == "shuffle" and self._intro.phaseElapsedSec >= 0.52 then
+    self._intro.phase = "deal"
+    self._intro.phaseElapsedSec = 0
+    return
+  end
+  if self._intro.phase == "deal" and self._intro.phaseElapsedSec >= 1.22 then
+    self._waveManager:drawCardsToHand(5, HAND_MAX_COUNT)
+    self._intro.phase = "deck_move"
+    self._intro.phaseElapsedSec = 0
+    return
+  end
+  if self._intro.phase == "deck_move" and self._intro.phaseElapsedSec >= 0.58 then
+    self._intro.isActive = false
+    self._intro.phase = "done"
+    self._intro.phaseElapsedSec = 0
+    self:startCurrentWaveCombat()
+  end
+end
+
+function SingleWaveScene:update(dt)
+  if self._lastLanguage ~= self._app:getLanguage() then
+    self:rebuildLocalizedUi()
+  end
+
+  if self._intro.isActive then
+    self:updateIntro(dt)
+    return
+  end
+
+  local mouseX, mouseY = self._app:getMouseWorldPosition()
+  if self._core and (not self._isPauseOverlayVisible) and (not self._isUpgradeOverlayVisible) and (not self._isUpgradePending) and (not self._isSettingsOverlayVisible) then
+    self._core:update(dt, mouseX, mouseY)
+  end
+end
+
+function SingleWaveScene:drawPanel(panelId)
+  local layout = PANEL_LAYOUT[panelId]
+  local x = self:getPanelX(panelId)
+  love.graphics.setColor(Constants.COLOR_PANEL)
+  love.graphics.rectangle("fill", x, layout.y, layout.w, layout.h, 8, 8)
+  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+  love.graphics.rectangle("line", x, layout.y, layout.w, layout.h, 8, 8)
+  return x, layout.y, layout.w, layout.h
+end
+
+function SingleWaveScene:drawWavePanel()
+  local x, y, w, _ = self:drawPanel("wave")
+  love.graphics.setFont(FontManager.getFont("ui"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.printf(t("single.wave.hud.wave_title"), x + 12, y + 10, w - 24, "left")
+  love.graphics.setFont(FontManager.getFont("title"))
+  love.graphics.printf(t("single.wave.hud.wave_value", {
+    wave = tostring(self._waveManager and self._waveManager:getWaveIndex() or 1)
+  }), x + 12, y + 42, w - 24, "left")
+end
+
+function SingleWaveScene:drawScorePanel()
+  local x, y, w, _ = self:drawPanel("score")
+  local score = self._waveManager and self._waveManager:getScoreSnapshot() or { maxCombo = 0, enemiesKilled = 0 }
+  love.graphics.setFont(FontManager.getFont("ui"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.printf(t("single.wave.hud.score_title"), x + 12, y + 10, w - 24, "left")
+  love.graphics.setFont(FontManager.getFont("small"))
+  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+  love.graphics.printf(t("single.wave.hud.max_combo", {
+    value = tostring(score.maxCombo)
+  }), x + 12, y + 48, w - 24, "left")
+  love.graphics.printf(t("single.wave.hud.enemies_killed", {
+    value = tostring(score.enemiesKilled)
+  }), x + 12, y + 76, w - 24, "left")
+end
+
+function SingleWaveScene:drawRelicPanel()
+  local x, y, w, _ = self:drawPanel("relic")
+  love.graphics.setFont(FontManager.getFont("ui"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.printf(t("single.wave.hud.relic_title"), x + 12, y + 10, w - 24, "left")
+
+  local metrics = self:getRelicScrollMetrics()
+  local viewport = metrics.viewport
+  local relicList = self._waveManager and self._waveManager:getRelicBuffEntryList() or {}
+  local previousScissorX, previousScissorY, previousScissorW, previousScissorH = love.graphics.getScissor()
+  love.graphics.setScissor(viewport.x, viewport.y, viewport.w, viewport.h)
+  love.graphics.setFont(FontManager.getFont("small"))
+  for index, relic in ipairs(relicList) do
+    local relicId = tostring(relic.relicId or "")
+    local lineY = viewport.y + (index - 1) * metrics.lineHeight - self._relicScrollOffset
+    local nameText = t("single.relic.name." .. relicId)
+    if type(nameText) ~= "string" or nameText:find("^%[%[missing:") then
+      nameText = relicId
+    end
+    local descText = t("single.relic.desc." .. relicId)
+    if type(descText) ~= "string" or descText:find("^%[%[missing:") then
+      descText = ""
+    end
+    love.graphics.setColor(Constants.COLOR_TEXT)
+    love.graphics.print(nameText, viewport.x + 2, lineY)
+    love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+    love.graphics.print(descText, viewport.x + 2, lineY + 12)
+  end
+  if previousScissorW then
+    love.graphics.setScissor(previousScissorX, previousScissorY, previousScissorW, previousScissorH)
+  else
+    love.graphics.setScissor()
+  end
+
+  if metrics.maxOffset > 0 then
+    love.graphics.setColor(0.18, 0.20, 0.26, 1.0)
+    love.graphics.rectangle("fill", metrics.handleRect.x, viewport.y, metrics.handleRect.w, viewport.h, 4, 4)
+    love.graphics.setColor(Constants.COLOR_BUTTON_HOVER)
+    love.graphics.rectangle("fill", metrics.handleRect.x, metrics.handleRect.y, metrics.handleRect.w, metrics.handleRect.h, 4, 4)
+  end
+end
+
+function SingleWaveScene:drawDeckZone()
+  love.graphics.setColor(Constants.COLOR_PANEL)
+  love.graphics.rectangle("fill", DECK_ZONE_RECT.x, DECK_ZONE_RECT.y, DECK_ZONE_RECT.w, DECK_ZONE_RECT.h, 10, 10)
+  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+  love.graphics.rectangle("line", DECK_ZONE_RECT.x, DECK_ZONE_RECT.y, DECK_ZONE_RECT.w, DECK_ZONE_RECT.h, 10, 10)
+  love.graphics.setFont(FontManager.getFont("ui"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.printf(t("single.wave.hud.deck_title"), DECK_ZONE_RECT.x, DECK_ZONE_RECT.y + 16, DECK_ZONE_RECT.w, "center")
+  love.graphics.setFont(FontManager.getFont("small"))
+  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+  love.graphics.printf(t("single.wave.hud.deck_count", {
+    drawCount = tostring(self._waveManager and self._waveManager:getDrawPileCount() or 0),
+    discardCount = tostring(self._waveManager and self._waveManager:getDiscardPileCount() or 0),
+    handCount = tostring(self._waveManager and self._waveManager:getHandCount() or 0),
+    handMax = tostring(HAND_MAX_COUNT)
+  }), DECK_ZONE_RECT.x + 8, DECK_ZONE_RECT.y + 54, DECK_ZONE_RECT.w - 16, "center")
+
+  local stackX = DECK_ZONE_RECT.x + DECK_ZONE_RECT.w * 0.5
+  local stackY = DECK_ZONE_RECT.y + DECK_ZONE_RECT.h * 0.5 + 18
+  for depth = 1, 4 do
+    love.graphics.setColor(0.21, 0.28, 0.44, 0.95)
+    love.graphics.rectangle("fill", stackX - 36 + depth * 2, stackY - 52 + depth * 2, 72, 104, 7, 7)
+    love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+    love.graphics.rectangle("line", stackX - 36 + depth * 2, stackY - 52 + depth * 2, 72, 104, 7, 7)
+  end
+end
+
+function SingleWaveScene:drawIntroOverlay()
+  local centerX = Constants.BASE_WORLD_W * 0.5
+  local centerY = Constants.BASE_WORLD_H * 0.5
+  local phase = self._intro.phase
+  local elapsed = self._intro.phaseElapsedSec
+
+  if phase == "cards_to_center" then
+    for _, card in ipairs(self._intro.cardVisualList) do
+      local progress = clamp((elapsed - card.delaySec) / 0.54, 0, 1)
+      if progress > 0 then
+        local eased = easeOutCubic(progress)
+        local x = lerp(card.startX, card.endX, eased)
+        local y = lerp(card.startY, card.endY, eased)
+        love.graphics.setColor(0.20, 0.31, 0.55, 0.96)
+        love.graphics.rectangle("fill", x - 30, y - 44, 60, 88, 6, 6)
+        love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+        love.graphics.rectangle("line", x - 30, y - 44, 60, 88, 6, 6)
+      end
+    end
+  end
+
+  if phase == "shuffle" or phase == "deal" or phase == "deck_move" then
+    local shakeX = 0
+    if phase == "shuffle" then
+      shakeX = math.sin(elapsed * 32) * 18
+    end
+    local deckX = centerX + shakeX
+    local deckY = centerY
+    if phase == "deck_move" then
+      local moveProgress = clamp(elapsed / 0.58, 0, 1)
+      local eased = easeOutCubic(moveProgress)
+      deckX = lerp(centerX, DECK_ZONE_RECT.x + DECK_ZONE_RECT.w * 0.5, eased)
+      deckY = lerp(centerY, DECK_ZONE_RECT.y + DECK_ZONE_RECT.h * 0.5 + 20, eased)
+    end
+    for depth = 1, 5 do
+      love.graphics.setColor(0.20, 0.31, 0.55, 0.96)
+      love.graphics.rectangle("fill", deckX - 35 + depth * 2, deckY - 52 + depth * 2, 70, 102, 6, 6)
+      love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+      love.graphics.rectangle("line", deckX - 35 + depth * 2, deckY - 52 + depth * 2, 70, 102, 6, 6)
+    end
+  end
+
+  if phase == "deal" then
+    for _, target in ipairs(self._intro.dealVisualList) do
+      local progress = clamp((elapsed - target.delaySec) / 0.38, 0, 1)
+      if progress > 0 then
+        local eased = easeOutCubic(progress)
+        local x = lerp(centerX, target.x, eased)
+        local y = lerp(centerY, target.y, eased)
+        love.graphics.setColor(0.20, 0.31, 0.55, 0.96)
+        love.graphics.rectangle("fill", x - 31, y - 45, 62, 90, 6, 6)
+        love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+        love.graphics.rectangle("line", x - 31, y - 45, 62, 90, 6, 6)
+      end
+    end
+  end
+end
+
+function SingleWaveScene:drawUpgradeOverlay(mouseX, mouseY)
+  love.graphics.setColor(0, 0, 0, 0.62)
+  love.graphics.rectangle("fill", 0, 0, Constants.BASE_WORLD_W, Constants.BASE_WORLD_H)
+  love.graphics.setColor(Constants.COLOR_PANEL)
+  love.graphics.rectangle("fill", 108, 118, Constants.BASE_WORLD_W - 216, Constants.BASE_WORLD_H - 188, 12, 12)
+  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+  love.graphics.rectangle("line", 108, 118, Constants.BASE_WORLD_W - 216, Constants.BASE_WORLD_H - 188, 12, 12)
+
+  love.graphics.setFont(FontManager.getFont("title"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.printf(t("single.wave.upgrade.title"), 0, 138, Constants.BASE_WORLD_W, "center")
+  love.graphics.setFont(FontManager.getFont("small"))
+  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+  love.graphics.printf(t("single.wave.upgrade.subtitle"), 0, 182, Constants.BASE_WORLD_W, "center")
+
+  for index, button in ipairs(self._upgradeButtonList) do
+    local option = self._upgradeOptionList[index]
+    button.isPressed = self._selectedUpgradeIndex == index
+    button:draw(mouseX, mouseY)
+    love.graphics.setFont(FontManager.getFont("small"))
+    love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+    love.graphics.printf(self:getUpgradeCategoryLabel(option), button.x + 12, button.y + 12, button.w - 24, "left")
+    love.graphics.setFont(FontManager.getFont("ui"))
+    love.graphics.setColor(Constants.COLOR_TEXT)
+    love.graphics.printf(self:getUpgradeOptionTitle(option), button.x + 12, button.y + 42, button.w - 24, "left")
+    love.graphics.setFont(FontManager.getFont("small"))
+    love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+    love.graphics.printf(self:getUpgradeOptionDesc(option), button.x + 12, button.y + 84, button.w - 24, "left")
+  end
+
+  self._confirmUpgradeButton.isEnabled = self._selectedUpgradeIndex ~= nil
+  self._confirmUpgradeButton:draw(mouseX, mouseY)
+end
+
+function SingleWaveScene:drawPauseOverlay(mouseX, mouseY)
+  love.graphics.setColor(0, 0, 0, 0.56)
+  love.graphics.rectangle("fill", 0, 0, Constants.BASE_WORLD_W, Constants.BASE_WORLD_H)
+  love.graphics.setColor(Constants.COLOR_PANEL)
+  love.graphics.rectangle("fill", 438, 188, 404, 296, 12, 12)
+  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+  love.graphics.rectangle("line", 438, 188, 404, 296, 12, 12)
+  love.graphics.setFont(FontManager.getFont("title"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.printf(t("single.wave.pause.title"), 438, 206, 404, "center")
+  self._pauseResumeButton:draw(mouseX, mouseY)
+  self._pauseLobbyButton:draw(mouseX, mouseY)
+  self._pauseResetButton:draw(mouseX, mouseY)
+  self._pauseSettingsButton:draw(mouseX, mouseY)
+end
+
+function SingleWaveScene:drawSettingsOverlay(mouseX, mouseY)
+  love.graphics.setColor(0, 0, 0, 0.64)
+  love.graphics.rectangle("fill", 0, 0, Constants.BASE_WORLD_W, Constants.BASE_WORLD_H)
+  local panelX = (Constants.BASE_WORLD_W - 560) * 0.5
+  local panelY = 186
+  love.graphics.setColor(Constants.COLOR_PANEL)
+  love.graphics.rectangle("fill", panelX, panelY, 560, 320, 12, 12)
+  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+  love.graphics.rectangle("line", panelX, panelY, 560, 320, 12, 12)
+  love.graphics.setFont(FontManager.getFont("title"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.printf(t("lobby.overlay.settings.title"), panelX, panelY + 16, 560, "center")
+  love.graphics.setFont(FontManager.getFont("small"))
+  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+  love.graphics.printf(t("lobby.overlay.settings.display_mode"), panelX + 40, panelY + 72, 480, "left")
+  love.graphics.printf(t("lobby.overlay.settings.language"), panelX + 40, panelY + 136, 480, "left")
+
+  self._settingsModeWindowedButton.isPressed = self._settingsDisplayMode == Constants.DISPLAY_MODE_WINDOWED
+  self._settingsModeFullscreenButton.isPressed = self._settingsDisplayMode == Constants.DISPLAY_MODE_FULLSCREEN
+  self._settingsLanguageKoButton.isPressed = self._settingsLanguage == "ko"
+  self._settingsLanguageEnButton.isPressed = self._settingsLanguage == "en"
+  self._settingsModeWindowedButton:draw(mouseX, mouseY)
+  self._settingsModeFullscreenButton:draw(mouseX, mouseY)
+  self._settingsLanguageKoButton:draw(mouseX, mouseY)
+  self._settingsLanguageEnButton:draw(mouseX, mouseY)
+  self._settingsSaveButton:draw(mouseX, mouseY)
+  self._settingsCancelButton:draw(mouseX, mouseY)
+end
+
+function SingleWaveScene:drawRunEndOverlay(mouseX, mouseY)
+  love.graphics.setColor(0, 0, 0, 0.52)
+  love.graphics.rectangle("fill", 0, 0, Constants.BASE_WORLD_W, Constants.BASE_WORLD_H)
+  love.graphics.setColor(Constants.COLOR_PANEL)
+  love.graphics.rectangle("fill", 408, 238, 464, 214, 12, 12)
+  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+  love.graphics.rectangle("line", 408, 238, 464, 214, 12, 12)
+  love.graphics.setFont(FontManager.getFont("title"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  local titleKey = (self._runEndResult == "draw") and "single.wave.result.draw" or "single.wave.result.lose"
+  love.graphics.printf(t(titleKey), 408, 264, 464, "center")
+  love.graphics.setFont(FontManager.getFont("small"))
+  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+  love.graphics.printf(t("single.wave.result.subtitle"), 408, 312, 464, "center")
+  self._pauseLobbyButton:draw(mouseX, mouseY)
+  self._pauseResetButton:draw(mouseX, mouseY)
+end
+
+function SingleWaveScene:draw()
+  local mouseX, mouseY = self._app:getMouseWorldPosition()
+
+  if self._core then
+    self._core:draw(mouseX, mouseY)
+  else
+    local boardX = (Constants.BASE_WORLD_W - Constants.BOARD_W) * 0.5
+    local boardY = (Constants.BASE_WORLD_H - Constants.BOARD_H) * 0.5
+    love.graphics.setColor(Constants.COLOR_PANEL)
+    love.graphics.rectangle("fill", boardX, boardY, Constants.BOARD_W, Constants.BOARD_H, 8, 8)
+    love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+    love.graphics.rectangle("line", boardX, boardY, Constants.BOARD_W, Constants.BOARD_H, 8, 8)
+  end
+
+  self:drawWavePanel()
+  self:drawScorePanel()
+  self:drawRelicPanel()
+  self:drawDeckZone()
+
+  love.graphics.setFont(FontManager.getFont("title"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.printf(t("single.wave.title"), 0, 8, Constants.BASE_WORLD_W, "center")
+
+  love.graphics.setFont(FontManager.getFont("small"))
+  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+  love.graphics.printf(t("single.wave.stage_line", {
+    stage = tostring(self._waveManager and self._waveManager:getStageIndex() or 1),
+    wave = tostring(self._waveManager and self._waveManager:getWaveIndex() or 1)
+  }), 0, 46, Constants.BASE_WORLD_W, "center")
+
+  if self._intro.isActive then
+    self:drawIntroOverlay()
+  end
+
+  if self._isUpgradePending and self._isUpgradeOverlayVisible then
+    self:drawUpgradeOverlay(mouseX, mouseY)
+  elseif self._isUpgradePending and self._isUpgradeHiddenByEsc then
+    love.graphics.setFont(FontManager.getFont("ui"))
+    love.graphics.setColor(Constants.COLOR_DANGER)
+    love.graphics.printf(t("single.wave.upgrade.status.reopen_required"), 0, Constants.BASE_WORLD_H * 0.5 - 42, Constants.BASE_WORLD_W, "center")
+    self._reopenUpgradeButton:draw(mouseX, mouseY)
+  end
+
+  if self._isPauseOverlayVisible then
+    self:drawPauseOverlay(mouseX, mouseY)
+  end
+
+  if self._isSettingsOverlayVisible then
+    self:drawSettingsOverlay(mouseX, mouseY)
+  end
+
+  if self._isRunEnded then
+    self:drawRunEndOverlay(mouseX, mouseY)
+  end
+
+  love.graphics.setFont(FontManager.getFont("small"))
+  love.graphics.setColor(self._statusColor)
+  love.graphics.printf(self._statusText, 0, 694, Constants.BASE_WORLD_W, "center")
+end
+
+function SingleWaveScene:handleRelicScrollMousePressed(mouseX, mouseY, button)
+  if button ~= 1 then
+    return false
+  end
+  local metrics = self:getRelicScrollMetrics()
+  if metrics.maxOffset <= 0 then
+    return false
+  end
+  if pointInRect(mouseX, mouseY, metrics.handleRect) then
+    self._isRelicScrollbarDragging = true
+    self._relicDragStartY = mouseY
+    self._relicDragStartOffset = self._relicScrollOffset
+    return true
+  end
+  if pointInRect(mouseX, mouseY, metrics.viewport) then
+    self._isRelicPanelDragging = true
+    self._relicDragStartY = mouseY
+    self._relicDragStartOffset = self._relicScrollOffset
+    return true
+  end
+  return false
+end
+
+function SingleWaveScene:mousepressed(mouseX, mouseY, button)
+  if self._isSettingsOverlayVisible then
+    if button ~= 1 then
+      return
+    end
+    if self._settingsModeWindowedButton:isHovered(mouseX, mouseY) then
+      self._settingsModeWindowedButton:onClick()
+      return
+    end
+    if self._settingsModeFullscreenButton:isHovered(mouseX, mouseY) then
+      self._settingsModeFullscreenButton:onClick()
+      return
+    end
+    if self._settingsLanguageKoButton:isHovered(mouseX, mouseY) then
+      self._settingsLanguageKoButton:onClick()
+      return
+    end
+    if self._settingsLanguageEnButton:isHovered(mouseX, mouseY) then
+      self._settingsLanguageEnButton:onClick()
+      return
+    end
+    if self._settingsSaveButton:isHovered(mouseX, mouseY) then
+      self._settingsSaveButton:onClick()
+      return
+    end
+    if self._settingsCancelButton:isHovered(mouseX, mouseY) then
+      self._settingsCancelButton:onClick()
+    end
+    return
+  end
+
+  if self._isPauseOverlayVisible then
+    if button ~= 1 then
+      return
+    end
+    if self._pauseResumeButton:isHovered(mouseX, mouseY) then
+      self._pauseResumeButton:onClick()
+      return
+    end
+    if self._pauseLobbyButton:isHovered(mouseX, mouseY) then
+      self._pauseLobbyButton:onClick()
+      return
+    end
+    if self._pauseResetButton:isHovered(mouseX, mouseY) then
+      self._pauseResetButton:onClick()
+      return
+    end
+    if self._pauseSettingsButton:isHovered(mouseX, mouseY) then
+      self._pauseSettingsButton:onClick()
+    end
+    return
+  end
+
+  if self._isRunEnded then
+    if button ~= 1 then
+      return
+    end
+    if self._pauseLobbyButton:isHovered(mouseX, mouseY) then
+      self._pauseLobbyButton:onClick()
+      return
+    end
+    if self._pauseResetButton:isHovered(mouseX, mouseY) then
+      self._pauseResetButton:onClick()
+    end
+    return
+  end
+
+  if self._isUpgradePending and self._isUpgradeOverlayVisible then
+    if button ~= 1 then
+      return
+    end
+    for _, optionButton in ipairs(self._upgradeButtonList) do
+      if optionButton:isHovered(mouseX, mouseY) then
+        optionButton:onClick()
+        return
+      end
+    end
+    if self._confirmUpgradeButton:isHovered(mouseX, mouseY) then
+      self._confirmUpgradeButton:onClick()
+    end
+    return
+  end
+
+  if self._isUpgradePending and self._isUpgradeHiddenByEsc then
+    if button == 1 and self._reopenUpgradeButton:isHovered(mouseX, mouseY) then
+      self._reopenUpgradeButton:onClick()
+    end
+    return
+  end
+
+  if self:handleRelicScrollMousePressed(mouseX, mouseY, button) then
+    return
+  end
+
+  if self._intro.isActive then
+    return
+  end
+
+  if self._core then
+    self._core:mousepressed(mouseX, mouseY, button)
+  end
+end
+
+function SingleWaveScene:mousereleased(mouseX, mouseY, button)
+  if button == 1 then
+    self._isRelicPanelDragging = false
+    self._isRelicScrollbarDragging = false
+  end
+  if self._isPauseOverlayVisible or self._isUpgradeOverlayVisible or self._isSettingsOverlayVisible or self._intro.isActive or self._isRunEnded then
+    return
+  end
+  if self._core then
+    self._core:mousereleased(mouseX, mouseY, button)
+  end
+end
+
+function SingleWaveScene:mousemoved(mouseX, mouseY, dx, dy)
+  if self._isRelicScrollbarDragging then
+    local metrics = self:getRelicScrollMetrics()
+    local handleTravel = math.max(1, metrics.viewport.h - metrics.handleRect.h)
+    local offsetPerPixel = metrics.maxOffset / handleTravel
+    self._relicScrollOffset = clamp(self._relicDragStartOffset + (mouseY - self._relicDragStartY) * offsetPerPixel, 0, metrics.maxOffset)
+    return
+  end
+  if self._isRelicPanelDragging then
+    self:scrollRelicList(-(mouseY - self._relicDragStartY))
+    self._relicDragStartY = mouseY
+    return
+  end
+  if self._isPauseOverlayVisible or self._isUpgradeOverlayVisible or self._isSettingsOverlayVisible or self._intro.isActive or self._isRunEnded then
+    return
+  end
+  if self._core then
+    self._core:mousemoved(mouseX, mouseY, dx, dy)
+  end
+end
+
+function SingleWaveScene:wheelmoved(_x, y)
+  local mouseX, mouseY = self._app:getMouseWorldPosition()
+  local metrics = self:getRelicScrollMetrics()
+  if pointInRect(mouseX, mouseY, metrics.viewport) then
+    self:scrollRelicList(-y * 30)
+    return
+  end
+  if self._isPauseOverlayVisible or self._isUpgradeOverlayVisible or self._isSettingsOverlayVisible or self._intro.isActive or self._isRunEnded then
+    return
+  end
+  if self._core then
+    self._core:wheelmoved(mouseX, mouseY, 0, y)
+  end
+end
+
+function SingleWaveScene:keypressed(key)
+  if self._isSettingsOverlayVisible then
+    if key == "escape" then
+      self:closeSettingsOverlay()
+    end
+    return
+  end
+
+  if key == "escape" then
+    if self._isPauseOverlayVisible then
+      self._isPauseOverlayVisible = false
+      return
+    end
+    if self._isUpgradePending and self._isUpgradeOverlayVisible then
+      self._isUpgradeOverlayVisible = false
+      self._isUpgradeHiddenByEsc = true
+      self:setStatus(t("single.wave.upgrade.status.reopen_required"), Constants.COLOR_DANGER)
+      return
+    end
+    self._isPauseOverlayVisible = true
+    return
+  end
+
+  if self._isPauseOverlayVisible or self._isUpgradeOverlayVisible or self._isUpgradePending or self._intro.isActive or self._isRunEnded then
+    return
+  end
+  if self._core and self._core:keypressed(key) then
+    return
+  end
+end
+
+function SingleWaveScene:onAppEvent(event)
+  if self._core then
+    self._core:onAppEvent(event)
+  end
+end
+
+function SingleWaveScene:onSceneWillChange(event)
+  if self._core then
+    self._core:onSceneWillChange(event)
+  end
+end
+
+function SingleWaveScene:exit()
+  if self._core then
+    self._core:exit()
+  end
+end
+
+return SingleWaveScene

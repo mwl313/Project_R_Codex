@@ -49,7 +49,7 @@ function PlayScene:rebuildLocalizedUi()
     y = 280,
     label = t("play.menu.single_player"),
     onClick = function()
-      self._app:goSingleCampaign({
+      self._app:goSingleWave({
         backScene = "play"
       }, Config.TRANSITION_FORWARD)
     end
