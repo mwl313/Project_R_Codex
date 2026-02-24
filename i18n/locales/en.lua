@@ -321,6 +321,7 @@ local LocaleEn = {
         ai = "AI"
       },
       info_line = "Turn {turnIndex} | {turnOwner} | Time {remainSec}s | Shot {shotUsed}/{shotBudget}",
+      info_line_no_timer = "Turn {turnIndex} | {turnOwner} | Shot {shotUsed}/{shotBudget}",
       status = {
         player_turn = "Your turn. Drag a stone to shoot.",
         ai_turn = "Opponent turn.",
@@ -342,6 +343,85 @@ local LocaleEn = {
         auto_rockfall = "Boss Gimmick: Auto Rockfall",
         blackhole_pulse = "Boss Gimmick: Blackhole Pulse",
         bind_random_enemy = "Boss Gimmick: Random Bind"
+      }
+    },
+    wave = {
+      title = "Single Wave Endless",
+      stage_line = "Stage {stage} / Wave {wave}",
+      hud = {
+        wave_title = "Wave",
+        wave_value = "Wave {wave}",
+        score_title = "Score",
+        max_combo = "Max Combo: {value}",
+        enemies_killed = "Enemies Killed: {value}",
+        relic_title = "Relic Buff",
+        deck_title = "Deck Zone",
+        deck_count = "Draw {drawCount} | Discard {discardCount}\nHand {handCount}/{handMax}"
+      },
+      status = {
+        profile_recovered = "Recovered and loaded single profile.",
+        intro_playing = "Playing run start intro...",
+        wave_start = "Wave {wave} started",
+        run_end = "Run ended."
+      },
+      upgrade = {
+        title = "Upgrade Selection",
+        subtitle = "Pick 1 of 3 and confirm.",
+        category = {
+          card = "Card",
+          relic = "Relic",
+          hand_ops = "Hand Ops"
+        },
+        button = {
+          confirm = "Confirm",
+          reopen = "Reopen Upgrade"
+        },
+        status = {
+          choose = "Choose an upgrade.",
+          select_required = "Select an option first.",
+          reopen_required = "Upgrade selection is required.",
+          card_to_hand = "Card added to hand.",
+          card_to_deck = "Hand is full. Added to deck and shuffled.",
+          relic_added = "Relic acquired.",
+          relic_skip = "Relic already owned. Skipped.",
+          hand_op_applied = "Hand operation applied.",
+          apply_failed = "Failed to apply upgrade."
+        },
+        hand_op = {
+          hand_draw_one = {
+            title = "Quick Draw",
+            desc = "Draw 1 card immediately from deck."
+          },
+          hand_draw_two = {
+            title = "Double Draw",
+            desc = "Draw 2 cards immediately from deck."
+          },
+          hand_shuffle_deck = {
+            title = "Deck Shuffle",
+            desc = "Shuffle current draw pile."
+          },
+          hand_recycle_discard = {
+            title = "Recycle Discard",
+            desc = "Return discard pile to deck and shuffle."
+          }
+        }
+      },
+      pause = {
+        title = "Paused",
+        button = {
+          resume = "Resume",
+          lobby = "Back to Lobby",
+          reset = "Reset Run",
+          settings = "Settings"
+        },
+        status = {
+          settings_saved = "Settings saved."
+        }
+      },
+      result = {
+        lose = "Run Failed",
+        draw = "Run Draw",
+        subtitle = "Choose reset or back to lobby."
       }
     },
     relic_reward = {

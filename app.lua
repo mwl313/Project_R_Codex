@@ -80,6 +80,9 @@ local function createSceneFactoryTable()
     roomSearch = function(app)
       return require("scenes.room_search_scene").new(app)
     end,
+    single_wave = function(app)
+      return require("scenes.single_wave_scene").new(app)
+    end,
     single_campaign = function(app)
       return require("scenes.single_campaign_scene").new(app)
     end,
@@ -458,6 +461,10 @@ end
 
 function App:goSingleCampaign(params, transitionDirection, transitionOpts)
   self:goScene("single_campaign", params, transitionDirection, transitionOpts)
+end
+
+function App:goSingleWave(params, transitionDirection, transitionOpts)
+  self:goScene("single_wave", params, transitionDirection, transitionOpts)
 end
 
 function App:goSingleDeckManage(params, transitionDirection, transitionOpts)
