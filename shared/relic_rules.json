@@ -2,12 +2,64 @@
   "version": 1,
   "relics": [
     {
-      "relicId": "relic_stub_01",
+      "relicId": "relic_draw_plus",
       "rarity": "COMMON",
       "tags": ["UTILITY"],
-      "tunables": {
-        "value": 1
-      }
+      "tunables": { "drawPlus": 1 }
+    },
+    {
+      "relicId": "relic_gold_mul",
+      "rarity": "COMMON",
+      "tags": ["UTILITY"],
+      "tunables": { "goldRewardMul": 1.2 }
+    },
+    {
+      "relicId": "relic_stable_hand",
+      "rarity": "COMMON",
+      "tags": ["UTILITY"],
+      "tunables": { "drawPlus": 1 }
+    },
+    {
+      "relicId": "relic_minor_power",
+      "rarity": "COMMON",
+      "tags": ["OFFENSE"],
+      "tunables": { "maxShotPowerMul": 1.05 }
+    },
+    {
+      "relicId": "relic_coin_pouch",
+      "rarity": "COMMON",
+      "tags": ["UTILITY"],
+      "tunables": { "goldRewardMul": 1.15 }
+    },
+    {
+      "relicId": "relic_power_plus",
+      "rarity": "RARE",
+      "tags": ["OFFENSE"],
+      "tunables": { "maxShotPowerMul": 1.1 }
+    },
+    {
+      "relicId": "relic_tactical_draw",
+      "rarity": "RARE",
+      "tags": ["UTILITY"],
+      "tunables": { "drawPlus": 2 }
+    },
+    {
+      "relicId": "relic_merchant_emblem",
+      "rarity": "RARE",
+      "tags": ["UTILITY"],
+      "tunables": { "goldRewardMul": 1.25 }
+    },
+    {
+      "relicId": "relic_overclock_core",
+      "rarity": "EPIC",
+      "tags": ["OFFENSE"],
+      "tunables": { "maxShotPowerMul": 1.2, "drawPlus": 1 }
+    },
+    {
+      "relicId": "relic_kings_trophy",
+      "rarity": "EPIC",
+      "tags": ["UTILITY"],
+      "tunables": { "goldRewardMul": 1.4, "drawPlus": 1 }
     }
   ]
 }

@@ -337,6 +337,52 @@ local LocaleEn = {
         combat_lose = "Defeat.",
         combat_draw = "Draw.",
         extra_shot = "You still have an extra shot."
+      },
+      gimmick = {
+        auto_rockfall = "Boss Gimmick: Auto Rockfall",
+        blackhole_pulse = "Boss Gimmick: Blackhole Pulse",
+        bind_random_enemy = "Boss Gimmick: Random Bind"
+      }
+    },
+    relic_reward = {
+      title = "Relic Reward",
+      subtitle = "Pick 1 relic out of 3.",
+      rarity_line = "Rarity: {rarity}",
+      button = {
+        confirm = "Acquire Relic"
+      },
+      status = {
+        choose_one = "Choose a relic to acquire.",
+        select_required = "Select a relic first.",
+        selected = "Selected: {relic}",
+        picked = "Relic acquired: {relic}",
+        skip_empty = "No available relics. Proceeding to the next step."
+      }
+    },
+    relic = {
+      name = {
+        relic_draw_plus = "Feather of Focus",
+        relic_gold_mul = "Golden Pouch",
+        relic_stable_hand = "Stable Hands",
+        relic_minor_power = "Minor Amplifier",
+        relic_coin_pouch = "Coin Pouch",
+        relic_power_plus = "Power Core",
+        relic_tactical_draw = "Tactical Note",
+        relic_merchant_emblem = "Merchant Emblem",
+        relic_overclock_core = "Overclock Core",
+        relic_kings_trophy = "King's Trophy"
+      },
+      desc = {
+        relic_draw_plus = "+1 draw at combat start",
+        relic_gold_mul = "x1.2 combat gold reward",
+        relic_stable_hand = "+1 draw at combat start",
+        relic_minor_power = "x1.05 max shot power",
+        relic_coin_pouch = "x1.15 combat gold reward",
+        relic_power_plus = "x1.10 max shot power",
+        relic_tactical_draw = "+2 draw at combat start",
+        relic_merchant_emblem = "x1.25 combat gold reward",
+        relic_overclock_core = "x1.20 max shot power, +1 draw",
+        relic_kings_trophy = "x1.40 combat gold reward, +1 draw"
       }
     },
     reward = {

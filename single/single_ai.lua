@@ -299,7 +299,7 @@ local function evaluateCandidate(baseContext, shooterStoneId, candidate)
   return score
 end
 
-local function buildCandidate(rng, shooter, target, config)
+local function buildCandidate(rng, shooter, target, config, maxShotPower)
   local baseDx = target.x - shooter.x
   local baseDy = target.y - shooter.y
   local baseAngle = atan2(baseDy, baseDx)
@@ -308,7 +308,7 @@ local function buildCandidate(rng, shooter, target, config)
   local dirX = math.cos(angle)
   local dirY = math.sin(angle)
   local powerRatio = randomRange(rng, config.powerMinRatio, 1.0)
-  local power = clamp(Constants.MAX_SHOT_POWER * powerRatio, 80, Constants.MAX_SHOT_POWER)
+  local power = clamp(maxShotPower * powerRatio, 80, maxShotPower)
   return {
     dirX = dirX,
     dirY = dirY,
@@ -322,6 +322,7 @@ function SingleAI.chooseShot(params)
   local nodeType = params and params.nodeType or "mob"
   local aiPlayerIndex = params and tonumber(params.aiPlayerIndex) or 2
   local turnIndex = params and tonumber(params.turnIndex) or 1
+  local maxShotPower = math.max(80, tonumber(params and params.maxShotPower) or Constants.MAX_SHOT_POWER)
 
   local shooter, target = pickShooterAndTarget(stoneList, aiPlayerIndex)
   if not shooter or not target then
@@ -340,7 +341,7 @@ function SingleAI.chooseShot(params)
   }
 
   for _ = 1, config.candidateCount do
-    local candidate = buildCandidate(rng, shooter, target, config)
+    local candidate = buildCandidate(rng, shooter, target, config, maxShotPower)
     local score = evaluateCandidate(evalContext, shooter.id, candidate)
     if score > bestScore then
       bestScore = score
@@ -358,7 +359,7 @@ function SingleAI.chooseShot(params)
     bestCandidate = {
       dirX = fallbackDx / fallbackLength,
       dirY = fallbackDy / fallbackLength,
-      power = Constants.MAX_SHOT_POWER * 0.65
+      power = maxShotPower * 0.65
     }
   end
 

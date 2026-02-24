@@ -51,6 +51,9 @@ function SingleRunState.ensureDefaults(runState, profile)
   if type(runState.cardUpgrades) ~= "table" then
     runState.cardUpgrades = {}
   end
+  if type(runState.relicIds) ~= "table" then
+    runState.relicIds = {}
+  end
   if type(runState.tempModifiers) ~= "table" then
     runState.tempModifiers = {}
   end

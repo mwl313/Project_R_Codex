@@ -1,5 +1,41 @@
 {
   "version": 1,
+  "bosses": [
+    {
+      "bossId": "boss_rockfall",
+      "stageIndex": 1,
+      "gimmicks": [
+        {
+          "type": "auto_rockfall",
+          "everyTurns": 2,
+          "radius": 18
+        }
+      ]
+    },
+    {
+      "bossId": "boss_blackhole",
+      "stageIndex": 1,
+      "gimmicks": [
+        {
+          "type": "blackhole_pulse",
+          "everyTurns": 1,
+          "durationMs": 600,
+          "accel": 180
+        }
+      ]
+    },
+    {
+      "bossId": "boss_bind",
+      "stageIndex": 1,
+      "gimmicks": [
+        {
+          "type": "bind_random_enemy",
+          "everyTurns": 2,
+          "durationTurns": 1
+        }
+      ]
+    }
+  ],
   "encounters": [
     {
       "encounterId": "stage1_mob_01",
@@ -21,7 +57,9 @@
         "extraStones": 1,
         "maxShotPowerMul": 1.05
       },
-      "gimmicks": ["boss_gimmick_stub"]
+      "gimmicks": [
+        "boss_rockfall"
+      ]
     }
   ]
 }

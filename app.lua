@@ -107,6 +107,9 @@ local function createSceneFactoryTable()
     single_reward = function(app)
       return require("scenes.single_reward_scene").new(app)
     end,
+    single_relic_reward = function(app)
+      return require("scenes.single_relic_reward_scene").new(app)
+    end,
     single_discard = function(app)
       return require("scenes.single_discard_scene").new(app)
     end,
@@ -487,6 +490,10 @@ end
 
 function App:goSingleReward(params, transitionDirection, transitionOpts)
   self:goScene("single_reward", params, transitionDirection, transitionOpts)
+end
+
+function App:goSingleRelicReward(params, transitionDirection, transitionOpts)
+  self:goScene("single_relic_reward", params, transitionDirection, transitionOpts)
 end
 
 function App:goSingleDiscard(params, transitionDirection, transitionOpts)

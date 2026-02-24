@@ -337,6 +337,52 @@ local LocaleKo = {
         combat_lose = "패배했습니다.",
         combat_draw = "무승부입니다.",
         extra_shot = "추가 샷 기회가 남아 있습니다."
+      },
+      gimmick = {
+        auto_rockfall = "보스 기믹: 자동 낙석",
+        blackhole_pulse = "보스 기믹: 블랙홀 맥동",
+        bind_random_enemy = "보스 기믹: 무작위 결박"
+      }
+    },
+    relic_reward = {
+      title = "릴릭 보상",
+      subtitle = "릴릭 3개 중 1개를 선택하세요.",
+      rarity_line = "등급: {rarity}",
+      button = {
+        confirm = "릴릭 획득"
+      },
+      status = {
+        choose_one = "획득할 릴릭을 선택하세요.",
+        select_required = "릴릭을 먼저 선택하세요.",
+        selected = "선택됨: {relic}",
+        picked = "릴릭 획득: {relic}",
+        skip_empty = "획득 가능한 릴릭이 없어 다음 단계로 진행합니다."
+      }
+    },
+    relic = {
+      name = {
+        relic_draw_plus = "집중의 깃털",
+        relic_gold_mul = "황금 주머니",
+        relic_stable_hand = "안정된 손놀림",
+        relic_minor_power = "미세 증폭기",
+        relic_coin_pouch = "동전 주머니",
+        relic_power_plus = "출력 증폭 코어",
+        relic_tactical_draw = "전술 메모",
+        relic_merchant_emblem = "상인의 문장",
+        relic_overclock_core = "오버클록 코어",
+        relic_kings_trophy = "왕의 전리품"
+      },
+      desc = {
+        relic_draw_plus = "전투 시작 시 드로우 +1",
+        relic_gold_mul = "전투 골드 획득량 1.2배",
+        relic_stable_hand = "전투 시작 시 드로우 +1",
+        relic_minor_power = "최대 샷 파워 1.05배",
+        relic_coin_pouch = "전투 골드 획득량 1.15배",
+        relic_power_plus = "최대 샷 파워 1.10배",
+        relic_tactical_draw = "전투 시작 시 드로우 +2",
+        relic_merchant_emblem = "전투 골드 획득량 1.25배",
+        relic_overclock_core = "최대 샷 파워 1.20배, 드로우 +1",
+        relic_kings_trophy = "전투 골드 획득량 1.40배, 드로우 +1"
       }
     },
     reward = {

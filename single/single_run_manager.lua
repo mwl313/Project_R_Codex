@@ -265,6 +265,7 @@ function SingleRunManager.newRun(deckId, options)
     templateForChoices = templateForChoices,
     currentNodeIndex = 1,
     gold = 0,
+    relicIds = {},
     cardUpgrades = {},
     tempModifiers = {},
     runtimeDeck = nil,

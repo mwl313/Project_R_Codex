@@ -30,7 +30,16 @@ local DEFAULT_DATA = {
         extraStones = 1,
         maxShotPowerMul = 1.05
       },
-      gimmicks = { "boss_gimmick_stub" }
+      gimmicks = { "boss_rockfall" }
+    }
+  },
+  bosses = {
+    {
+      bossId = "boss_rockfall",
+      stageIndex = 1,
+      gimmicks = {
+        { type = "auto_rockfall", everyTurns = 2, radius = 18 }
+      }
     }
   }
 }
@@ -58,11 +67,43 @@ local function sanitizeEncounter(entry)
   }
 end
 
+local function sanitizeBossGimmick(entry)
+  local source = LoaderUtils.toTable(entry, {})
+  return {
+    type = LoaderUtils.toString(source.type, ""),
+    everyTurns = math.max(1, math.floor(LoaderUtils.toNumber(source.everyTurns, 1))),
+    radius = math.max(1, math.floor(LoaderUtils.toNumber(source.radius, 18))),
+    durationMs = math.max(1, math.floor(LoaderUtils.toNumber(source.durationMs, 600))),
+    accel = math.max(0, LoaderUtils.toNumber(source.accel, 180)),
+    durationTurns = math.max(1, math.floor(LoaderUtils.toNumber(source.durationTurns, 1)))
+  }
+end
+
+local function sanitizeBoss(entry)
+  local source = LoaderUtils.toTable(entry, {})
+  local gimmicks = {}
+  for _, gimmick in ipairs(LoaderUtils.toArray(source.gimmicks, {})) do
+    if type(gimmick) == "table" then
+      local sanitizedGimmick = sanitizeBossGimmick(gimmick)
+      if sanitizedGimmick.type ~= "" then
+        gimmicks[#gimmicks + 1] = sanitizedGimmick
+      end
+    end
+  end
+
+  return {
+    bossId = LoaderUtils.toString(source.bossId, "boss_unknown"),
+    stageIndex = math.max(1, math.floor(LoaderUtils.toNumber(source.stageIndex, 1))),
+    gimmicks = gimmicks
+  }
+end
+
 local function sanitize(raw)
   local source = LoaderUtils.toTable(raw, {})
   local sanitized = {
     version = LoaderUtils.toNumber(source.version, DEFAULT_DATA.version),
-    encounters = {}
+    encounters = {},
+    bosses = {}
   }
 
   for _, entry in ipairs(LoaderUtils.toArray(source.encounters, {})) do
@@ -71,8 +112,17 @@ local function sanitize(raw)
     end
   end
 
+  for _, entry in ipairs(LoaderUtils.toArray(source.bosses, {})) do
+    if type(entry) == "table" then
+      sanitized.bosses[#sanitized.bosses + 1] = sanitizeBoss(entry)
+    end
+  end
+
   if #sanitized.encounters <= 0 then
     sanitized.encounters = LoaderUtils.deepCopy(DEFAULT_DATA.encounters)
+  end
+  if #sanitized.bosses <= 0 then
+    sanitized.bosses = LoaderUtils.deepCopy(DEFAULT_DATA.bosses)
   end
 
   return sanitized

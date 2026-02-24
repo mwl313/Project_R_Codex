@@ -7,6 +7,7 @@
 ]]
 
 local SingleCampaignRulesLoader = require("single.single_campaign_rules_loader")
+local RelicEffects = require("single.relic_effects")
 
 local SingleEconomy = {}
 
@@ -33,7 +34,7 @@ function SingleEconomy.resetCache()
   cachedRules = nil
 end
 
-function SingleEconomy.rollCombatGold(nodeType, rng)
+function SingleEconomy.rollCombatGold(nodeType, rng, runState)
   local rules = getRules()
   local economy = type(rules.economy) == "table" and rules.economy or {}
   local rewardTable = type(economy.goldReward) == "table" and economy.goldReward or {}
@@ -46,7 +47,8 @@ function SingleEconomy.rollCombatGold(nodeType, rng)
   end
   local minValue = math.max(0, math.floor(tonumber(entry[1]) or 10))
   local maxValue = math.max(minValue, math.floor(tonumber(entry[2]) or minValue))
-  return randomInt(rng, minValue, maxValue)
+  local rolled = randomInt(rng, minValue, maxValue)
+  return RelicEffects.applyGoldModifiers(runState, rolled)
 end
 
 function SingleEconomy.getShopPrices()

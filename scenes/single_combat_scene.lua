@@ -23,6 +23,15 @@ local function t(key, vars)
   return I18n.t(key, vars)
 end
 
+local function hashPercent(text)
+  local normalized = tostring(text or "")
+  local hash = 0
+  for index = 1, #normalized do
+    hash = (hash * 131 + string.byte(normalized, index)) % 1000003
+  end
+  return hash % 100
+end
+
 function SingleCombatScene.new(app)
   local instance = {
     _app = app,
@@ -52,6 +61,22 @@ function SingleCombatScene:rebuildLocalizedUi()
   end)
 end
 
+function SingleCombatScene:shouldOfferRelicRewardOnWin()
+  if self._nodeType == "boss" then
+    return true
+  end
+  if self._nodeType ~= "elite" then
+    return false
+  end
+  local seedText = string.format("%s:%s:%d:%d",
+    tostring(self._runState and self._runState.runId or ""),
+    tostring(self._nodeId or ""),
+    tonumber(self._stageIndex) or 1,
+    tonumber(self._runState and self._runState.depthIndex) or 1
+  )
+  return hashPercent(seedText) < 50
+end
+
 function SingleCombatScene:finishCombat(result)
   local normalized = (result == "lose") and "lose" or "win"
   SingleRunManager.setCombatResult(self._runState, normalized)
@@ -64,15 +89,37 @@ function SingleCombatScene:finishCombat(result)
     return
   end
 
-  local goldAmount = SingleEconomy.rollCombatGold(self._nodeType)
+  local goldAmount = SingleEconomy.rollCombatGold(self._nodeType, nil, self._runState)
   SingleRunState.addGold(self._runState, goldAmount)
 
-  self._app:goScene("single_reward", {
+  local rewardParams = {
     profile = self._profile,
     runState = self._runState,
     nodeType = self._nodeType,
     stageIndex = self._stageIndex,
     isBoss = self._nodeType == "boss"
+  }
+
+  if self:shouldOfferRelicRewardOnWin() then
+    self._app:goScene("single_relic_reward", {
+      profile = self._profile,
+      runState = self._runState,
+      nodeType = self._nodeType,
+      nodeId = self._nodeId,
+      stageIndex = self._stageIndex,
+      isBoss = self._nodeType == "boss",
+      nextSceneName = "single_reward",
+      nextSceneParams = rewardParams
+    }, Config.TRANSITION_FORWARD)
+    return
+  end
+
+  self._app:goScene("single_reward", {
+    profile = rewardParams.profile,
+    runState = rewardParams.runState,
+    nodeType = rewardParams.nodeType,
+    stageIndex = rewardParams.stageIndex,
+    isBoss = rewardParams.isBoss
   }, Config.TRANSITION_FORWARD)
 end
 

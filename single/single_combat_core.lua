@@ -20,6 +20,9 @@ local EffectManager = require("effects.effect_manager")
 local SingleAI = require("single.single_ai")
 local SingleRunState = require("single.single_run_state")
 local InputCaptureGuard = require("utils.input_capture_guard")
+local SingleCampaignRulesLoader = require("single.single_campaign_rules_loader")
+local RelicEffects = require("single.relic_effects")
+local EncountersLoader = require("single.encounters_loader")
 
 local SingleCombatCore = {}
 SingleCombatCore.__index = SingleCombatCore
@@ -36,6 +39,23 @@ local function clamp(v, minV, maxV)
     return maxV
   end
   return v
+end
+
+local function randomInt(rng, minValue, maxValue)
+  if minValue >= maxValue then
+    return minValue
+  end
+  if rng and type(rng.random) == "function" then
+    return rng:random(minValue, maxValue)
+  end
+  return math.random(minValue, maxValue)
+end
+
+local function makeRng(seed)
+  if love and love.math and love.math.newRandomGenerator then
+    return love.math.newRandomGenerator(seed or os.time())
+  end
+  return nil
 end
 
 local function intersectSegmentWithWorldRect(startX, startY, endX, endY)
@@ -121,6 +141,7 @@ function SingleCombatCore.new(params)
     _runState = params.runState,
     _nodeType = tostring(params.nodeType or "mob"),
     _nodeId = tostring(params.nodeId or ""),
+    _stageIndex = math.max(1, math.floor(tonumber(params.stageIndex) or 1)),
     _onCombatEnd = params.onCombatEnd,
     _boardX = boardX,
     _boardY = boardY,
@@ -169,7 +190,14 @@ function SingleCombatCore.new(params)
     _handEntryById = {},
     _pendingCardTargetId = nil,
     _pendingCardTargetEntryId = nil,
-    _pendingCardTargetCardId = nil
+    _pendingCardTargetCardId = nil,
+
+    _baseDrawPerBattle = 5,
+    _maxShotPower = Constants.MAX_SHOT_POWER,
+    _bossId = nil,
+    _bossGimmickList = {},
+    _bossBindUntilTurnByStoneId = {},
+    _bossRng = nil
   }, SingleCombatCore)
 
   self._playingCardHandBar = CardHandBar.new({
@@ -185,6 +213,13 @@ function SingleCombatCore.new(params)
       self:setStatus(t("single.combat.status.card_cannot_use"), Constants.COLOR_DANGER)
     end
   })
+
+  local campaignRules = SingleCampaignRulesLoader.load()
+  local deckRules = type(campaignRules.deck) == "table" and campaignRules.deck or {}
+  self._baseDrawPerBattle = math.max(1, math.floor(tonumber(deckRules.drawPerBattle) or 5))
+  self._maxShotPower = RelicEffects.applyShotModifiers(self._runState, Constants.MAX_SHOT_POWER)
+  self._bossRng = makeRng((tonumber(self._runState and self._runState.rngSeed) or os.time()) + self._stageIndex * 409)
+  self:initializeBossGimmicks()
 
   self:initializeBattlefield()
   self:initializeHand()
@@ -230,6 +265,158 @@ function SingleCombatCore:initializeBattlefield()
   GameMechanics.resetStoneVelocities(self)
 end
 
+function SingleCombatCore:refreshBossBindLockSet()
+  local nextBind = {}
+  for stoneId, untilTurn in pairs(self._bossBindUntilTurnByStoneId or {}) do
+    local turnNumber = math.floor(tonumber(untilTurn) or 0)
+    if turnNumber >= self._playingTurnIndex then
+      nextBind[tostring(stoneId)] = turnNumber
+      self._lockedStoneIdSet[tostring(stoneId)] = true
+    end
+  end
+  self._bossBindUntilTurnByStoneId = nextBind
+end
+
+function SingleCombatCore:initializeBossGimmicks()
+  self._bossId = nil
+  self._bossGimmickList = {}
+  self._bossBindUntilTurnByStoneId = {}
+  if self._nodeType ~= "boss" then
+    return
+  end
+
+  local encounterData = EncountersLoader.load()
+  local bossList = type(encounterData.bosses) == "table" and encounterData.bosses or {}
+  if #bossList <= 0 then
+    return
+  end
+
+  local stageMatched = {}
+  for _, boss in ipairs(bossList) do
+    if math.floor(tonumber(boss.stageIndex) or 1) == self._stageIndex then
+      stageMatched[#stageMatched + 1] = boss
+    end
+  end
+  local pickPool = (#stageMatched > 0) and stageMatched or bossList
+  local bossIndex = randomInt(self._bossRng, 1, #pickPool)
+  local pickedBoss = pickPool[bossIndex]
+  self._bossId = tostring(pickedBoss and pickedBoss.bossId or "")
+  self._bossGimmickList = {}
+
+  for _, gimmick in ipairs((pickedBoss and pickedBoss.gimmicks) or {}) do
+    if type(gimmick) == "table" and type(gimmick.type) == "string" and gimmick.type ~= "" then
+      self._bossGimmickList[#self._bossGimmickList + 1] = {
+        type = gimmick.type,
+        everyTurns = math.max(1, math.floor(tonumber(gimmick.everyTurns) or 1)),
+        radius = math.max(1, math.floor(tonumber(gimmick.radius) or 18)),
+        durationMs = math.max(1, math.floor(tonumber(gimmick.durationMs) or 600)),
+        accel = math.max(0, tonumber(gimmick.accel) or 180),
+        durationTurns = math.max(1, math.floor(tonumber(gimmick.durationTurns) or 1))
+      }
+    end
+  end
+end
+
+function SingleCombatCore:applyBossAutoRockfall(gimmick)
+  local rockRule = CardRules.getRockfallRule()
+  local width = math.max(1, tonumber(rockRule.width) or Constants.ROCK_OBSTACLE_WIDTH)
+  local height = math.max(1, tonumber(rockRule.height) or Constants.ROCK_OBSTACLE_HEIGHT)
+  local margin = math.max(0, tonumber(rockRule.margin) or Constants.ROCK_OBSTACLE_MARGIN)
+  local halfW = width * 0.5
+  local halfH = height * 0.5
+
+  for _ = 1, 24 do
+    local x = randomInt(self._bossRng, math.floor(margin + halfW), math.floor(Constants.BOARD_W - margin - halfW))
+    local y = randomInt(self._bossRng, math.floor(margin + halfH), math.floor(Constants.BOARD_H - margin - halfH))
+    local canPlace = Abilities.canPlaceRockfallAtCanonical(self, x, y)
+    if canPlace then
+      self._obstacleList[#self._obstacleList + 1] = {
+        id = self:createId("boss_rock"),
+        x = x,
+        y = y,
+        width = width,
+        height = height
+      }
+      return true
+    end
+  end
+  return false
+end
+
+function SingleCombatCore:applyBossBlackholePulse(gimmick)
+  local durationSec = math.max(0.01, (tonumber(gimmick.durationMs) or 600) / 1000.0)
+  local accel = math.max(0, tonumber(gimmick.accel) or 180)
+  if accel <= 0 then
+    return false
+  end
+  local centerX = Constants.BOARD_W * 0.5
+  local centerY = Constants.BOARD_H * 0.5
+  local impulse = accel * durationSec
+  local moved = false
+  for _, stone in ipairs(self._playingStoneList) do
+    if stone.alive ~= false then
+      local dx = centerX - stone.x
+      local dy = centerY - stone.y
+      local len = math.sqrt(dx * dx + dy * dy)
+      if len > 0.0001 then
+        local velocity = self:getStoneVelocity(stone.id)
+        velocity.vx = velocity.vx + (dx / len) * impulse
+        velocity.vy = velocity.vy + (dy / len) * impulse
+        moved = true
+      end
+    end
+  end
+  if moved then
+    GameMechanics.startShotSimulation(self)
+  end
+  return moved
+end
+
+function SingleCombatCore:applyBossBindRandomEnemy(gimmick)
+  local candidates = {}
+  for _, stone in ipairs(self._playingStoneList) do
+    if stone.alive ~= false and stone.ownerPlayerIndex == 1 then
+      candidates[#candidates + 1] = stone
+    end
+  end
+  if #candidates <= 0 then
+    return false
+  end
+  local picked = candidates[randomInt(self._bossRng, 1, #candidates)]
+  local durationTurns = math.max(1, math.floor(tonumber(gimmick.durationTurns) or 1))
+  local untilTurn = self._playingTurnIndex + durationTurns - 1
+  local stoneId = tostring(picked.id)
+  local previous = math.floor(tonumber(self._bossBindUntilTurnByStoneId[stoneId]) or 0)
+  self._bossBindUntilTurnByStoneId[stoneId] = math.max(previous, untilTurn)
+  self:refreshBossBindLockSet()
+  return true
+end
+
+function SingleCombatCore:applyBossGimmicksOnTurnStart()
+  if self._nodeType ~= "boss" or #self._bossGimmickList <= 0 then
+    return nil
+  end
+
+  local noticeList = {}
+  for _, gimmick in ipairs(self._bossGimmickList) do
+    local everyTurns = math.max(1, math.floor(tonumber(gimmick.everyTurns) or 1))
+    if (self._playingTurnIndex % everyTurns) == 0 then
+      if gimmick.type == "auto_rockfall" and self:applyBossAutoRockfall(gimmick) then
+        noticeList[#noticeList + 1] = t("single.combat.gimmick.auto_rockfall")
+      elseif gimmick.type == "blackhole_pulse" and self:applyBossBlackholePulse(gimmick) then
+        noticeList[#noticeList + 1] = t("single.combat.gimmick.blackhole_pulse")
+      elseif gimmick.type == "bind_random_enemy" and self:applyBossBindRandomEnemy(gimmick) then
+        noticeList[#noticeList + 1] = t("single.combat.gimmick.bind_random_enemy")
+      end
+    end
+  end
+
+  if #noticeList <= 0 then
+    return nil
+  end
+  return table.concat(noticeList, " / ")
+end
+
 function SingleCombatCore:initializeHand()
   self._handEntryList = {}
   self._handEntryById = {}
@@ -255,7 +442,7 @@ function SingleCombatCore:initializeHand()
       runtimeCards[i], runtimeCards[j] = runtimeCards[j], runtimeCards[i]
     end
   end
-  local drawCount = 5
+  local drawCount = RelicEffects.applyCombatStartModifiers(self._runState, self._baseDrawPerBattle)
   if type(self._runState) == "table" and type(self._runState.tempModifiers) == "table" then
     local drawDelta = math.floor(tonumber(self._runState.tempModifiers.nextCombatDrawDelta) or 0)
     drawCount = math.max(1, drawCount + drawDelta)
@@ -290,6 +477,7 @@ function SingleCombatCore:startTurn(playerIndex, initial)
   self._hasUsedCardThisTurn = false
   self._isTurnShotCommitted = false
   self._lockedStoneIdSet = {}
+  self:refreshBossBindLockSet()
   self._shockwaveOwnerPlayerIndex = nil
   self._shockwaveSourceStoneId = nil
   self._shockwaveCardScale = 1.0
@@ -303,6 +491,11 @@ function SingleCombatCore:startTurn(playerIndex, initial)
   else
     self._aiThinkRemainSec = 0
     self:setStatus(t("single.combat.status.player_turn"), Constants.COLOR_TEXT_SUB)
+  end
+
+  local gimmickNotice = self:applyBossGimmicksOnTurnStart()
+  if gimmickNotice and gimmickNotice ~= "" then
+    self:setStatus(gimmickNotice, Constants.COLOR_TEXT_SUB)
   end
 end
 
@@ -442,7 +635,7 @@ function SingleCombatCore:commitAimDrag()
     stoneId = stone.id,
     dirX = dx / len,
     dirY = dy / len,
-    power = clamp(len * Constants.POWER_PER_PIXEL, 0, Constants.MAX_SHOT_POWER)
+    power = clamp(len * Constants.POWER_PER_PIXEL, 0, self._maxShotPower)
   })
   self._playingShotUsed = self._playingShotUsed + 1
   self._isTurnShotCommitted = true
@@ -645,7 +838,14 @@ function SingleCombatCore:update(dt, mouseX, mouseY)
   if self._activePlayerIndex == 2 and (not self._isShotSimulating) then
     self._aiThinkRemainSec = self._aiThinkRemainSec - math.max(0, dt)
     if self._aiThinkRemainSec <= 0 then
-      local shot = SingleAI.chooseShot({ nodeType = self._nodeType, turnIndex = self._playingTurnIndex, aiPlayerIndex = 2, stoneList = self._playingStoneList, obstacleList = self._obstacleList })
+      local shot = SingleAI.chooseShot({
+        nodeType = self._nodeType,
+        turnIndex = self._playingTurnIndex,
+        aiPlayerIndex = 2,
+        stoneList = self._playingStoneList,
+        obstacleList = self._obstacleList,
+        maxShotPower = self._maxShotPower
+      })
       if shot then
         GameMechanics.applyShotImpulse(self, shot)
         self._playingShotUsed = self._playingShotUsed + 1
@@ -702,7 +902,7 @@ function SingleCombatCore:draw(mouseX, mouseY)
       local dx = sx - ax
       local dy = sy - ay
       local dist = math.sqrt(dx * dx + dy * dy)
-      local power = math.min(Constants.MAX_SHOT_POWER, dist * Constants.POWER_PER_PIXEL)
+      local power = math.min(self._maxShotPower, dist * Constants.POWER_PER_PIXEL)
       love.graphics.setColor(0.95, 0.92, 0.35, 0.95)
       love.graphics.setLineWidth(2)
       love.graphics.line(sx, sy, ax, ay)
