@@ -190,14 +190,30 @@ local LocaleEn = {
       }
     },
     combat = {
-      title = "Single Combat (Test)",
-      subtitle = "SP-01 Placeholder Combat Scene",
-      button = {
-        win_test = "Win (Test)",
-        lose_test = "Lose (Test)"
+      title = "Single Combat",
+      subtitle = "Drag and shoot to eliminate all enemy stones.",
+      node_line = "Node: {nodeType} ({nodeId})",
+      turn_owner = {
+        player = "Player",
+        ai = "AI"
       },
+      info_line = "Turn {turnIndex} | {turnOwner} | Time {remainSec}s | Shot {shotUsed}/{shotBudget}",
       status = {
-        placeholder = "Choose combat result with test buttons."
+        player_turn = "Your turn. Drag a stone to shoot.",
+        ai_turn = "Opponent turn.",
+        ai_thinking = "AI is aiming...",
+        shot_too_short = "Drag distance is too short.",
+        card_cannot_use = "You cannot use this card right now.",
+        card_unsupported = "This card is not implemented in single combat yet.",
+        card_target_invalid = "Invalid card target.",
+        card_target_cancel = "Card targeting cancelled.",
+        card_used = "{card} used",
+        shot_fired = "Shot fired",
+        turn_timeout = "Turn timer expired. Passing turn.",
+        combat_win = "Victory!",
+        combat_lose = "Defeat.",
+        combat_draw = "Draw.",
+        extra_shot = "You still have an extra shot."
       }
     },
     reward = {

@@ -3,17 +3,16 @@
 모듈명: SingleCombatScene
 
 역할:
-- SP-01 전투 플레이스홀더 씬.
-- 승리/패배 버튼으로 런 흐름을 테스트한다.
+- SP-02 싱글 실전 전투 씬.
+- SingleCombatCore(오프라인 전투 코어)를 래핑해 런 플로우와 연결한다.
 ]]
 
 local Constants = require("constants")
 local Config = require("config")
 local I18n = require("i18n.i18n")
-local FontManager = require("assets.font_manager")
-local Button = require("ui.button")
 local BackButton = require("ui.back_button")
 local SingleRunManager = require("single.single_run_manager")
+local SingleCombatCore = require("single.single_combat_core")
 
 local SingleCombatScene = {}
 SingleCombatScene.__index = SingleCombatScene
@@ -31,21 +30,13 @@ function SingleCombatScene.new(app)
     _nodeType = "mob",
     _nodeId = "",
     _stageIndex = 1,
-    _statusText = "",
-    _statusColor = Constants.COLOR_TEXT_SUB,
     _lastLanguage = app:getLanguage(),
     _backButton = nil,
-    _winButton = nil,
-    _loseButton = nil
+    _core = nil
   }
   setmetatable(instance, SingleCombatScene)
   instance:rebuildLocalizedUi()
   return instance
-end
-
-function SingleCombatScene:setStatus(text, color)
-  self._statusText = tostring(text or "")
-  self._statusColor = color or Constants.COLOR_TEXT_SUB
 end
 
 function SingleCombatScene:rebuildLocalizedUi()
@@ -57,29 +48,12 @@ function SingleCombatScene:rebuildLocalizedUi()
       runState = self._runState
     }, Config.TRANSITION_BACK)
   end)
-
-  self._winButton = Button.new({
-    x = (Constants.BASE_WORLD_W - Constants.BUTTON_W) * 0.5,
-    y = 338,
-    label = t("single.combat.button.win_test"),
-    onClick = function()
-      self:finishCombat("win")
-    end
-  })
-
-  self._loseButton = Button.new({
-    x = (Constants.BASE_WORLD_W - Constants.BUTTON_W) * 0.5,
-    y = 338 + Constants.BUTTON_H + Constants.BUTTON_GAP,
-    label = t("single.combat.button.lose_test"),
-    onClick = function()
-      self:finishCombat("lose")
-    end
-  })
 end
 
 function SingleCombatScene:finishCombat(result)
-  SingleRunManager.setCombatResult(self._runState, result)
-  if result == "lose" then
+  local normalized = result == "win" and "win" or "lose"
+  SingleRunManager.setCombatResult(self._runState, normalized)
+  if normalized ~= "win" then
     self._app:goScene("single_result", {
       profile = self._profile,
       runState = self._runState,
@@ -104,17 +78,24 @@ function SingleCombatScene:enter(params)
   self._nodeId = tostring((params and params.nodeId) or "")
   self._stageIndex = math.max(1, math.floor(tonumber(params and params.stageIndex) or 1))
   self:rebuildLocalizedUi()
-  self:setStatus(string.format(
-    "%s (type=%s, nodeId=%s, stage=%d)",
-    t("single.combat.status.placeholder"),
-    self._nodeType,
-    self._nodeId,
-    self._stageIndex
-  ), Constants.COLOR_TEXT_SUB)
-  print(string.format("[SingleCombat] enter nodeType=%s nodeId=%s stage=%d", self._nodeType, self._nodeId, self._stageIndex))
+  self._core = SingleCombatCore.new({
+    app = self._app,
+    profile = self._profile,
+    runState = self._runState,
+    nodeType = self._nodeType,
+    nodeId = self._nodeId,
+    stageIndex = self._stageIndex,
+    onCombatEnd = function(result)
+      self:finishCombat(result)
+    end
+  })
 end
 
-function SingleCombatScene:update(_dt)
+function SingleCombatScene:update(dt)
+  local mouseX, mouseY = self._app:getMouseWorldPosition()
+  if self._core then
+    self._core:update(dt, mouseX, mouseY)
+  end
   if self._lastLanguage ~= self._app:getLanguage() then
     self:rebuildLocalizedUi()
   end
@@ -122,42 +103,47 @@ end
 
 function SingleCombatScene:draw()
   local mouseX, mouseY = self._app:getMouseWorldPosition()
-
-  love.graphics.setFont(FontManager.getFont("title"))
-  love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf(t("single.combat.title"), 0, 112, Constants.BASE_WORLD_W, "center")
-
-  love.graphics.setFont(FontManager.getFont("ui"))
-  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
-  love.graphics.printf(t("single.combat.subtitle"), 0, 164, Constants.BASE_WORLD_W, "center")
+  if self._core then
+    self._core:draw(mouseX, mouseY)
+  end
 
   self._backButton:draw(mouseX, mouseY)
-  self._winButton:draw(mouseX, mouseY)
-  self._loseButton:draw(mouseX, mouseY)
-
-  love.graphics.setFont(FontManager.getFont("small"))
-  love.graphics.setColor(self._statusColor)
-  love.graphics.printf(self._statusText, 0, 688, Constants.BASE_WORLD_W, "center")
 end
 
 function SingleCombatScene:mousepressed(mouseX, mouseY, button)
+  if self._core then
+    self._core:mousepressed(mouseX, mouseY, button)
+  end
   if button ~= 1 then
     return
   end
   if self._backButton:isHovered(mouseX, mouseY) then
     self._backButton:onClick()
-    return
   end
-  if self._winButton:isHovered(mouseX, mouseY) then
-    self._winButton:onClick()
-    return
+end
+
+function SingleCombatScene:mousereleased(mouseX, mouseY, button)
+  if self._core then
+    self._core:mousereleased(mouseX, mouseY, button)
   end
-  if self._loseButton:isHovered(mouseX, mouseY) then
-    self._loseButton:onClick()
+end
+
+function SingleCombatScene:mousemoved(mouseX, mouseY, dx, dy)
+  if self._core then
+    self._core:mousemoved(mouseX, mouseY, dx, dy)
+  end
+end
+
+function SingleCombatScene:wheelmoved(mouseX, mouseY, dx, dy)
+  if self._core then
+    self._core:wheelmoved(mouseX, mouseY, dx, dy)
   end
 end
 
 function SingleCombatScene:keypressed(key)
+  if self._core and self._core:keypressed(key) then
+    return
+  end
   if key == "escape" then
     self._app:goScene(self._backScene, {
       profile = self._profile,

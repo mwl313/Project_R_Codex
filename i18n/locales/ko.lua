@@ -190,14 +190,30 @@ local LocaleKo = {
       }
     },
     combat = {
-      title = "싱글 전투 (테스트)",
-      subtitle = "SP-01 플레이스홀더 전투 화면",
-      button = {
-        win_test = "승리 (테스트)",
-        lose_test = "패배 (테스트)"
+      title = "싱글 전투",
+      subtitle = "드래그로 알을 쏘고 상대를 전부 탈락시키세요.",
+      node_line = "노드: {nodeType} ({nodeId})",
+      turn_owner = {
+        player = "플레이어",
+        ai = "AI"
       },
+      info_line = "턴 {turnIndex} | {turnOwner} | 남은 시간 {remainSec}s | 샷 {shotUsed}/{shotBudget}",
       status = {
-        placeholder = "테스트 버튼으로 전투 결과를 선택하세요."
+        player_turn = "내 턴입니다. 알을 드래그해 발사하세요.",
+        ai_turn = "상대 턴입니다.",
+        ai_thinking = "AI가 조준 중입니다...",
+        shot_too_short = "드래그 거리가 너무 짧습니다.",
+        card_cannot_use = "지금은 해당 카드를 사용할 수 없습니다.",
+        card_unsupported = "해당 카드는 현재 싱글 전투에 아직 구현되지 않았습니다.",
+        card_target_invalid = "카드 대상이 유효하지 않습니다.",
+        card_target_cancel = "카드 대상 선택을 취소했습니다.",
+        card_used = "{card} 사용 완료",
+        shot_fired = "샷 발사",
+        turn_timeout = "턴 시간이 종료되어 턴이 넘어갑니다.",
+        combat_win = "승리했습니다!",
+        combat_lose = "패배했습니다.",
+        combat_draw = "무승부입니다.",
+        extra_shot = "추가 샷 기회가 남아 있습니다."
       }
     },
     reward = {
