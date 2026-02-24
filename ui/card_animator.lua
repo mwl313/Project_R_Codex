@@ -10,6 +10,7 @@
 외부에서 사용 가능한 함수:
 - CardAnimator.new(params)
 - animator:begin(myCards, requiredPickCount, opponentCardCount, totalPoolCount)
+- animator:beginSingleDeal(myCards, totalPoolCount) -- 싱글 인트로용(DECK_ENTER -> SHUFFLE -> DEAL_ME)
 - animator:update(dt)
 - animator:draw()
 - animator:isOverlayVisible()
@@ -123,12 +124,16 @@ function CardAnimator.new(params)
   local boardY = params.boardY or 0
   local boardW = params.boardW or Constants.BOARD_W
   local boardH = params.boardH or Constants.BOARD_H
+  local customOpponentHandY = params.opponentHandY
+  local customLocalHandY = params.localHandY
 
   local instance = {
     _boardX = boardX,
     _boardY = boardY,
     _boardW = boardW,
     _boardH = boardH,
+    _customOpponentHandY = type(customOpponentHandY) == "number" and customOpponentHandY or nil,
+    _customLocalHandY = type(customLocalHandY) == "number" and customLocalHandY or nil,
 
     _cardW = Constants.CARD_W or 118,
     _cardH = Constants.CARD_H or 166,
@@ -163,7 +168,9 @@ function CardAnimator.new(params)
     _cleanupInitialized = false,
     _cleanupMoveList = {},
     _cleanupFadeList = {},
-    _deckEnterSourceList = {}
+    _deckEnterSourceList = {},
+    _skipDealOpponentStage = false,
+    _stopAfterDealMe = false
   }
   return setmetatable(instance, CardAnimator)
 end
@@ -210,8 +217,8 @@ end
 
 function CardAnimator:_buildHandTargets()
   local centerX = self._boardX + self._boardW * 0.5
-  local opponentY = self._boardY + 118
-  local localY = self._boardY + self._boardH - 108
+  local opponentY = self._customOpponentHandY or (self._boardY + 118)
+  local localY = self._customLocalHandY or (self._boardY + self._boardH - 108)
 
   for index, card in ipairs(self._opponentCardList) do
     card.targetX = fanX(index, #self._opponentCardList, centerX, self._opponentFanSpacing)
@@ -294,7 +301,10 @@ function CardAnimator:_buildDeckEnterSourceList()
   end
 end
 
-function CardAnimator:begin(myCards, requiredPickCount, opponentCardCount, totalPoolCount)
+function CardAnimator:begin(myCards, requiredPickCount, opponentCardCount, totalPoolCount, options)
+  local optionTable = type(options) == "table" and options or {}
+  self._skipDealOpponentStage = optionTable.skipDealOpponentStage == true
+  self._stopAfterDealMe = optionTable.stopAfterDealMe == true
   self._requiredPickCount = tonumber(requiredPickCount) or 0
   self._selectedSet = {}
   self._isMyLocked = false
@@ -342,6 +352,13 @@ function CardAnimator:begin(myCards, requiredPickCount, opponentCardCount, total
   self:_buildDeckEnterSourceList()
   self._isVisible = true
   self:_enterStage(STAGE.DECK_ENTER)
+end
+
+function CardAnimator:beginSingleDeal(myCards, totalPoolCount)
+  self:begin(myCards, 0, 0, totalPoolCount, {
+    skipDealOpponentStage = true,
+    stopAfterDealMe = true
+  })
 end
 
 function CardAnimator:isOverlayVisible()
@@ -515,7 +532,11 @@ function CardAnimator:update(dt)
     return
   end
   if self._stage == STAGE.SHUFFLE then
-    self:_enterStage(STAGE.DEAL_OPP)
+    if self._skipDealOpponentStage then
+      self:_enterStage(STAGE.DEAL_ME)
+    else
+      self:_enterStage(STAGE.DEAL_OPP)
+    end
     return
   end
   if self._stage == STAGE.DEAL_OPP then
@@ -535,7 +556,12 @@ function CardAnimator:update(dt)
       card.faceUp = false
       card.flipScaleX = 1.0
     end
-    self:_enterStage(STAGE.REVEAL_LOCAL)
+    if self._stopAfterDealMe then
+      self:_enterStage(STAGE.DONE)
+      self._isVisible = false
+    else
+      self:_enterStage(STAGE.REVEAL_LOCAL)
+    end
     return
   end
   if self._stage == STAGE.REVEAL_LOCAL then

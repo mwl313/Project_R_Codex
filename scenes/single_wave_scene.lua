@@ -12,6 +12,9 @@ local Config = require("config")
 local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
 local Button = require("ui.button")
+local CardView = require("ui.card_view")
+local CardAnimator = require("ui.card_animator")
+local CardRegistry = require("single.card_registry")
 local SingleProfileStore = require("single.single_profile_store")
 local SingleWaveManager = require("single.single_wave_manager")
 local SingleCombatCore = require("single.single_combat_core")
@@ -20,20 +23,34 @@ local UpgradeDraft = require("single.upgrade_draft")
 local SingleWaveScene = {}
 SingleWaveScene.__index = SingleWaveScene
 
+local BOARD_X = (Constants.BASE_WORLD_W - Constants.BOARD_W) * 0.5
+local BOARD_Y = (Constants.BASE_WORLD_H - Constants.BOARD_H) * 0.5
+local BOARD_CENTER_X = BOARD_X + Constants.BOARD_W * 0.5
+local BOARD_CENTER_Y = BOARD_Y + Constants.BOARD_H * 0.5
+
 local PANEL_LAYOUT = {
-  wave = { order = 3, x = 24, y = 24, w = 286, h = 92 },
-  score = { order = 2, x = 24, y = 130, w = 286, h = 128 },
-  relic = { order = 1, x = 24, y = 272, w = 286, h = 410 }
+  wave = { order = 3, x = 40, y = 50, w = 240, h = 70 },
+  score = { order = 2, x = 40, y = 140, w = 260, h = 230 },
+  relic = { order = 1, x = 40, y = 400, w = 260, h = 260 }
+}
+
+local PANEL_ANIM = {
+  wave = { delaySec = 0.24, durationSec = 0.45 },
+  score = { delaySec = 0.12, durationSec = 0.50 },
+  relic = { delaySec = 0.00, durationSec = 0.55 }
 }
 
 local DECK_ZONE_RECT = {
-  x = Constants.BASE_WORLD_W - 230,
-  y = 258,
+  x = 960,
+  y = 250,
   w = 186,
   h = 228
 }
 
 local HAND_MAX_COUNT = 8
+local INTRO_PANEL_TOTAL_SEC = 1.02
+local INTRO_DECK_MOVE_SEC = 0.55
+local UPGRADE_RESOLVE_SEC = 0.35
 
 local function t(key, vars)
   return I18n.t(key, vars)
@@ -71,25 +88,19 @@ local function pointInRect(x, y, rect)
   return rect and x >= rect.x and x <= rect.x + rect.w and y >= rect.y and y <= rect.y + rect.h
 end
 
-local function randomOffscreenPoint(rng, index)
-  local side = ((index - 1) % 4) + 1
-  local margin = 120
-  local function randomInt(minValue, maxValue)
-    if rng and type(rng.random) == "function" then
-      return rng:random(minValue, maxValue)
-    end
-    return math.random(minValue, maxValue)
-  end
-  if side == 1 then
-    return randomInt(-margin, Constants.BASE_WORLD_W + margin), -margin
-  end
-  if side == 2 then
-    return Constants.BASE_WORLD_W + margin, randomInt(-margin, Constants.BASE_WORLD_H + margin)
-  end
-  if side == 3 then
-    return randomInt(-margin, Constants.BASE_WORLD_W + margin), Constants.BASE_WORLD_H + margin
-  end
-  return -margin, randomInt(-margin, Constants.BASE_WORLD_H + margin)
+local function getHandOpenBaseY()
+  return Constants.BASE_WORLD_H
+    + Constants.CARD_H * 0.5
+    - Constants.CARD_HAND_PEEK_HEIGHT
+    - Constants.CARD_HAND_OPEN_RISE_PX
+end
+
+local function getHandSlotPosition(index, count)
+  local centerIndex = (count + 1) * 0.5
+  local offset = index - centerIndex
+  local x = Constants.BASE_WORLD_W * 0.5 + offset * Constants.CARD_HAND_OPEN_SPACING
+  local y = getHandOpenBaseY() + math.abs(offset) * Constants.CARD_HAND_OPEN_ARC_PX
+  return x, y
 end
 
 function SingleWaveScene.new(app)
@@ -110,6 +121,7 @@ function SingleWaveScene.new(app)
     _selectedUpgradeIndex = nil,
     _confirmUpgradeButton = nil,
     _reopenUpgradeButton = nil,
+    _upgradeResolveAnim = nil,
 
     _isPauseOverlayVisible = false,
     _pauseResumeButton = nil,
@@ -139,10 +151,11 @@ function SingleWaveScene.new(app)
     _intro = {
       isActive = false,
       phase = "none",
-      phaseElapsedSec = 0,
       panelElapsedSec = 0,
-      cardVisualList = {},
-      dealVisualList = {}
+      cardTimelineSec = 0,
+      deckMoveElapsedSec = 0,
+      introDeckTotalCount = 0,
+      cardAnimator = nil
     }
   }
   setmetatable(instance, SingleWaveScene)
@@ -163,50 +176,39 @@ function SingleWaveScene:loadProfileOrDefault()
   end
 end
 
-function SingleWaveScene:buildIntroCardVisuals()
-  local cardVisualList = {}
-  local centerX = Constants.BASE_WORLD_W * 0.5
-  local centerY = Constants.BASE_WORLD_H * 0.5
-  local count = 12
-  local rng = self._waveManager and self._waveManager:getRng() or nil
-  for index = 1, count do
-    local startX, startY = randomOffscreenPoint(rng, index)
-    cardVisualList[#cardVisualList + 1] = {
-      startX = startX,
-      startY = startY,
-      endX = centerX,
-      endY = centerY,
-      delaySec = (index - 1) * 0.07
+function SingleWaveScene:buildIntroDealCardDisplayList()
+  local dealCardIdList = self._waveManager:drawCardsToHand(5, HAND_MAX_COUNT)
+  local displayList = {}
+  for index, saveCardId in ipairs(dealCardIdList) do
+    local cardDef = CardRegistry.getCard(saveCardId)
+    displayList[#displayList + 1] = {
+      id = "intro_" .. tostring(index),
+      label = tostring((cardDef and cardDef.nameKo) or saveCardId)
     }
   end
-  return cardVisualList
-end
-
-function SingleWaveScene:buildDealVisualTargets()
-  local list = {}
-  local count = 5
-  local spacing = 132
-  local centerX = Constants.BASE_WORLD_W * 0.5
-  local y = Constants.BASE_WORLD_H - 72
-  for index = 1, count do
-    local offset = (index - (count + 1) * 0.5) * spacing
-    list[#list + 1] = {
-      x = centerX + offset,
-      y = y,
-      delaySec = (index - 1) * 0.12
-    }
-  end
-  return list
+  local totalCountBeforeDeal = self._waveManager:getDrawPileCount() + #dealCardIdList
+  return displayList, totalCountBeforeDeal
 end
 
 function SingleWaveScene:startIntroSequence()
+  local dealDisplayList, totalCountBeforeDeal = self:buildIntroDealCardDisplayList()
+  local introCardAnimator = CardAnimator.new({
+    boardX = BOARD_X,
+    boardY = BOARD_Y,
+    boardW = Constants.BOARD_W,
+    boardH = Constants.BOARD_H,
+    localHandY = getHandOpenBaseY()
+  })
+  introCardAnimator:beginSingleDeal(dealDisplayList, totalCountBeforeDeal)
+
   self._intro = {
     isActive = true,
     phase = "panels",
-    phaseElapsedSec = 0,
     panelElapsedSec = 0,
-    cardVisualList = self:buildIntroCardVisuals(),
-    dealVisualList = self:buildDealVisualTargets()
+    cardTimelineSec = 0,
+    deckMoveElapsedSec = 0,
+    introDeckTotalCount = totalCountBeforeDeal,
+    cardAnimator = introCardAnimator
   }
   self._core = nil
   self._isPauseOverlayVisible = false
@@ -217,6 +219,7 @@ function SingleWaveScene:startIntroSequence()
   self._upgradeOptionList = {}
   self._upgradeButtonList = {}
   self._selectedUpgradeIndex = nil
+  self._upgradeResolveAnim = nil
   self._isRunEnded = false
   self._runEndResult = nil
   self:setStatus(t("single.wave.status.intro_playing"), Constants.COLOR_TEXT_SUB)
@@ -304,14 +307,13 @@ function SingleWaveScene:getPanelX(panelId)
   if not layout then
     return 0
   end
-  if not self._intro.isActive and self._intro.phase ~= "panels" then
+  if not self._intro.isActive then
     return layout.x
   end
-  local durationSec = 0.52
-  local delaySec = (layout.order - 1) * 0.14
-  local progress = clamp((self._intro.panelElapsedSec - delaySec) / durationSec, 0, 1)
+  local animSpec = PANEL_ANIM[panelId] or { delaySec = 0, durationSec = 0.5 }
+  local progress = clamp((self._intro.panelElapsedSec - animSpec.delaySec) / animSpec.durationSec, 0, 1)
   local eased = easeOutBack(progress)
-  return lerp(-layout.w - 56, layout.x, eased)
+  return lerp(-layout.w - 80, layout.x, eased)
 end
 
 function SingleWaveScene:getRelicListViewportRect()
@@ -360,9 +362,37 @@ function SingleWaveScene:scrollRelicListToBottom()
   self._relicScrollOffset = metrics.maxOffset
 end
 
-function SingleWaveScene:applyUpgradeOption(option)
+function SingleWaveScene:getDeckCenter()
+  return DECK_ZONE_RECT.x + DECK_ZONE_RECT.w * 0.5, DECK_ZONE_RECT.y + DECK_ZONE_RECT.h * 0.5 + 20
+end
+
+function SingleWaveScene:completeUpgradeResolution()
+  self._upgradeResolveAnim = nil
+  self._isUpgradePending = false
+  self._isUpgradeOverlayVisible = false
+  self._isUpgradeHiddenByEsc = false
+  self._selectedUpgradeIndex = nil
+  self._upgradeOptionList = {}
+  self._upgradeButtonList = {}
+  self._waveManager:advanceWave()
+  self:startCurrentWaveCombat()
+end
+
+function SingleWaveScene:updateUpgradeResolveAnimation(dt)
+  local anim = self._upgradeResolveAnim
+  if type(anim) ~= "table" then
+    return
+  end
+  anim.elapsedSec = anim.elapsedSec + dt
+  if anim.elapsedSec < anim.durationSec then
+    return
+  end
+  self:completeUpgradeResolution()
+end
+
+function SingleWaveScene:applyUpgradeOption(option, sourceX, sourceY)
   if type(option) ~= "table" then
-    return false
+    return false, nil
   end
 
   if option.category == UpgradeDraft.CATEGORY_CARD then
@@ -370,14 +400,29 @@ function SingleWaveScene:applyUpgradeOption(option)
     local isAdded, target = self._waveManager:addCardReward(cardId, HAND_MAX_COUNT)
     if not isAdded then
       self:setStatus(t("single.wave.upgrade.status.apply_failed"), Constants.COLOR_DANGER)
-      return false
+      return false, nil
     end
+    local titleText = self:getUpgradeOptionTitle(option)
+    local targetX, targetY
     if target == "hand" then
+      local handCount = self._waveManager:getHandCount()
+      targetX, targetY = getHandSlotPosition(handCount, handCount)
       self:setStatus(t("single.wave.upgrade.status.card_to_hand"), Constants.COLOR_TEXT_SUB)
     else
+      targetX, targetY = self:getDeckCenter()
       self:setStatus(t("single.wave.upgrade.status.card_to_deck"), Constants.COLOR_TEXT_SUB)
     end
-    return true
+    return true, {
+      kind = "card",
+      label = titleText,
+      sourceX = sourceX,
+      sourceY = sourceY,
+      targetX = targetX,
+      targetY = targetY,
+      toDeck = target == "deck",
+      elapsedSec = 0,
+      durationSec = UPGRADE_RESOLVE_SEC
+    }
   end
 
   if option.category == UpgradeDraft.CATEGORY_RELIC then
@@ -389,7 +434,19 @@ function SingleWaveScene:applyUpgradeOption(option)
     else
       self:setStatus(t("single.wave.upgrade.status.relic_skip"), Constants.COLOR_TEXT_SUB)
     end
-    return true
+    local viewport = self:getRelicListViewportRect()
+    local targetX = viewport.x + 52
+    local targetY = viewport.y + viewport.h - 26
+    return true, {
+      kind = "relic",
+      label = self:getUpgradeOptionTitle(option),
+      sourceX = sourceX,
+      sourceY = sourceY,
+      targetX = targetX,
+      targetY = targetY,
+      elapsedSec = 0,
+      durationSec = UPGRADE_RESOLVE_SEC
+    }
   end
 
   if option.category == UpgradeDraft.CATEGORY_HAND_OP then
@@ -397,36 +454,50 @@ function SingleWaveScene:applyUpgradeOption(option)
     local result = self._waveManager:applyHandOperation(handOpId, HAND_MAX_COUNT)
     if result.isApplied then
       self:setStatus(t("single.wave.upgrade.status.hand_op_applied"), Constants.COLOR_TEXT_SUB)
-      return true
+      local deckX, deckY = self:getDeckCenter()
+      return true, {
+        kind = "hand_op",
+        label = self:getUpgradeOptionTitle(option),
+        sourceX = sourceX,
+        sourceY = sourceY,
+        targetX = deckX,
+        targetY = deckY,
+        elapsedSec = 0,
+        durationSec = UPGRADE_RESOLVE_SEC + 0.25
+      }
     end
     self:setStatus(t("single.wave.upgrade.status.apply_failed"), Constants.COLOR_DANGER)
-    return false
+    return false, nil
   end
 
-  return false
+  return false, nil
 end
 
 function SingleWaveScene:confirmUpgradeSelection()
-  if not self._isUpgradeOverlayVisible or not self._isUpgradePending then
+  if not self._isUpgradeOverlayVisible or not self._isUpgradePending or self._upgradeResolveAnim then
     return
   end
   if not self._selectedUpgradeIndex then
     self:setStatus(t("single.wave.upgrade.status.select_required"), Constants.COLOR_DANGER)
     return
   end
+
+  local selectedButton = self._upgradeButtonList[self._selectedUpgradeIndex]
+  local sourceX = selectedButton and (selectedButton.x + selectedButton.w * 0.5) or BOARD_CENTER_X
+  local sourceY = selectedButton and (selectedButton.y + selectedButton.h * 0.5) or BOARD_CENTER_Y
   local option = self._upgradeOptionList[self._selectedUpgradeIndex]
-  if not self:applyUpgradeOption(option) then
+  local isApplied, resolveAnim = self:applyUpgradeOption(option, sourceX, sourceY)
+  if not isApplied then
     return
   end
 
-  self._isUpgradePending = false
   self._isUpgradeOverlayVisible = false
   self._isUpgradeHiddenByEsc = false
   self._selectedUpgradeIndex = nil
-  self._upgradeOptionList = {}
-  self._upgradeButtonList = {}
-  self._waveManager:advanceWave()
-  self:startCurrentWaveCombat()
+  self._upgradeResolveAnim = resolveAnim
+  if not resolveAnim then
+    self:completeUpgradeResolution()
+  end
 end
 
 function SingleWaveScene:rebuildUpgradeButtons()
@@ -681,33 +752,29 @@ end
 
 function SingleWaveScene:updateIntro(dt)
   self._intro.panelElapsedSec = self._intro.panelElapsedSec + dt
-  self._intro.phaseElapsedSec = self._intro.phaseElapsedSec + dt
+  if self._intro.phase == "panels" and self._intro.panelElapsedSec >= INTRO_PANEL_TOTAL_SEC then
+    self._intro.phase = "card_timeline"
+    return
+  end
 
-  if self._intro.phase == "panels" and self._intro.phaseElapsedSec >= 0.82 then
-    self._intro.phase = "cards_to_center"
-    self._intro.phaseElapsedSec = 0
+  if self._intro.phase == "card_timeline" then
+    if self._intro.cardAnimator then
+      self._intro.cardAnimator:update(dt)
+    end
+    self._intro.cardTimelineSec = self._intro.cardTimelineSec + dt
+    if (not self._intro.cardAnimator) or (not self._intro.cardAnimator:isOverlayVisible()) then
+      self._intro.phase = "deck_move"
+      self._intro.deckMoveElapsedSec = 0
+    end
     return
   end
-  if self._intro.phase == "cards_to_center" and self._intro.phaseElapsedSec >= 1.36 then
-    self._intro.phase = "shuffle"
-    self._intro.phaseElapsedSec = 0
-    return
+
+  if self._intro.phase == "deck_move" then
+    self._intro.deckMoveElapsedSec = self._intro.deckMoveElapsedSec + dt
   end
-  if self._intro.phase == "shuffle" and self._intro.phaseElapsedSec >= 0.52 then
-    self._intro.phase = "deal"
-    self._intro.phaseElapsedSec = 0
-    return
-  end
-  if self._intro.phase == "deal" and self._intro.phaseElapsedSec >= 1.22 then
-    self._waveManager:drawCardsToHand(5, HAND_MAX_COUNT)
-    self._intro.phase = "deck_move"
-    self._intro.phaseElapsedSec = 0
-    return
-  end
-  if self._intro.phase == "deck_move" and self._intro.phaseElapsedSec >= 0.58 then
+  if self._intro.phase == "deck_move" and self._intro.deckMoveElapsedSec >= INTRO_DECK_MOVE_SEC then
     self._intro.isActive = false
     self._intro.phase = "done"
-    self._intro.phaseElapsedSec = 0
     self:startCurrentWaveCombat()
   end
 end
@@ -719,6 +786,11 @@ function SingleWaveScene:update(dt)
 
   if self._intro.isActive then
     self:updateIntro(dt)
+    return
+  end
+
+  if self._upgradeResolveAnim then
+    self:updateUpgradeResolveAnimation(dt)
     return
   end
 
@@ -823,72 +895,36 @@ function SingleWaveScene:drawDeckZone()
     handCount = tostring(self._waveManager and self._waveManager:getHandCount() or 0),
     handMax = tostring(HAND_MAX_COUNT)
   }), DECK_ZONE_RECT.x + 8, DECK_ZONE_RECT.y + 54, DECK_ZONE_RECT.w - 16, "center")
+end
 
-  local stackX = DECK_ZONE_RECT.x + DECK_ZONE_RECT.w * 0.5
-  local stackY = DECK_ZONE_RECT.y + DECK_ZONE_RECT.h * 0.5 + 18
-  for depth = 1, 4 do
-    love.graphics.setColor(0.21, 0.28, 0.44, 0.95)
-    love.graphics.rectangle("fill", stackX - 36 + depth * 2, stackY - 52 + depth * 2, 72, 104, 7, 7)
-    love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
-    love.graphics.rectangle("line", stackX - 36 + depth * 2, stackY - 52 + depth * 2, 72, 104, 7, 7)
+function SingleWaveScene:drawDeckStackPrimitive(centerX, centerY, count, alpha)
+  local drawCount = math.max(1, math.floor(tonumber(count) or 1))
+  local safeAlpha = clamp(tonumber(alpha) or 1.0, 0, 1)
+  for depth = 1, drawCount do
+    love.graphics.setColor(0.21, 0.28, 0.44, 0.95 * safeAlpha)
+    love.graphics.rectangle("fill", centerX - 36 + depth * 2, centerY - 52 + depth * 2, 72, 104, 7, 7)
+    love.graphics.setColor(Constants.COLOR_PANEL_BORDER[1], Constants.COLOR_PANEL_BORDER[2], Constants.COLOR_PANEL_BORDER[3], safeAlpha)
+    love.graphics.rectangle("line", centerX - 36 + depth * 2, centerY - 52 + depth * 2, 72, 104, 7, 7)
   end
 end
 
 function SingleWaveScene:drawIntroOverlay()
-  local centerX = Constants.BASE_WORLD_W * 0.5
-  local centerY = Constants.BASE_WORLD_H * 0.5
+  local centerX = BOARD_CENTER_X
+  local centerY = BOARD_CENTER_Y
   local phase = self._intro.phase
-  local elapsed = self._intro.phaseElapsedSec
 
-  if phase == "cards_to_center" then
-    for _, card in ipairs(self._intro.cardVisualList) do
-      local progress = clamp((elapsed - card.delaySec) / 0.54, 0, 1)
-      if progress > 0 then
-        local eased = easeOutCubic(progress)
-        local x = lerp(card.startX, card.endX, eased)
-        local y = lerp(card.startY, card.endY, eased)
-        love.graphics.setColor(0.20, 0.31, 0.55, 0.96)
-        love.graphics.rectangle("fill", x - 30, y - 44, 60, 88, 6, 6)
-        love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
-        love.graphics.rectangle("line", x - 30, y - 44, 60, 88, 6, 6)
-      end
-    end
+  if phase == "card_timeline" and self._intro.cardAnimator then
+    self._intro.cardAnimator:draw()
   end
 
-  if phase == "shuffle" or phase == "deal" or phase == "deck_move" then
-    local shakeX = 0
-    if phase == "shuffle" then
-      shakeX = math.sin(elapsed * 32) * 18
-    end
-    local deckX = centerX + shakeX
-    local deckY = centerY
-    if phase == "deck_move" then
-      local moveProgress = clamp(elapsed / 0.58, 0, 1)
-      local eased = easeOutCubic(moveProgress)
-      deckX = lerp(centerX, DECK_ZONE_RECT.x + DECK_ZONE_RECT.w * 0.5, eased)
-      deckY = lerp(centerY, DECK_ZONE_RECT.y + DECK_ZONE_RECT.h * 0.5 + 20, eased)
-    end
-    for depth = 1, 5 do
-      love.graphics.setColor(0.20, 0.31, 0.55, 0.96)
-      love.graphics.rectangle("fill", deckX - 35 + depth * 2, deckY - 52 + depth * 2, 70, 102, 6, 6)
-      love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
-      love.graphics.rectangle("line", deckX - 35 + depth * 2, deckY - 52 + depth * 2, 70, 102, 6, 6)
-    end
-  end
-
-  if phase == "deal" then
-    for _, target in ipairs(self._intro.dealVisualList) do
-      local progress = clamp((elapsed - target.delaySec) / 0.38, 0, 1)
-      if progress > 0 then
-        local eased = easeOutCubic(progress)
-        local x = lerp(centerX, target.x, eased)
-        local y = lerp(centerY, target.y, eased)
-        love.graphics.setColor(0.20, 0.31, 0.55, 0.96)
-        love.graphics.rectangle("fill", x - 31, y - 45, 62, 90, 6, 6)
-        love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
-        love.graphics.rectangle("line", x - 31, y - 45, 62, 90, 6, 6)
-      end
-    end
+  if phase == "deck_move" then
+    local progress = clamp(self._intro.deckMoveElapsedSec / INTRO_DECK_MOVE_SEC, 0, 1)
+    local eased = easeOutCubic(progress)
+    local targetX, targetY = self:getDeckCenter()
+    local drawX = lerp(centerX, targetX, eased)
+    local drawY = lerp(centerY, targetY, eased)
+    local stackCount = math.min(10, math.max(4, math.floor((self._intro.introDeckTotalCount or 5) * 0.16)))
+    self:drawDeckStackPrimitive(drawX, drawY, stackCount, 1.0)
   end
 end
 
@@ -924,6 +960,66 @@ function SingleWaveScene:drawUpgradeOverlay(mouseX, mouseY)
 
   self._confirmUpgradeButton.isEnabled = self._selectedUpgradeIndex ~= nil
   self._confirmUpgradeButton:draw(mouseX, mouseY)
+end
+
+function SingleWaveScene:drawUpgradeResolveAnimation()
+  local anim = self._upgradeResolveAnim
+  if type(anim) ~= "table" then
+    return
+  end
+
+  local progress = clamp(anim.elapsedSec / math.max(0.001, anim.durationSec), 0, 1)
+  local eased = easeOutCubic(progress)
+  local drawX = lerp(anim.sourceX or BOARD_CENTER_X, anim.targetX or BOARD_CENTER_X, eased)
+  local drawY = lerp(anim.sourceY or BOARD_CENTER_Y, anim.targetY or BOARD_CENTER_Y, eased)
+
+  if anim.kind == "card" then
+    CardView.drawCard({
+      x = drawX,
+      y = drawY,
+      w = Constants.CARD_W,
+      h = Constants.CARD_H,
+      label = tostring(anim.label or ""),
+      backLabel = "?",
+      isFaceUp = true,
+      scale = lerp(1.0, 0.9, eased),
+      alpha = 1.0,
+      flipScaleX = 1.0,
+      borderThickness = Constants.CARD_BORDER_THICKNESS,
+      glowAlpha = Constants.CARD_GLOW_ALPHA,
+      isHovered = false,
+      isSelected = true
+    })
+    if anim.toDeck then
+      local pulse = 1.0 + math.sin(progress * math.pi * 4) * 0.08
+      local deckX, deckY = self:getDeckCenter()
+      self:drawDeckStackPrimitive(deckX, deckY, 6, clamp(pulse, 0.75, 1.0))
+    end
+    return
+  end
+
+  if anim.kind == "relic" then
+    love.graphics.setColor(0.96, 0.86, 0.38, 0.95 * (1.0 - progress * 0.3))
+    love.graphics.rectangle("fill", drawX - 86, drawY - 22, 172, 44, 12, 12)
+    love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+    love.graphics.rectangle("line", drawX - 86, drawY - 22, 172, 44, 12, 12)
+    love.graphics.setFont(FontManager.getFont("small"))
+    love.graphics.setColor(0.12, 0.12, 0.12, 1.0)
+    love.graphics.printf(tostring(anim.label or ""), drawX - 76, drawY - 8, 152, "center")
+    return
+  end
+
+  if anim.kind == "hand_op" then
+    local deckX, deckY = self:getDeckCenter()
+    local pulse = 1.0 + math.sin(progress * math.pi * 6) * 0.12
+    love.graphics.setColor(0.40, 0.76, 1.0, 0.22)
+    love.graphics.rectangle("fill", deckX - 78 * pulse, deckY - 112 * pulse, 156 * pulse, 224 * pulse, 12, 12)
+    love.graphics.setColor(0.62, 0.88, 1.0, 0.92)
+    love.graphics.rectangle("line", deckX - 78 * pulse, deckY - 112 * pulse, 156 * pulse, 224 * pulse, 12, 12)
+    love.graphics.setFont(FontManager.getFont("small"))
+    love.graphics.setColor(Constants.COLOR_TEXT)
+    love.graphics.printf(t("single.wave.upgrade.status.hand_op_applied"), deckX - 140, deckY + 122, 280, "center")
+  end
 end
 
 function SingleWaveScene:drawPauseOverlay(mouseX, mouseY)
@@ -1006,7 +1102,16 @@ function SingleWaveScene:draw()
   self:drawWavePanel()
   self:drawScorePanel()
   self:drawRelicPanel()
-  self:drawDeckZone()
+  local shouldDrawDeckZone = (not self._intro.isActive) or self._intro.phase == "deck_move"
+  if shouldDrawDeckZone then
+    self:drawDeckZone()
+    if not (self._intro.isActive and self._intro.phase == "deck_move") then
+      local deckX, deckY = self:getDeckCenter()
+      local drawCount = self._waveManager and self._waveManager:getDrawPileCount() or 0
+      local stackCount = math.min(10, math.max(4, math.floor(math.max(4, drawCount) * 0.16)))
+      self:drawDeckStackPrimitive(deckX, deckY, stackCount, 1.0)
+    end
+  end
 
   love.graphics.setFont(FontManager.getFont("title"))
   love.graphics.setColor(Constants.COLOR_TEXT)
@@ -1021,6 +1126,10 @@ function SingleWaveScene:draw()
 
   if self._intro.isActive then
     self:drawIntroOverlay()
+  end
+
+  if self._upgradeResolveAnim then
+    self:drawUpgradeResolveAnimation()
   end
 
   if self._isUpgradePending and self._isUpgradeOverlayVisible then
@@ -1073,6 +1182,10 @@ function SingleWaveScene:handleRelicScrollMousePressed(mouseX, mouseY, button)
 end
 
 function SingleWaveScene:mousepressed(mouseX, mouseY, button)
+  if self._upgradeResolveAnim then
+    return
+  end
+
   if self._isSettingsOverlayVisible then
     if button ~= 1 then
       return
@@ -1162,11 +1275,11 @@ function SingleWaveScene:mousepressed(mouseX, mouseY, button)
     return
   end
 
-  if self:handleRelicScrollMousePressed(mouseX, mouseY, button) then
+  if self._intro.isActive then
     return
   end
 
-  if self._intro.isActive then
+  if self:handleRelicScrollMousePressed(mouseX, mouseY, button) then
     return
   end
 
@@ -1180,7 +1293,7 @@ function SingleWaveScene:mousereleased(mouseX, mouseY, button)
     self._isRelicPanelDragging = false
     self._isRelicScrollbarDragging = false
   end
-  if self._isPauseOverlayVisible or self._isUpgradeOverlayVisible or self._isSettingsOverlayVisible or self._intro.isActive or self._isRunEnded then
+  if self._isPauseOverlayVisible or self._isUpgradeOverlayVisible or self._isSettingsOverlayVisible or self._intro.isActive or self._isRunEnded or self._upgradeResolveAnim then
     return
   end
   if self._core then
@@ -1201,7 +1314,7 @@ function SingleWaveScene:mousemoved(mouseX, mouseY, dx, dy)
     self._relicDragStartY = mouseY
     return
   end
-  if self._isPauseOverlayVisible or self._isUpgradeOverlayVisible or self._isSettingsOverlayVisible or self._intro.isActive or self._isRunEnded then
+  if self._isPauseOverlayVisible or self._isUpgradeOverlayVisible or self._isSettingsOverlayVisible or self._intro.isActive or self._isRunEnded or self._upgradeResolveAnim then
     return
   end
   if self._core then
@@ -1210,13 +1323,16 @@ function SingleWaveScene:mousemoved(mouseX, mouseY, dx, dy)
 end
 
 function SingleWaveScene:wheelmoved(_x, y)
+  if self._intro.isActive then
+    return
+  end
   local mouseX, mouseY = self._app:getMouseWorldPosition()
   local metrics = self:getRelicScrollMetrics()
   if pointInRect(mouseX, mouseY, metrics.viewport) then
     self:scrollRelicList(-y * 30)
     return
   end
-  if self._isPauseOverlayVisible or self._isUpgradeOverlayVisible or self._isSettingsOverlayVisible or self._intro.isActive or self._isRunEnded then
+  if self._isPauseOverlayVisible or self._isUpgradeOverlayVisible or self._isSettingsOverlayVisible or self._intro.isActive or self._isRunEnded or self._upgradeResolveAnim then
     return
   end
   if self._core then
@@ -1225,6 +1341,10 @@ function SingleWaveScene:wheelmoved(_x, y)
 end
 
 function SingleWaveScene:keypressed(key)
+  if self._upgradeResolveAnim then
+    return
+  end
+
   if self._isSettingsOverlayVisible then
     if key == "escape" then
       self:closeSettingsOverlay()
@@ -1244,6 +1364,12 @@ function SingleWaveScene:keypressed(key)
       return
     end
     self._isPauseOverlayVisible = true
+    return
+  end
+
+  if key == "u" and self._isUpgradePending and self._isUpgradeHiddenByEsc then
+    self._isUpgradeOverlayVisible = true
+    self._isUpgradeHiddenByEsc = false
     return
   end
 
