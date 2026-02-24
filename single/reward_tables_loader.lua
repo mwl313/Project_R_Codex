@@ -19,11 +19,27 @@ local DEFAULT_DATA = {
       filters = { mode = "single", tagsAny = {} }
     },
     {
+      contextId = "combat_elite",
+      nodeTypes = { "elite" },
+      offerCount = 3,
+      rarityWeightsRef = "base",
+      allowLegendary = false,
+      filters = { mode = "single", tagsAny = {} }
+    },
+    {
       contextId = "combat_boss",
       nodeTypes = { "boss" },
       offerCount = 3,
       rarityWeightsRef = "base",
       allowLegendary = true,
+      filters = { mode = "single", tagsAny = {} }
+    },
+    {
+      contextId = "shop_buy",
+      nodeTypes = { "shop" },
+      offerCount = 3,
+      rarityWeightsRef = "base",
+      allowLegendary = false,
       filters = { mode = "single", tagsAny = {} }
     }
   }

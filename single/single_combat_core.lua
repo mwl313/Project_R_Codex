@@ -18,6 +18,7 @@ local Abilities = require("abilities")
 local CardHandBar = require("ui.card_hand_bar")
 local EffectManager = require("effects.effect_manager")
 local SingleAI = require("single.single_ai")
+local SingleRunState = require("single.single_run_state")
 local InputCaptureGuard = require("utils.input_capture_guard")
 
 local SingleCombatCore = {}
@@ -133,6 +134,7 @@ function SingleCombatCore.new(params)
     _invincibleTurnByPlayer = { [1] = nil, [2] = nil },
     _shockwaveOwnerPlayerIndex = nil,
     _shockwaveSourceStoneId = nil,
+    _shockwaveCardScale = 1.0,
 
     _activePlayerIndex = 1,
     _playingTurnIndex = 1,
@@ -231,7 +233,10 @@ end
 function SingleCombatCore:initializeHand()
   self._handEntryList = {}
   self._handEntryById = {}
-  local deck = getDeck(self._profile, self._runState and self._runState.deckId)
+  local deck = SingleRunState.getRunDeck(self._runState, self._profile)
+  if type(deck) ~= "table" then
+    deck = getDeck(self._profile, self._runState and self._runState.deckId)
+  end
   local runtimeCards = {}
   if deck and type(deck.cards) == "table" then
     for _, cardId in ipairs(deck.cards) do
@@ -250,7 +255,13 @@ function SingleCombatCore:initializeHand()
       runtimeCards[i], runtimeCards[j] = runtimeCards[j], runtimeCards[i]
     end
   end
-  for i = 1, math.min(5, #runtimeCards) do
+  local drawCount = 5
+  if type(self._runState) == "table" and type(self._runState.tempModifiers) == "table" then
+    local drawDelta = math.floor(tonumber(self._runState.tempModifiers.nextCombatDrawDelta) or 0)
+    drawCount = math.max(1, drawCount + drawDelta)
+    self._runState.tempModifiers.nextCombatDrawDelta = nil
+  end
+  for i = 1, math.min(drawCount, #runtimeCards) do
     local entryId = self:createId("card")
     local cardId = runtimeCards[i]
     local entry = { entryId = entryId, cardId = cardId, label = Abilities.getCardLabel(cardId) }
@@ -281,6 +292,7 @@ function SingleCombatCore:startTurn(playerIndex, initial)
   self._lockedStoneIdSet = {}
   self._shockwaveOwnerPlayerIndex = nil
   self._shockwaveSourceStoneId = nil
+  self._shockwaveCardScale = 1.0
   self._pendingCardTargetId = nil
   self._pendingCardTargetEntryId = nil
   self._pendingCardTargetCardId = nil
@@ -477,6 +489,12 @@ function SingleCombatCore:toBoardLocal(worldX, worldY)
   return lx, ly
 end
 
+function SingleCombatCore:getCardUpgradeScale(runtimeCardId)
+  local saveCardId = CardRegistry.fromRuntimeCardId(runtimeCardId)
+  local level = SingleRunState.getUpgradeLevel(self._runState, saveCardId)
+  return 1.0 + math.max(0, level) * 0.10
+end
+
 function SingleCombatCore:canUseHandEntry(entryId)
   local entry = self._handEntryById[tostring(entryId or "")]
   if not entry then
@@ -492,15 +510,20 @@ function SingleCombatCore:canUseHandEntry(entryId)
 end
 
 function SingleCombatCore:applyCardEffect(cardId, target)
+  local upgradeScale = self:getCardUpgradeScale(cardId)
   local effect = nil
   if cardId == "agile" then
     local rule = CardRules.getAgileRule()
-    effect = { shotBudget = math.max(self._playingShotBudget, math.floor(tonumber(rule and rule.shot_budget) or 2)) }
+    local baseBudget = math.max(1, math.floor(tonumber(rule and rule.shot_budget) or 2))
+    local boostedBudget = math.max(baseBudget, math.floor(baseBudget * upgradeScale + 0.5))
+    effect = { shotBudget = math.max(self._playingShotBudget, boostedBudget) }
   elseif cardId == "invincible" then
     local rule = CardRules.getInvincibleRule()
-    local offset = math.max(1, math.floor(tonumber(rule and rule.protect_after_turn_offset) or 1))
+    local baseOffset = math.max(1, math.floor(tonumber(rule and rule.protect_after_turn_offset) or 1))
+    local offset = math.max(1, math.floor(baseOffset * upgradeScale))
     effect = { invincibleTurnByPlayer = { [1] = self._playingTurnIndex + offset, [2] = self._invincibleTurnByPlayer[2] } }
   elseif cardId == "shockwave" then
+    self._shockwaveCardScale = upgradeScale
     effect = { shockwaveOwnerPlayerIndex = 1 }
   elseif cardId == "reinforcement" then
     if not target then return false, t("single.combat.status.card_target_invalid") end
@@ -520,7 +543,17 @@ function SingleCombatCore:applyCardEffect(cardId, target)
     local ok, reason = Abilities.canPlaceRockfallAtCanonical(self, target.x, target.y)
     if not ok then return false, reason end
     local rule = CardRules.getRockfallRule()
-    effect = { obstacle = { id = self:createId("rock"), x = target.x, y = target.y, width = rule.width or Constants.ROCK_OBSTACLE_WIDTH, height = rule.height or Constants.ROCK_OBSTACLE_HEIGHT } }
+    local baseWidth = math.max(1, tonumber(rule.width) or Constants.ROCK_OBSTACLE_WIDTH)
+    local baseHeight = math.max(1, tonumber(rule.height) or Constants.ROCK_OBSTACLE_HEIGHT)
+    effect = {
+      obstacle = {
+        id = self:createId("rock"),
+        x = target.x,
+        y = target.y,
+        width = math.max(1, math.floor(baseWidth * upgradeScale + 0.5)),
+        height = math.max(1, math.floor(baseHeight * upgradeScale + 0.5))
+      }
+    }
   else
     return false, t("single.combat.status.card_unsupported")
   end

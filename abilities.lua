@@ -154,7 +154,11 @@ end
 
 function Abilities.applyShockwaveFromPoint(scene, centerX, centerY)
   local shockwaveRule = CardRules.getShockwaveRule()
-  local shockwaveRadius = Constants.STONE_RADIUS * math.max(0, shockwaveRule.radius_multiplier or 0)
+  local upgradeScale = tonumber(scene and scene._shockwaveCardScale) or 1.0
+  if upgradeScale < 0 then
+    upgradeScale = 0
+  end
+  local shockwaveRadius = Constants.STONE_RADIUS * math.max(0, shockwaveRule.radius_multiplier or 0) * upgradeScale
   if shockwaveRadius <= 0 then
     return
   end
@@ -162,7 +166,7 @@ function Abilities.applyShockwaveFromPoint(scene, centerX, centerY)
     scene._effectManager:addShockwavePulse(centerX, centerY, shockwaveRadius)
   end
 
-  local impulseStrength = math.max(0, shockwaveRule.strength or 0)
+  local impulseStrength = math.max(0, shockwaveRule.strength or 0) * upgradeScale
   if impulseStrength <= 0 then
     return
   end

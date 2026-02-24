@@ -172,13 +172,15 @@ local LocaleKo = {
       title = "런 맵",
       node_default = "다음 노드",
       node_line = "{nodeIndex}/{nodeCount} - {nodeTitle}",
+      gold_line = "보유 골드: {gold}G",
       node = {
         combat = "전투",
         elite = "엘리트",
         boss = "보스"
       },
       button = {
-        start_combat = "전투 시작"
+        start_combat = "전투 시작",
+        enter_node = "노드 진행"
       },
       status = {
         ready = "전투를 시작할 수 있습니다.",
@@ -187,6 +189,127 @@ local LocaleKo = {
         selected = "선택됨: {nodeTitle}",
         select_invalid = "현재 깊이에서 선택할 수 없는 노드입니다.",
         select_blocked = "해당 선택은 스테이지 구성 제약과 충돌합니다."
+      }
+    },
+    shop = {
+      title = "상점",
+      gold_line = "보유 골드: {gold}G",
+      mode = {
+        buy = "카드 구매",
+        upgrade = "카드 강화",
+        remove = "카드 제거"
+      },
+      button = {
+        buy = "구매",
+        buy_upgrade = "강화 ({price}G)",
+        buy_remove = "제거 ({price}G)",
+        leave = "떠나기"
+      },
+      row = {
+        level = "강화 레벨: {level}"
+      },
+      status = {
+        ready = "상점에서 1회 행동을 선택하세요.",
+        not_enough_gold = "골드가 부족합니다.",
+        buy_ok = "{card} 구매 완료 (남은 골드: {gold}G)",
+        buy_fail = "구매 실패: {reason}",
+        upgrade_ok = "{card} 강화 완료 (Lv.{level})",
+        remove_ok = "{card} 제거 완료",
+        remove_fail = "카드 제거에 실패했습니다."
+      }
+    },
+    rest = {
+      title = "휴식",
+      subtitle = "무료로 카드 강화 또는 카드 제거 중 하나를 선택하세요.",
+      mode = {
+        upgrade = "무료 강화",
+        remove = "무료 제거"
+      },
+      row = {
+        level = "강화 레벨: {level}"
+      },
+      button = {
+        upgrade = "강화",
+        remove = "제거"
+      },
+      status = {
+        ready = "휴식 보너스를 선택하세요.",
+        upgrade_ok = "{card} 강화 완료 (Lv.{level})",
+        remove_ok = "{card} 제거 완료",
+        remove_fail = "카드 제거에 실패했습니다.",
+        deck_empty = "덱이 비어 있어 휴식 효과를 적용하지 못했습니다."
+      }
+    },
+    deck_clean = {
+      title = "덱 정리",
+      subtitle = "카드 1장을 무료로 제거할 수 있습니다.",
+      button = {
+        remove = "제거"
+      },
+      status = {
+        ready = "제거할 카드를 선택하세요.",
+        remove_ok = "{card} 제거 완료",
+        remove_fail = "카드 제거에 실패했습니다.",
+        deck_empty = "덱이 비어 있어 덱 정리 효과를 건너뜁니다."
+      }
+    },
+    event = {
+      title = "이벤트",
+      desc = "결정을 선택하세요.",
+      gold_line = "보유 골드: {gold}G",
+      status = {
+        ready = "이벤트 선택지를 고르세요.",
+        gold_gain = "골드 +{gold}",
+        gold_lose = "골드 -{gold}",
+        temp_applied = "임시 효과가 적용되었습니다.",
+        upgrade_random = "{card} 강화 완료 (Lv.{level})",
+        remove_random = "{card} 제거 완료",
+        remove_n_ok = "카드 {count}장 제거 완료",
+        deck_empty = "덱에 카드가 없습니다.",
+        not_enough_gold = "골드가 부족합니다.",
+        rare_missing = "희귀 카드 풀이 비어 있습니다.",
+        buy_fail = "카드를 구매할 수 없습니다.",
+        buy_rare_ok = "{card} 희귀 카드를 구매했습니다.",
+        duplicate_ok = "{card} 복제 성공",
+        duplicate_fail = "복제에 실패했습니다."
+      },
+      table = {
+        event_gold_or_draw_penalty = {
+          title = "의문의 제안",
+          desc = "낯선 상인이 거래를 제안합니다.",
+          choice_gain_gold = "골드 +30",
+          choice_lose_draw = "다음 전투 드로우 -1"
+        },
+        event_upgrade_or_remove = {
+          title = "대장간",
+          desc = "대장장이가 단 한 번 도와줄 수 있다고 합니다.",
+          choice_upgrade = "무작위 카드 강화",
+          choice_remove = "무작위 카드 제거"
+        },
+        event_rare_offer = {
+          title = "암시장",
+          desc = "희귀 카드를 구매할 기회입니다.",
+          choice_buy = "희귀 카드 구매 (30G)",
+          choice_gain_gold = "거래 거절하고 골드 +20"
+        },
+        event_mystery_fight = {
+          title = "수상한 소리",
+          desc = "앞길에서 강한 적의 기척이 느껴집니다.",
+          choice_fight = "정체불명 전투(엘리트)",
+          choice_skip = "우회하고 골드 +15"
+        },
+        event_duplicate_or_gold = {
+          title = "복제 장치",
+          desc = "덱의 카드를 복제하거나 보상을 받을 수 있습니다.",
+          choice_duplicate = "무작위 카드 복제",
+          choice_gain_gold = "안전하게 골드 +25"
+        },
+        event_remove_two_or_lose_gold = {
+          title = "무거운 짐",
+          desc = "덱을 가볍게 하거나 통행료를 내야 합니다.",
+          choice_remove_two = "카드 2장 제거",
+          choice_lose_gold = "골드 -20"
+        }
       }
     },
     combat = {

@@ -172,13 +172,15 @@ local LocaleEn = {
       title = "Run Map",
       node_default = "Next Node",
       node_line = "{nodeIndex}/{nodeCount} - {nodeTitle}",
+      gold_line = "Gold: {gold}G",
       node = {
         combat = "Combat",
         elite = "Elite",
         boss = "Boss"
       },
       button = {
-        start_combat = "Start Combat"
+        start_combat = "Start Combat",
+        enter_node = "Enter Node"
       },
       status = {
         ready = "Ready to start combat.",
@@ -187,6 +189,127 @@ local LocaleEn = {
         selected = "Selected: {nodeTitle}",
         select_invalid = "This node cannot be selected at the current depth.",
         select_blocked = "This choice conflicts with stage path constraints."
+      }
+    },
+    shop = {
+      title = "Shop",
+      gold_line = "Gold: {gold}G",
+      mode = {
+        buy = "Buy Card",
+        upgrade = "Upgrade Card",
+        remove = "Remove Card"
+      },
+      button = {
+        buy = "Buy",
+        buy_upgrade = "Upgrade ({price}G)",
+        buy_remove = "Remove ({price}G)",
+        leave = "Leave"
+      },
+      row = {
+        level = "Upgrade Lv: {level}"
+      },
+      status = {
+        ready = "Choose one action in the shop.",
+        not_enough_gold = "Not enough gold.",
+        buy_ok = "Purchased {card} (Gold: {gold}G)",
+        buy_fail = "Purchase failed: {reason}",
+        upgrade_ok = "{card} upgraded (Lv.{level})",
+        remove_ok = "{card} removed",
+        remove_fail = "Failed to remove card."
+      }
+    },
+    rest = {
+      title = "Rest",
+      subtitle = "Choose one free action: upgrade or remove.",
+      mode = {
+        upgrade = "Free Upgrade",
+        remove = "Free Remove"
+      },
+      row = {
+        level = "Upgrade Lv: {level}"
+      },
+      button = {
+        upgrade = "Upgrade",
+        remove = "Remove"
+      },
+      status = {
+        ready = "Choose your rest bonus.",
+        upgrade_ok = "{card} upgraded (Lv.{level})",
+        remove_ok = "{card} removed",
+        remove_fail = "Failed to remove card.",
+        deck_empty = "Deck is empty. Rest effect is skipped."
+      }
+    },
+    deck_clean = {
+      title = "Deck Clean",
+      subtitle = "Remove one card for free.",
+      button = {
+        remove = "Remove"
+      },
+      status = {
+        ready = "Choose a card to remove.",
+        remove_ok = "{card} removed",
+        remove_fail = "Failed to remove card.",
+        deck_empty = "Deck is empty. Deck-clean effect is skipped."
+      }
+    },
+    event = {
+      title = "Event",
+      desc = "Choose an option.",
+      gold_line = "Gold: {gold}G",
+      status = {
+        ready = "Pick one event option.",
+        gold_gain = "Gold +{gold}",
+        gold_lose = "Gold -{gold}",
+        temp_applied = "Temporary modifier applied.",
+        upgrade_random = "{card} upgraded (Lv.{level})",
+        remove_random = "{card} removed",
+        remove_n_ok = "{count} cards removed",
+        deck_empty = "Deck is empty.",
+        not_enough_gold = "Not enough gold.",
+        rare_missing = "No rare cards available.",
+        buy_fail = "Cannot purchase card.",
+        buy_rare_ok = "Purchased rare card: {card}",
+        duplicate_ok = "Duplicated {card}",
+        duplicate_fail = "Failed to duplicate card."
+      },
+      table = {
+        event_gold_or_draw_penalty = {
+          title = "Strange Offer",
+          desc = "A stranger proposes a trade.",
+          choice_gain_gold = "Gain 30 Gold",
+          choice_lose_draw = "Next combat draw -1"
+        },
+        event_upgrade_or_remove = {
+          title = "Forge",
+          desc = "The smith can help only once.",
+          choice_upgrade = "Upgrade random card",
+          choice_remove = "Remove random card"
+        },
+        event_rare_offer = {
+          title = "Black Market",
+          desc = "You can buy a rare card.",
+          choice_buy = "Buy rare card (30G)",
+          choice_gain_gold = "Decline and gain 20G"
+        },
+        event_mystery_fight = {
+          title = "Suspicious Noise",
+          desc = "A strong enemy blocks the way.",
+          choice_fight = "Mystery Fight (Elite)",
+          choice_skip = "Bypass and gain 15G"
+        },
+        event_duplicate_or_gold = {
+          title = "Duplicator",
+          desc = "Duplicate a deck card or take gold.",
+          choice_duplicate = "Duplicate random card",
+          choice_gain_gold = "Take 25G"
+        },
+        event_remove_two_or_lose_gold = {
+          title = "Heavy Load",
+          desc = "Lighten your deck or pay toll.",
+          choice_remove_two = "Remove 2 cards",
+          choice_lose_gold = "Lose 20G"
+        }
       }
     },
     combat = {

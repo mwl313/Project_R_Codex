@@ -32,5 +32,18 @@
   },
   "legendaryPolicy": {
     "bossOnly": true
+  },
+  "economy": {
+    "goldReward": {
+      "mob": [15, 25],
+      "elite": [30, 45],
+      "boss": [60, 90]
+    },
+    "shopPrices": {
+      "buyCardBase": 35,
+      "buyCardRareExtra": 10,
+      "upgrade": 40,
+      "remove": 30
+    }
   }
 }

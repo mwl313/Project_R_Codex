@@ -1,0 +1,147 @@
+{
+  "version": 1,
+  "events": [
+    {
+      "eventId": "event_gold_or_draw_penalty",
+      "weight": 1.0,
+      "titleKey": "single.event.table.event_gold_or_draw_penalty.title",
+      "descKey": "single.event.table.event_gold_or_draw_penalty.desc",
+      "choices": [
+        {
+          "choiceId": "gain_gold",
+          "labelKey": "single.event.table.event_gold_or_draw_penalty.choice_gain_gold",
+          "outcome": {
+            "type": "gain_gold",
+            "amount": 30
+          }
+        },
+        {
+          "choiceId": "lose_draw",
+          "labelKey": "single.event.table.event_gold_or_draw_penalty.choice_lose_draw",
+          "outcome": {
+            "type": "temp_modifier",
+            "key": "nextCombatDrawDelta",
+            "value": -1
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "event_upgrade_or_remove",
+      "weight": 1.0,
+      "titleKey": "single.event.table.event_upgrade_or_remove.title",
+      "descKey": "single.event.table.event_upgrade_or_remove.desc",
+      "choices": [
+        {
+          "choiceId": "upgrade_random",
+          "labelKey": "single.event.table.event_upgrade_or_remove.choice_upgrade",
+          "outcome": {
+            "type": "upgrade_random"
+          }
+        },
+        {
+          "choiceId": "remove_random",
+          "labelKey": "single.event.table.event_upgrade_or_remove.choice_remove",
+          "outcome": {
+            "type": "remove_random"
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "event_rare_offer",
+      "weight": 1.0,
+      "titleKey": "single.event.table.event_rare_offer.title",
+      "descKey": "single.event.table.event_rare_offer.desc",
+      "choices": [
+        {
+          "choiceId": "buy_rare",
+          "labelKey": "single.event.table.event_rare_offer.choice_buy",
+          "outcome": {
+            "type": "buy_rare_offer",
+            "cost": 30
+          }
+        },
+        {
+          "choiceId": "gain_gold",
+          "labelKey": "single.event.table.event_rare_offer.choice_gain_gold",
+          "outcome": {
+            "type": "gain_gold",
+            "amount": 20
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "event_mystery_fight",
+      "weight": 1.0,
+      "titleKey": "single.event.table.event_mystery_fight.title",
+      "descKey": "single.event.table.event_mystery_fight.desc",
+      "choices": [
+        {
+          "choiceId": "fight_elite",
+          "labelKey": "single.event.table.event_mystery_fight.choice_fight",
+          "outcome": {
+            "type": "mystery_fight",
+            "nodeType": "elite"
+          }
+        },
+        {
+          "choiceId": "skip_gold",
+          "labelKey": "single.event.table.event_mystery_fight.choice_skip",
+          "outcome": {
+            "type": "gain_gold",
+            "amount": 15
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "event_duplicate_or_gold",
+      "weight": 1.0,
+      "titleKey": "single.event.table.event_duplicate_or_gold.title",
+      "descKey": "single.event.table.event_duplicate_or_gold.desc",
+      "choices": [
+        {
+          "choiceId": "duplicate_random",
+          "labelKey": "single.event.table.event_duplicate_or_gold.choice_duplicate",
+          "outcome": {
+            "type": "duplicate_random"
+          }
+        },
+        {
+          "choiceId": "gain_gold",
+          "labelKey": "single.event.table.event_duplicate_or_gold.choice_gain_gold",
+          "outcome": {
+            "type": "gain_gold",
+            "amount": 25
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "event_remove_two_or_lose_gold",
+      "weight": 1.0,
+      "titleKey": "single.event.table.event_remove_two_or_lose_gold.title",
+      "descKey": "single.event.table.event_remove_two_or_lose_gold.desc",
+      "choices": [
+        {
+          "choiceId": "remove_two",
+          "labelKey": "single.event.table.event_remove_two_or_lose_gold.choice_remove_two",
+          "outcome": {
+            "type": "remove_n",
+            "count": 2
+          }
+        },
+        {
+          "choiceId": "lose_gold",
+          "labelKey": "single.event.table.event_remove_two_or_lose_gold.choice_lose_gold",
+          "outcome": {
+            "type": "lose_gold",
+            "amount": 20
+          }
+        }
+      ]
+    }
+  ]
+}

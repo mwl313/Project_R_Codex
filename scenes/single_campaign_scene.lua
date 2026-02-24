@@ -16,6 +16,7 @@ local BackButton = require("ui.back_button")
 local SingleProfileStore = require("single.single_profile_store")
 local SingleDeckManager = require("single.single_deck_manager")
 local SingleRunManager = require("single.single_run_manager")
+local SingleRunState = require("single.single_run_state")
 
 local SingleCampaignScene = {}
 SingleCampaignScene.__index = SingleCampaignScene
@@ -147,6 +148,7 @@ function SingleCampaignScene:startRun()
     templateId = "template_a",
     stageIndex = 1
   })
+  SingleRunState.ensureDefaults(runState, self._profile)
   self._app:goScene("single_map", {
     backScene = "single_campaign",
     profile = self._profile,

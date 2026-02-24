@@ -16,6 +16,7 @@ local CardRegistry = require("single.card_registry")
 local SingleProfileStore = require("single.single_profile_store")
 local SingleDeckManager = require("single.single_deck_manager")
 local SingleRunManager = require("single.single_run_manager")
+local SingleRunState = require("single.single_run_state")
 local SingleDiscardOverlay = require("overlays.single_discard_overlay")
 local RewardPicker = require("single.reward_picker")
 
@@ -26,32 +27,12 @@ local function t(key, vars)
   return I18n.t(key, vars)
 end
 
-local function getDefaultDeck(profile)
-  if type(profile) ~= "table" or type(profile.decks) ~= "table" then
-    return nil
-  end
-  for _, deck in ipairs(profile.decks) do
-    if type(deck) == "table" and tostring(deck.deckId or "") == "default" then
-      return deck
-    end
-  end
-  return profile.decks[1]
-end
-
 local function cardNameById(cardId)
   local card = CardRegistry.getCard(cardId)
   if card and type(card.nameKo) == "string" then
     return card.nameKo
   end
   return tostring(cardId or "")
-end
-
-local function createRng()
-  if love and love.math and love.math.newRandomGenerator then
-    return love.math.newRandomGenerator(os.time())
-  end
-  math.randomseed(os.time())
-  return nil
 end
 
 function SingleRewardScene.new(app)
@@ -69,8 +50,7 @@ function SingleRewardScene.new(app)
     _lastLanguage = app:getLanguage(),
     _discardOverlay = nil,
     _isAwaitingForcedDiscard = false,
-    _isResolvingReward = false,
-    _rewardPicker = RewardPicker.new()
+    _isResolvingReward = false
   }
   setmetatable(instance, SingleRewardScene)
   instance:rebuildLocalizedUi()
@@ -86,6 +66,10 @@ function SingleRewardScene:isBlockedByDiscardOverlay()
   return self._isAwaitingForcedDiscard and self._discardOverlay ~= nil
 end
 
+function SingleRewardScene:getRunDeck()
+  return SingleRunState.getRunDeck(self._runState, self._profile)
+end
+
 function SingleRewardScene:openForcedDiscardOverlay(deck)
   self._isAwaitingForcedDiscard = true
   self._discardOverlay = SingleDiscardOverlay.new({
@@ -97,16 +81,9 @@ function SingleRewardScene:openForcedDiscardOverlay(deck)
     deckCards = deck.cards,
     resolveCardName = cardNameById,
     onDiscard = function(discardIndex)
-      local removed = SingleDeckManager.removeFromDeck(deck, discardIndex)
+      local removed = SingleRunState.removeCardFromRunDeck(deck, discardIndex)
       if not removed then
         return false, t("single.discard_overlay.status.discard_failed")
-      end
-
-      local saveOk, saveErr = SingleProfileStore.save(self._profile)
-      if not saveOk then
-        return false, t("single.reward.status.save_failed", {
-          error = tostring(saveErr or "unknown")
-        })
       end
 
       self._isAwaitingForcedDiscard = false
@@ -196,15 +173,15 @@ function SingleRewardScene:confirmReward()
   local nextOwned = math.max(0, math.min(3, math.floor(previousOwned + 1)))
   collectionCards[cardId].ownedCount = nextOwned
 
-  local deck = getDefaultDeck(self._profile)
+  local deck = self:getRunDeck()
   if not deck then
     self._isResolvingReward = false
     self:setStatus(t("single.reward.status.deck_missing"), Constants.COLOR_DANGER)
     return
   end
 
-  local addOk = SingleDeckManager.addToDeck(deck, cardId, self._profile.collection, {
-    allowOverflowSize = true
+  local addOk = SingleRunState.addCardToRunDeck(deck, cardId, {
+    allowOverflow = true
   })
   if not addOk then
     self:setStatus(t("single.reward.status.add_skipped"), Constants.COLOR_TEXT_SUB)
@@ -236,18 +213,18 @@ end
 function SingleRewardScene:enter(params)
   self._profile = params and params.profile or nil
   self._runState = params and params.runState or nil
+  SingleRunState.ensureDefaults(self._runState, self._profile)
   local currentNode = SingleRunManager.getCurrentNode(self._runState)
   local nodeType = tostring((params and params.nodeType) or (currentNode and currentNode.type) or "mob")
   local stageIndex = math.max(1, math.floor(tonumber((params and params.stageIndex) or (currentNode and currentNode.stageIndex) or (self._runState and self._runState.stageIndex) or 1)))
   self._isBoss = (params and params.isBoss == true) or nodeType == "boss"
 
-  local pickedCardIdList = self._rewardPicker:pick3(
-    self._runState,
-    nodeType,
-    stageIndex,
-    self._isBoss,
-    createRng()
-  )
+  local pickedCardIdList = RewardPicker.pick3({
+    nodeType = nodeType,
+    stageIndex = stageIndex,
+    isBoss = self._isBoss,
+    rngSeed = (self._runState and self._runState.rngSeed) or os.time()
+  })
   self._choiceList = {}
   for _, cardId in ipairs(pickedCardIdList or {}) do
     local card = CardRegistry.getCard(cardId)
@@ -256,19 +233,6 @@ function SingleRewardScene:enter(params)
       nameKo = (card and card.nameKo) or tostring(cardId),
       descKo = (card and card.descKo) or ""
     }
-  end
-
-  if #self._choiceList < 3 then
-    for _, fallbackCard in ipairs(CardRegistry.getRewardChoices(self._isBoss, createRng())) do
-      if #self._choiceList >= 3 then
-        break
-      end
-      self._choiceList[#self._choiceList + 1] = {
-        id = tostring(fallbackCard.id),
-        nameKo = fallbackCard.nameKo or tostring(fallbackCard.id),
-        descKo = fallbackCard.descKo or ""
-      }
-    end
   end
 
   self._selectedIndex = nil

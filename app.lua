@@ -92,6 +92,18 @@ local function createSceneFactoryTable()
     single_combat = function(app)
       return require("scenes.single_combat_scene").new(app)
     end,
+    single_shop = function(app)
+      return require("scenes.single_shop_scene").new(app)
+    end,
+    single_rest = function(app)
+      return require("scenes.single_rest_scene").new(app)
+    end,
+    single_deck_clean = function(app)
+      return require("scenes.single_deck_clean_scene").new(app)
+    end,
+    single_event = function(app)
+      return require("scenes.single_event_scene").new(app)
+    end,
     single_reward = function(app)
       return require("scenes.single_reward_scene").new(app)
     end,
@@ -455,6 +467,22 @@ end
 
 function App:goSingleCombat(params, transitionDirection, transitionOpts)
   self:goScene("single_combat", params, transitionDirection, transitionOpts)
+end
+
+function App:goSingleShop(params, transitionDirection, transitionOpts)
+  self:goScene("single_shop", params, transitionDirection, transitionOpts)
+end
+
+function App:goSingleRest(params, transitionDirection, transitionOpts)
+  self:goScene("single_rest", params, transitionDirection, transitionOpts)
+end
+
+function App:goSingleDeckClean(params, transitionDirection, transitionOpts)
+  self:goScene("single_deck_clean", params, transitionDirection, transitionOpts)
+end
+
+function App:goSingleEvent(params, transitionDirection, transitionOpts)
+  self:goScene("single_event", params, transitionDirection, transitionOpts)
 end
 
 function App:goSingleReward(params, transitionDirection, transitionOpts)

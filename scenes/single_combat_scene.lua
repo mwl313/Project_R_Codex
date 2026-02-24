@@ -13,6 +13,8 @@ local I18n = require("i18n.i18n")
 local BackButton = require("ui.back_button")
 local SingleRunManager = require("single.single_run_manager")
 local SingleCombatCore = require("single.single_combat_core")
+local SingleRunState = require("single.single_run_state")
+local SingleEconomy = require("single.single_economy")
 
 local SingleCombatScene = {}
 SingleCombatScene.__index = SingleCombatScene
@@ -62,11 +64,15 @@ function SingleCombatScene:finishCombat(result)
     return
   end
 
-  local node = SingleRunManager.getCurrentNode(self._runState)
+  local goldAmount = SingleEconomy.rollCombatGold(self._nodeType)
+  SingleRunState.addGold(self._runState, goldAmount)
+
   self._app:goScene("single_reward", {
     profile = self._profile,
     runState = self._runState,
-    isBoss = node and node.type == "boss" or false
+    nodeType = self._nodeType,
+    stageIndex = self._stageIndex,
+    isBoss = self._nodeType == "boss"
   }, Config.TRANSITION_FORWARD)
 end
 
@@ -77,6 +83,7 @@ function SingleCombatScene:enter(params)
   self._nodeType = tostring((params and params.nodeType) or "mob")
   self._nodeId = tostring((params and params.nodeId) or "")
   self._stageIndex = math.max(1, math.floor(tonumber(params and params.stageIndex) or 1))
+  SingleRunState.ensureDefaults(self._runState, self._profile)
   self:rebuildLocalizedUi()
   self._core = SingleCombatCore.new({
     app = self._app,

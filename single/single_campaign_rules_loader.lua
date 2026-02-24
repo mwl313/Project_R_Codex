@@ -25,6 +25,19 @@ local DEFAULT_DATA = {
   },
   legendaryPolicy = {
     bossOnly = true
+  },
+  economy = {
+    goldReward = {
+      mob = { 15, 25 },
+      elite = { 30, 45 },
+      boss = { 60, 90 }
+    },
+    shopPrices = {
+      buyCardBase = 35,
+      buyCardRareExtra = 10,
+      upgrade = 40,
+      remove = 30
+    }
   }
 }
 
@@ -66,6 +79,25 @@ local function sanitize(raw)
 
   local sourceLegendary = LoaderUtils.toTable(source.legendaryPolicy, {})
   sanitized.legendaryPolicy.bossOnly = LoaderUtils.toBoolean(sourceLegendary.bossOnly, DEFAULT_DATA.legendaryPolicy.bossOnly)
+
+  local sourceEconomy = LoaderUtils.toTable(source.economy, {})
+  local sourceGoldReward = LoaderUtils.toTable(sourceEconomy.goldReward, {})
+  local sourceShopPrices = LoaderUtils.toTable(sourceEconomy.shopPrices, {})
+
+  local function sanitizeRewardRange(rawRange, fallbackRange)
+    local range = LoaderUtils.toArray(rawRange, fallbackRange)
+    local minValue = math.max(0, math.floor(LoaderUtils.toNumber(range[1], fallbackRange[1])))
+    local maxValue = math.max(minValue, math.floor(LoaderUtils.toNumber(range[2], fallbackRange[2])))
+    return { minValue, maxValue }
+  end
+
+  sanitized.economy.goldReward.mob = sanitizeRewardRange(sourceGoldReward.mob, DEFAULT_DATA.economy.goldReward.mob)
+  sanitized.economy.goldReward.elite = sanitizeRewardRange(sourceGoldReward.elite, DEFAULT_DATA.economy.goldReward.elite)
+  sanitized.economy.goldReward.boss = sanitizeRewardRange(sourceGoldReward.boss, DEFAULT_DATA.economy.goldReward.boss)
+  sanitized.economy.shopPrices.buyCardBase = math.max(0, math.floor(LoaderUtils.toNumber(sourceShopPrices.buyCardBase, DEFAULT_DATA.economy.shopPrices.buyCardBase)))
+  sanitized.economy.shopPrices.buyCardRareExtra = math.max(0, math.floor(LoaderUtils.toNumber(sourceShopPrices.buyCardRareExtra, DEFAULT_DATA.economy.shopPrices.buyCardRareExtra)))
+  sanitized.economy.shopPrices.upgrade = math.max(0, math.floor(LoaderUtils.toNumber(sourceShopPrices.upgrade, DEFAULT_DATA.economy.shopPrices.upgrade)))
+  sanitized.economy.shopPrices.remove = math.max(0, math.floor(LoaderUtils.toNumber(sourceShopPrices.remove, DEFAULT_DATA.economy.shopPrices.remove)))
 
   return sanitized
 end

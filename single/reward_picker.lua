@@ -3,9 +3,8 @@
 모듈명: RewardPicker
 
 역할:
-- 싱글 보상 카드 3개를 SSOT 데이터 기반으로 선택한다.
-- reward_tables + single_campaign_rules + shared/card_rules를 조합해
-  모드/활성화/태그/희귀도 정책을 적용한다.
+- 싱글 보상 드래프트(3선택)를 SSOT 데이터 기반으로 계산한다.
+- shared/reward_tables.json / shared/single_campaign_rules.json / shared/card_rules.json을 조합한다.
 ]]
 
 local CardRules = require("shared.card_rules")
@@ -14,10 +13,12 @@ local RewardTablesLoader = require("single.reward_tables_loader")
 local SingleCampaignRulesLoader = require("single.single_campaign_rules_loader")
 
 local RewardPicker = {}
-RewardPicker.__index = RewardPicker
 
 local RARITY_ORDER = { "COMMON", "RARE", "EPIC", "LEGENDARY" }
-local DEBUG_REWARD_PICK = false
+local ENABLE_DEV_LOG = true
+
+local cachedRewardTables = nil
+local cachedCampaignRules = nil
 
 local function isDevMode()
   if not love or not love.filesystem or type(love.filesystem.isFused) ~= "function" then
@@ -26,23 +27,23 @@ local function isDevMode()
   return love.filesystem.isFused() ~= true
 end
 
-local function debugLog(message)
-  if not DEBUG_REWARD_PICK or not isDevMode() then
+local function logPick(message)
+  if not ENABLE_DEV_LOG or not isDevMode() then
     return
   end
-  print("[RewardPicker] " .. tostring(message or ""))
+  print("[REWARD_PICK] " .. tostring(message or ""))
 end
 
 local function clampInt(value, fallback, minValue)
-  local numeric = tonumber(value)
-  if type(numeric) ~= "number" or numeric ~= numeric then
-    numeric = fallback
+  local n = tonumber(value)
+  if type(n) ~= "number" or n ~= n then
+    n = tonumber(fallback) or minValue
   end
-  numeric = math.floor(numeric or fallback)
-  if numeric < minValue then
-    numeric = minValue
+  n = math.floor(n)
+  if n < minValue then
+    n = minValue
   end
-  return numeric
+  return n
 end
 
 local function randomInt(rng, minValue, maxValue)
@@ -62,12 +63,22 @@ local function randomFloat(rng)
   return math.random()
 end
 
-local function createFallbackRng(seed)
+local function makeRng(seed)
   if love and love.math and type(love.math.newRandomGenerator) == "function" then
     return love.math.newRandomGenerator(seed or os.time())
   end
   math.randomseed(seed or os.time())
   return nil
+end
+
+local function normalizeRarity(value)
+  local text = tostring(value or ""):upper()
+  for _, rarity in ipairs(RARITY_ORDER) do
+    if text == rarity then
+      return rarity
+    end
+  end
+  return "COMMON"
 end
 
 local function hasAnyTag(cardTags, tagsAny)
@@ -92,18 +103,18 @@ local function hasAnyTag(cardTags, tagsAny)
   return false
 end
 
-local function normalizeRarity(value)
-  local text = tostring(value or ""):upper()
-  for _, rarity in ipairs(RARITY_ORDER) do
-    if text == rarity then
-      return rarity
-    end
+local function ensureDataLoaded()
+  if not cachedRewardTables then
+    cachedRewardTables = RewardTablesLoader.load()
   end
-  return "COMMON"
+  if not cachedCampaignRules then
+    cachedCampaignRules = SingleCampaignRulesLoader.load()
+  end
+  return cachedRewardTables, cachedCampaignRules
 end
 
 local function findContextByNodeType(rewardTables, nodeType)
-  local typeText = tostring(nodeType or "mob")
+  local targetType = tostring(nodeType or "mob")
   local contextList = rewardTables and rewardTables.rewardContexts or nil
   if type(contextList) ~= "table" then
     return nil
@@ -120,7 +131,7 @@ local function findContextByNodeType(rewardTables, nodeType)
         if mappedType == "mob" then
           hasMob = true
         end
-        if mappedType == typeText then
+        if mappedType == targetType then
           return context
         end
       end
@@ -129,28 +140,21 @@ local function findContextByNodeType(rewardTables, nodeType)
       end
     end
   end
-
   return mobFallback or firstContext
 end
 
-local function resolveWeights(campaignRules, rarityRef, stageIndex)
-  local raritySection = type(campaignRules) == "table" and campaignRules.rarityWeights or nil
-  if type(raritySection) ~= "table" then
-    raritySection = {}
-  end
-  local baseCandidate = raritySection[rarityRef]
-  if type(baseCandidate) ~= "table" then
-    baseCandidate = raritySection.base
-  end
-  if type(baseCandidate) ~= "table" then
-    baseCandidate = { COMMON = 1, RARE = 0, EPIC = 0, LEGENDARY = 0 }
+local function resolveRarityWeights(campaignRules, rarityRef, stageIndex)
+  local raritySection = type(campaignRules) == "table" and campaignRules.rarityWeights or {}
+  local baseWeights = type(raritySection[rarityRef]) == "table" and raritySection[rarityRef] or raritySection.base
+  if type(baseWeights) ~= "table" then
+    baseWeights = { COMMON = 1, RARE = 0, EPIC = 0, LEGENDARY = 0 }
   end
 
-  local weights = {
-    COMMON = tonumber(baseCandidate.COMMON) or 0,
-    RARE = tonumber(baseCandidate.RARE) or 0,
-    EPIC = tonumber(baseCandidate.EPIC) or 0,
-    LEGENDARY = tonumber(baseCandidate.LEGENDARY) or 0
+  local result = {
+    COMMON = tonumber(baseWeights.COMMON) or 0,
+    RARE = tonumber(baseWeights.RARE) or 0,
+    EPIC = tonumber(baseWeights.EPIC) or 0,
+    LEGENDARY = tonumber(baseWeights.LEGENDARY) or 0
   }
 
   local scalingList = raritySection.stageScaling
@@ -159,23 +163,23 @@ local function resolveWeights(campaignRules, rarityRef, stageIndex)
     for _, scaling in ipairs(scalingList) do
       if type(scaling) == "table" and clampInt(scaling.stageIndex, -1, -1) == stageNumber then
         if tonumber(scaling.COMMON) ~= nil then
-          weights.COMMON = tonumber(scaling.COMMON) or weights.COMMON
+          result.COMMON = tonumber(scaling.COMMON) or result.COMMON
         end
         if tonumber(scaling.RARE) ~= nil then
-          weights.RARE = tonumber(scaling.RARE) or weights.RARE
+          result.RARE = tonumber(scaling.RARE) or result.RARE
         end
         if tonumber(scaling.EPIC) ~= nil then
-          weights.EPIC = tonumber(scaling.EPIC) or weights.EPIC
+          result.EPIC = tonumber(scaling.EPIC) or result.EPIC
         end
         if tonumber(scaling.LEGENDARY) ~= nil then
-          weights.LEGENDARY = tonumber(scaling.LEGENDARY) or weights.LEGENDARY
+          result.LEGENDARY = tonumber(scaling.LEGENDARY) or result.LEGENDARY
         end
         break
       end
     end
   end
 
-  return weights
+  return result
 end
 
 local function pickWeightedRarity(weights, rng)
@@ -186,7 +190,6 @@ local function pickWeightedRarity(weights, rng)
       total = total + weight
     end
   end
-
   if total <= 0 then
     return "COMMON"
   end
@@ -202,24 +205,23 @@ local function pickWeightedRarity(weights, rng)
       end
     end
   end
-
   return "COMMON"
 end
 
-local function findRarityIndex(targetRarity)
-  for index, rarity in ipairs(RARITY_ORDER) do
-    if rarity == targetRarity then
+local function findRarityIndex(rarity)
+  for index, text in ipairs(RARITY_ORDER) do
+    if text == rarity then
       return index
     end
   end
   return 1
 end
 
-local function pickFromRarityWithFallback(byRarity, preferredRarity, rng)
+local function pickFromBucketsWithFallback(bucketByRarity, preferredRarity, rng)
   local startIndex = findRarityIndex(preferredRarity)
 
   for index = startIndex, #RARITY_ORDER do
-    local list = byRarity[RARITY_ORDER[index]]
+    local list = bucketByRarity[RARITY_ORDER[index]]
     if type(list) == "table" and #list > 0 then
       local pickIndex = randomInt(rng, 1, #list)
       local picked = list[pickIndex]
@@ -227,9 +229,8 @@ local function pickFromRarityWithFallback(byRarity, preferredRarity, rng)
       return picked
     end
   end
-
   for index = 1, startIndex - 1 do
-    local list = byRarity[RARITY_ORDER[index]]
+    local list = bucketByRarity[RARITY_ORDER[index]]
     if type(list) == "table" and #list > 0 then
       local pickIndex = randomInt(rng, 1, #list)
       local picked = list[pickIndex]
@@ -237,150 +238,149 @@ local function pickFromRarityWithFallback(byRarity, preferredRarity, rng)
       return picked
     end
   end
-
   return nil
 end
 
-local function gatherCandidates(context, campaignRules, isBoss)
+local function buildCandidatePool(context, campaignRules, isBoss)
   local filters = type(context.filters) == "table" and context.filters or {}
   local tagsAny = type(filters.tagsAny) == "table" and filters.tagsAny or {}
   local filterMode = tostring(filters.mode or "single"):lower()
+  local gameMode = (filterMode == "multi") and CardRules.GAME_MODE_MULTI or CardRules.GAME_MODE_SINGLE
+
   local allowLegendaryByContext = context.allowLegendary == true
-  local legendaryBossOnly = not not (campaignRules
-    and campaignRules.legendaryPolicy
-    and campaignRules.legendaryPolicy.bossOnly == true)
+  local legendaryBossOnly = not not (campaignRules and campaignRules.legendaryPolicy and campaignRules.legendaryPolicy.bossOnly == true)
 
-  local gameMode = CardRules.GAME_MODE_SINGLE
-  if filterMode == "multi" then
-    gameMode = CardRules.GAME_MODE_MULTI
-  end
-
-  local runtimePool = CardRules.getCardPool(gameMode)
+  local runtimeCardIdList = CardRules.getCardPool(gameMode)
   local bySaveCardId = {}
 
-  for _, runtimeCardId in ipairs(runtimePool) do
+  for _, runtimeCardId in ipairs(runtimeCardIdList) do
     local rule = CardRules.getCardRule(runtimeCardId)
     if type(rule) == "table" and rule.enabled == true and hasAnyTag(rule.tags, tagsAny) then
       local rarity = normalizeRarity(rule.rarity or (rule.tunables and rule.tunables.rarity))
-      if rarity ~= "LEGENDARY" or allowLegendaryByContext then
-        if not (legendaryBossOnly and rarity == "LEGENDARY" and not isBoss) then
-          local saveCardId = CardRegistry.fromRuntimeCardId(runtimeCardId)
-          if CardRegistry.getCard(saveCardId) ~= nil then
-            if not bySaveCardId[saveCardId] then
-              bySaveCardId[saveCardId] = {
-                cardId = saveCardId,
-                runtimeCardId = runtimeCardId,
-                rarity = rarity
-              }
-            end
-          end
+      local allowCard = true
+
+      if rarity == "LEGENDARY" then
+        -- 하드 룰:
+        -- 1) 비보스는 전설 금지
+        -- 2) 보스라도 context.allowLegendary=true AND legendaryPolicy.bossOnly=true 동시 만족 필요
+        if (not isBoss) or (not allowLegendaryByContext) or (not legendaryBossOnly) then
+          allowCard = false
+        end
+      end
+
+      if allowCard then
+        local saveCardId = CardRegistry.fromRuntimeCardId(runtimeCardId)
+        if CardRegistry.getCard(saveCardId) ~= nil and not bySaveCardId[saveCardId] then
+          bySaveCardId[saveCardId] = {
+            cardId = saveCardId,
+            rarity = rarity
+          }
         end
       end
     end
   end
 
-  local candidateList = {}
+  local list = {}
   for _, entry in pairs(bySaveCardId) do
-    candidateList[#candidateList + 1] = entry
+    list[#list + 1] = entry
   end
-  return candidateList
+  return list
 end
 
-function RewardPicker.new()
-  local instance = {
-    _rewardTables = RewardTablesLoader.load(),
-    _campaignRules = SingleCampaignRulesLoader.load()
-  }
-  return setmetatable(instance, RewardPicker)
-end
+function RewardPicker.pick3(params)
+  local option = type(params) == "table" and params or {}
+  local rewardTables, campaignRules = ensureDataLoaded()
 
-function RewardPicker:pick3(runState, nodeType, stageIndex, isBoss, rng)
-  local context = findContextByNodeType(self._rewardTables, nodeType) or {
+  local nodeType = tostring(option.nodeType or "mob")
+  local stageIndex = clampInt(option.stageIndex, 1, 1)
+  local isBoss = option.isBoss == true or nodeType == "boss"
+  local rngSeed = tonumber(option.rngSeed) or os.time()
+  local rng = makeRng(rngSeed)
+
+  local context = findContextByNodeType(rewardTables, nodeType) or {
     contextId = "fallback_mob",
     offerCount = 3,
     rarityWeightsRef = "base",
     allowLegendary = false,
-    filters = { tagsAny = {} }
+    filters = { mode = "single", tagsAny = {} }
   }
 
-  local effectiveStageIndex = clampInt(stageIndex or (runState and runState.stageIndex), 1, 1)
   local offerCount = 3
-  local localRng = rng
-  if not localRng then
-    local seed = tonumber(runState and runState.rngSeed) or os.time()
-    localRng = createFallbackRng(seed + effectiveStageIndex * 47)
-  end
+  local weights = resolveRarityWeights(campaignRules, context.rarityWeightsRef, stageIndex)
+  local candidatePool = buildCandidatePool(context, campaignRules, isBoss)
 
-  local candidates = gatherCandidates(context, self._campaignRules, isBoss == true)
-  local byRarity = {
+  local bucketByRarity = {
     COMMON = {},
     RARE = {},
     EPIC = {},
     LEGENDARY = {}
   }
-  for _, candidate in ipairs(candidates) do
-    byRarity[candidate.rarity][#byRarity[candidate.rarity] + 1] = candidate
+  for _, candidate in ipairs(candidatePool) do
+    bucketByRarity[candidate.rarity][#bucketByRarity[candidate.rarity] + 1] = candidate
   end
 
-  local weights = resolveWeights(self._campaignRules, context.rarityWeightsRef, effectiveStageIndex)
-  local pickedIds = {}
+  local pickedCardIdList = {}
+  local pickedRarityList = {}
   local pickedSet = {}
-  local pickedRarities = {}
 
   for _ = 1, offerCount do
-    local targetRarity = pickWeightedRarity(weights, localRng)
-    local picked = pickFromRarityWithFallback(byRarity, targetRarity, localRng)
+    local preferredRarity = pickWeightedRarity(weights, rng)
+    local picked = pickFromBucketsWithFallback(bucketByRarity, preferredRarity, rng)
     if not picked then
       break
     end
     if not pickedSet[picked.cardId] then
       pickedSet[picked.cardId] = true
-      pickedIds[#pickedIds + 1] = picked.cardId
-      pickedRarities[#pickedRarities + 1] = picked.rarity
+      pickedCardIdList[#pickedCardIdList + 1] = picked.cardId
+      pickedRarityList[#pickedRarityList + 1] = picked.rarity
     end
   end
 
-  if #pickedIds < offerCount then
+  if #pickedCardIdList < offerCount then
     local remaining = {}
-    for _, candidate in ipairs(candidates) do
+    for _, candidate in ipairs(candidatePool) do
       if not pickedSet[candidate.cardId] then
         remaining[#remaining + 1] = candidate
       end
     end
-    while #pickedIds < offerCount and #remaining > 0 do
-      local index = randomInt(localRng, 1, #remaining)
+    while #pickedCardIdList < offerCount and #remaining > 0 do
+      local index = randomInt(rng, 1, #remaining)
       local picked = remaining[index]
       table.remove(remaining, index)
       pickedSet[picked.cardId] = true
-      pickedIds[#pickedIds + 1] = picked.cardId
-      pickedRarities[#pickedRarities + 1] = picked.rarity
+      pickedCardIdList[#pickedCardIdList + 1] = picked.cardId
+      pickedRarityList[#pickedRarityList + 1] = picked.rarity
     end
   end
 
-  if #pickedIds <= 0 then
-    pickedIds = {
-      "rockfall",
-      "shockwave",
-      "invincible"
-    }
-    pickedRarities = { "COMMON", "COMMON", "RARE" }
+  if #pickedCardIdList <= 0 then
+    pickedCardIdList = { "rockfall", "shockwave", "invincible" }
+    pickedRarityList = { "COMMON", "COMMON", "RARE" }
   end
 
-  while #pickedIds < offerCount do
-    pickedIds[#pickedIds + 1] = pickedIds[randomInt(localRng, 1, #pickedIds)]
+  -- 풀이 너무 작을 때만 중복 허용 (최후 수단)
+  while #pickedCardIdList < offerCount do
+    local copyIndex = randomInt(rng, 1, #pickedCardIdList)
+    pickedCardIdList[#pickedCardIdList + 1] = pickedCardIdList[copyIndex]
+    pickedRarityList[#pickedRarityList + 1] = pickedRarityList[copyIndex]
   end
 
-  debugLog(string.format(
-    "context=%s nodeType=%s isBoss=%s stage=%d picks=%s rarities=%s",
+  logPick(string.format(
+    "contextId=%s stageIndex=%d isBoss=%s nodeType=%s picks=%s rarities=%s",
     tostring(context.contextId),
-    tostring(nodeType),
-    tostring(isBoss == true),
-    effectiveStageIndex,
-    table.concat(pickedIds, ","),
-    table.concat(pickedRarities, ",")
+    stageIndex,
+    tostring(isBoss),
+    nodeType,
+    table.concat(pickedCardIdList, ","),
+    table.concat(pickedRarityList, ",")
   ))
 
-  return pickedIds
+  return pickedCardIdList
+end
+
+function RewardPicker.resetCache()
+  cachedRewardTables = nil
+  cachedCampaignRules = nil
 end
 
 return RewardPicker

@@ -264,6 +264,10 @@ function SingleRunManager.newRun(deckId, options)
     selectedByDepth = {},
     templateForChoices = templateForChoices,
     currentNodeIndex = 1,
+    gold = 0,
+    cardUpgrades = {},
+    tempModifiers = {},
+    runtimeDeck = nil,
     lastCombatResult = nil,
     finished = false,
     isVictory = false

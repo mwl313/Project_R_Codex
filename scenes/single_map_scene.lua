@@ -14,6 +14,7 @@ local Button = require("ui.button")
 local BackButton = require("ui.back_button")
 local SingleRunManager = require("single.single_run_manager")
 local SingleDeckManager = require("single.single_deck_manager")
+local SingleRunState = require("single.single_run_state")
 
 local SingleMapScene = {}
 SingleMapScene.__index = SingleMapScene
@@ -93,6 +94,11 @@ local function getChoiceDedupKey(node)
   return "title:" .. resolveNodeTitle(node)
 end
 
+local function isCombatNodeType(nodeType)
+  local normalized = tostring(nodeType or "")
+  return normalized == "mob" or normalized == "elite" or normalized == "boss"
+end
+
 function SingleMapScene:ensureDepthSelection()
   local depth = SingleRunManager.getCurrentDepth(self._runState)
   local choices = SingleRunManager.getChoices(self._runState)
@@ -135,6 +141,7 @@ function SingleMapScene:rebuildChoiceButtons()
 
   local count = #self._choiceNodeList
   if count <= 0 then
+    self:updateActionButtonLabel()
     return
   end
 
@@ -176,6 +183,7 @@ function SingleMapScene:rebuildChoiceButtons()
       end
     })
   end
+  self:updateActionButtonLabel()
 end
 
 function SingleMapScene:rebuildLocalizedUi()
@@ -197,6 +205,19 @@ function SingleMapScene:rebuildLocalizedUi()
   })
 
   self:rebuildChoiceButtons()
+  self:updateActionButtonLabel()
+end
+
+function SingleMapScene:updateActionButtonLabel()
+  if not self._battleButton then
+    return
+  end
+  local currentNode = SingleRunManager.getCurrentNode(self._runState)
+  if isCombatNodeType(currentNode and currentNode.type) then
+    self._battleButton.label = t("single.map.button.start_combat")
+  else
+    self._battleButton.label = t("single.map.button.enter_node")
+  end
 end
 
 function SingleMapScene:startCombat()
@@ -210,14 +231,34 @@ function SingleMapScene:startCombat()
     return
   end
 
-  self._app:goScene("single_combat", {
+  local nodeType = tostring(currentNode.type or "mob")
+  local sceneParams = {
     backScene = "single_map",
     profile = self._profile,
     runState = self._runState,
-    nodeType = currentNode.type,
+    nodeType = nodeType,
     nodeId = currentNode.nodeId,
     stageIndex = currentNode.stageIndex
-  }, Config.TRANSITION_FORWARD)
+  }
+
+  if nodeType == "shop" then
+    self._app:goScene("single_shop", sceneParams, Config.TRANSITION_FORWARD)
+    return
+  end
+  if nodeType == "rest" then
+    self._app:goScene("single_rest", sceneParams, Config.TRANSITION_FORWARD)
+    return
+  end
+  if nodeType == "deck_clean" then
+    self._app:goScene("single_deck_clean", sceneParams, Config.TRANSITION_FORWARD)
+    return
+  end
+  if nodeType == "event" then
+    self._app:goScene("single_event", sceneParams, Config.TRANSITION_FORWARD)
+    return
+  end
+
+  self._app:goScene("single_combat", sceneParams, Config.TRANSITION_FORWARD)
 end
 
 function SingleMapScene:enter(params)
@@ -228,6 +269,7 @@ function SingleMapScene:enter(params)
   if type(self._runState) ~= "table" then
     self._runState = SingleRunManager.newRun("default")
   end
+  SingleRunState.ensureDefaults(self._runState, self._profile)
 
   self:rebuildLocalizedUi()
   self:ensureDepthSelection()
@@ -257,6 +299,7 @@ function SingleMapScene:update(_dt)
     self:rebuildLocalizedUi()
     self:ensureDepthSelection()
   end
+  self:updateActionButtonLabel()
 end
 
 function SingleMapScene:draw()
@@ -278,8 +321,12 @@ function SingleMapScene:draw()
     nodeTitle = nodeTitle
   }), 0, 150, Constants.BASE_WORLD_W, "center")
 
+  love.graphics.printf(t("single.map.gold_line", {
+    gold = tostring(math.max(0, math.floor(tonumber(self._runState and self._runState.gold) or 0)))
+  }), 0, 178, Constants.BASE_WORLD_W, "center")
+
   love.graphics.setColor(Constants.COLOR_TEXT)
-  love.graphics.printf(nodeTitle, 0, 196, Constants.BASE_WORLD_W, "center")
+  love.graphics.printf(nodeTitle, 0, 208, Constants.BASE_WORLD_W, "center")
 
   self._backButton:draw(mouseX, mouseY)
   local selectedDedupKey = getChoiceDedupKey(node)
