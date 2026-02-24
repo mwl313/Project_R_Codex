@@ -51,7 +51,7 @@ function SingleCombatScene:rebuildLocalizedUi()
 end
 
 function SingleCombatScene:finishCombat(result)
-  local normalized = result == "win" and "win" or "lose"
+  local normalized = (result == "lose") and "lose" or "win"
   SingleRunManager.setCombatResult(self._runState, normalized)
   if normalized ~= "win" then
     self._app:goScene("single_result", {
