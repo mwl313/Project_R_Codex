@@ -6,11 +6,17 @@
     "invincible",
     "rockfall",
     "agile",
+    "guard_shell",
+    "quick_reload",
+    "stone_polish",
+    "trick_bounce",
+    "legend_overdrive",
     "single_example_card"
   ],
   "cards": {
     "reinforcement": {
       "id": "reinforcement",
+      "rarity": "COMMON",
       "mode": "MULTI_OK",
       "enabled": true,
       "tags": ["UTILITY", "TRICK"],
@@ -22,6 +28,7 @@
     },
     "shockwave": {
       "id": "shockwave",
+      "rarity": "COMMON",
       "mode": "MULTI_OK",
       "enabled": true,
       "tags": ["OFFENSE", "CONTROL"],
@@ -35,6 +42,7 @@
     },
     "invincible": {
       "id": "invincible",
+      "rarity": "RARE",
       "mode": "MULTI_OK",
       "enabled": true,
       "tags": ["DEFENSE", "UTILITY"],
@@ -45,6 +53,7 @@
     },
     "rockfall": {
       "id": "rockfall",
+      "rarity": "COMMON",
       "mode": "MULTI_OK",
       "enabled": true,
       "tags": ["OBSTACLE", "CONTROL"],
@@ -57,6 +66,7 @@
     },
     "agile": {
       "id": "agile",
+      "rarity": "RARE",
       "mode": "MULTI_OK",
       "enabled": true,
       "tags": ["OFFENSE", "TRICK"],
@@ -65,8 +75,64 @@
         "shot_budget": 2
       }
     },
+    "guard_shell": {
+      "id": "guard_shell",
+      "rarity": "COMMON",
+      "mode": "SINGLE_ONLY",
+      "enabled": true,
+      "tags": ["DEFENSE", "UTILITY"],
+      "tunables": {
+        "target_mode": "NONE",
+        "reduce_ratio": 0.4
+      }
+    },
+    "quick_reload": {
+      "id": "quick_reload",
+      "rarity": "COMMON",
+      "mode": "SINGLE_ONLY",
+      "enabled": true,
+      "tags": ["UTILITY", "TRICK"],
+      "tunables": {
+        "target_mode": "NONE",
+        "draw_count": 1
+      }
+    },
+    "stone_polish": {
+      "id": "stone_polish",
+      "rarity": "COMMON",
+      "mode": "SINGLE_ONLY",
+      "enabled": true,
+      "tags": ["OFFENSE", "UTILITY"],
+      "tunables": {
+        "target_mode": "NONE",
+        "power_bonus": 80
+      }
+    },
+    "trick_bounce": {
+      "id": "trick_bounce",
+      "rarity": "RARE",
+      "mode": "SINGLE_ONLY",
+      "enabled": true,
+      "tags": ["TRICK", "CONTROL"],
+      "tunables": {
+        "target_mode": "NONE",
+        "bonus_restitution": 0.1
+      }
+    },
+    "legend_overdrive": {
+      "id": "legend_overdrive",
+      "rarity": "LEGENDARY",
+      "mode": "SINGLE_ONLY",
+      "enabled": true,
+      "tags": ["OFFENSE", "TRICK", "UTILITY"],
+      "tunables": {
+        "target_mode": "NONE",
+        "bonus": 1
+      }
+    },
     "single_example_card": {
       "id": "single_example_card",
+      "rarity": "COMMON",
       "mode": "SINGLE_ONLY",
       "enabled": true,
       "tags": ["UTILITY"],

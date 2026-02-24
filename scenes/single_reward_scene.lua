@@ -17,6 +17,7 @@ local SingleProfileStore = require("single.single_profile_store")
 local SingleDeckManager = require("single.single_deck_manager")
 local SingleRunManager = require("single.single_run_manager")
 local SingleDiscardOverlay = require("overlays.single_discard_overlay")
+local RewardPicker = require("single.reward_picker")
 
 local SingleRewardScene = {}
 SingleRewardScene.__index = SingleRewardScene
@@ -68,7 +69,8 @@ function SingleRewardScene.new(app)
     _lastLanguage = app:getLanguage(),
     _discardOverlay = nil,
     _isAwaitingForcedDiscard = false,
-    _isResolvingReward = false
+    _isResolvingReward = false,
+    _rewardPicker = RewardPicker.new()
   }
   setmetatable(instance, SingleRewardScene)
   instance:rebuildLocalizedUi()
@@ -234,8 +236,41 @@ end
 function SingleRewardScene:enter(params)
   self._profile = params and params.profile or nil
   self._runState = params and params.runState or nil
-  self._isBoss = params and params.isBoss == true or false
-  self._choiceList = CardRegistry.getRewardChoices(self._isBoss, createRng())
+  local currentNode = SingleRunManager.getCurrentNode(self._runState)
+  local nodeType = tostring((params and params.nodeType) or (currentNode and currentNode.type) or "mob")
+  local stageIndex = math.max(1, math.floor(tonumber((params and params.stageIndex) or (currentNode and currentNode.stageIndex) or (self._runState and self._runState.stageIndex) or 1)))
+  self._isBoss = (params and params.isBoss == true) or nodeType == "boss"
+
+  local pickedCardIdList = self._rewardPicker:pick3(
+    self._runState,
+    nodeType,
+    stageIndex,
+    self._isBoss,
+    createRng()
+  )
+  self._choiceList = {}
+  for _, cardId in ipairs(pickedCardIdList or {}) do
+    local card = CardRegistry.getCard(cardId)
+    self._choiceList[#self._choiceList + 1] = {
+      id = tostring(cardId),
+      nameKo = (card and card.nameKo) or tostring(cardId),
+      descKo = (card and card.descKo) or ""
+    }
+  end
+
+  if #self._choiceList < 3 then
+    for _, fallbackCard in ipairs(CardRegistry.getRewardChoices(self._isBoss, createRng())) do
+      if #self._choiceList >= 3 then
+        break
+      end
+      self._choiceList[#self._choiceList + 1] = {
+        id = tostring(fallbackCard.id),
+        nameKo = fallbackCard.nameKo or tostring(fallbackCard.id),
+        descKo = fallbackCard.descKo or ""
+      }
+    end
+  end
+
   self._selectedIndex = nil
   self._discardOverlay = nil
   self._isAwaitingForcedDiscard = false
