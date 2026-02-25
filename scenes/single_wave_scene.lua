@@ -299,7 +299,11 @@ function SingleWaveScene:openUpgradeOverlay()
   self._selectedUpgradeIndex = nil
   self._upgradeOptionList = UpgradeDraft.build({
     rng = self._waveManager:getRng(),
-    relicIdList = self._waveManager:getRelicIdList()
+    relicIdList = self._waveManager:getRelicIdList(),
+    runSeed = tonumber(self._waveManager:getRuntimeState() and self._waveManager:getRuntimeState().rngSeed) or os.time(),
+    runId = tostring(self._waveManager:getRuntimeState() and self._waveManager:getRuntimeState().runId or ""),
+    stageIndex = self._waveManager:getStageIndex(),
+    waveIndex = self._waveManager:getWaveIndex()
   })
   self:rebuildUpgradeButtons()
   self:setStatus(t("single.wave.upgrade.status.choose"), Constants.COLOR_TEXT_SUB)
@@ -318,6 +322,9 @@ function SingleWaveScene:onWaveCombatEnd(result)
 
   self._isRunEnded = true
   self._runEndResult = (result == "draw") and "draw" or "lose"
+  if self._waveManager and self._waveManager.clearRuntimeRelics then
+    self._waveManager:clearRuntimeRelics()
+  end
   self:setStatus(t("single.wave.status.run_end"), Constants.COLOR_DANGER)
 end
 
@@ -899,11 +906,21 @@ function SingleWaveScene:drawRelicPanel()
     local lineY = viewport.y + (index - 1) * metrics.lineHeight - self._relicScrollOffset
     local nameText = t("single.relic.name." .. relicId)
     if type(nameText) ~= "string" or nameText:find("^%[%[missing:") then
-      nameText = relicId
+      nameText = tostring(relic.name or relic.displayName or relicId)
     end
     local descText = t("single.relic.desc." .. relicId)
     if type(descText) ~= "string" or descText:find("^%[%[missing:") then
-      descText = ""
+      if type(relic.descText) == "string" and relic.descText ~= "" then
+        descText = relic.descText
+      else
+        local buffLine = (type(relic.buffLines) == "table" and relic.buffLines[1]) or ""
+        local debuffLine = (type(relic.debuffLines) == "table" and relic.debuffLines[1]) or ""
+        if buffLine ~= "" and debuffLine ~= "" then
+          descText = tostring(buffLine) .. " | " .. tostring(debuffLine)
+        else
+          descText = tostring(buffLine ~= "" and buffLine or debuffLine)
+        end
+      end
     end
     love.graphics.setColor(Constants.COLOR_TEXT)
     love.graphics.print(nameText, viewport.x + 2, lineY)
@@ -1473,6 +1490,9 @@ end
 function SingleWaveScene:exit()
   if self._core then
     self._core:exit()
+  end
+  if self._waveManager and self._waveManager.clearRuntimeRelics then
+    self._waveManager:clearRuntimeRelics()
   end
 end
 

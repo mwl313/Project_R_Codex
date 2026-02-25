@@ -9,6 +9,7 @@
 
 local CardRegistry = require("single.card_registry")
 local RelicRegistry = require("single.relic_registry")
+local RuntimeRelicStore = require("single.runtime_relic_store")
 
 local SingleWaveManager = {}
 SingleWaveManager.__index = SingleWaveManager
@@ -108,6 +109,7 @@ function SingleWaveManager:reset(profile)
   self._isFinished = false
   self._maxCombo = 0
   self._enemiesKilled = 0
+  RuntimeRelicStore.clear()
   self._drawPileCardIdList = getDefaultDeckCardIdList(self._profile)
   self._discardPileCardIdList = {}
   self._handCardIdList = {}
@@ -127,6 +129,14 @@ function SingleWaveManager:reset(profile)
   }
   shuffleListInPlace(self._drawPileCardIdList, self._rng)
   self:syncRuntimeDeck()
+end
+
+function SingleWaveManager:clearRuntimeRelics()
+  RuntimeRelicStore.clear()
+  self._relicIdList = {}
+  if type(self._runtimeState) == "table" then
+    self._runtimeState.relicIds = self._relicIdList
+  end
 end
 
 function SingleWaveManager:getRuntimeState()

@@ -7,6 +7,7 @@
 ]]
 
 local RelicRulesLoader = require("single.relic_rules_loader")
+local RuntimeRelicStore = require("single.runtime_relic_store")
 
 local RelicRegistry = {}
 
@@ -166,6 +167,10 @@ function RelicRegistry.getRelic(relicId)
       copied.rarity = normalizeRarity(copied.rarity)
       return copied
     end
+  end
+  local runtimeRelic = RuntimeRelicStore.get(targetId)
+  if runtimeRelic then
+    return runtimeRelic
   end
   return nil
 end

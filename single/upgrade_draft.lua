@@ -9,7 +9,8 @@
 
 local CardRules = require("shared.card_rules")
 local CardRegistry = require("single.card_registry")
-local RelicRegistry = require("single.relic_registry")
+local ProcRelicGenerator = require("single.proc_relic_generator")
+local RuntimeRelicStore = require("single.runtime_relic_store")
 
 local UpgradeDraft = {}
 
@@ -27,13 +28,6 @@ local CARD_RARITY_WEIGHT = {
   COMMON = 0.72,
   RARE = 0.22,
   EPIC = 0.06,
-  LEGENDARY = 0.00
-}
-
-local RELIC_RARITY_WEIGHT = {
-  COMMON = 0.68,
-  RARE = 0.24,
-  EPIC = 0.08,
   LEGENDARY = 0.00
 }
 
@@ -178,53 +172,39 @@ local function pickCardOption(context, excludedOptionIdSet, excludedEffectGroupI
 end
 
 local function pickRelicOption(context, excludedOptionIdSet, excludedEffectGroupIdSet)
-  local ownedSet = {}
-  if type(context.relicIdList) == "table" then
-    for _, relicId in ipairs(context.relicIdList) do
-      ownedSet[tostring(relicId or "")] = true
-    end
-  end
-
-  local rarity = weightedRarityPick(RELIC_RARITY_WEIGHT, context.rng)
-  local candidateList = {}
-  for _, relic in ipairs(RelicRegistry.listAll()) do
-    local relicId = tostring(relic.relicId or "")
-    if relicId ~= "" and not ownedSet[relicId] then
-      local optionId = "relic:" .. relicId
-      local effectGroupId = "relic:" .. relicId
-      if not excludedOptionIdSet[optionId] and not excludedEffectGroupIdSet[effectGroupId] and tostring(relic.rarity or "COMMON") == rarity then
-        candidateList[#candidateList + 1] = relic
-      end
-    end
-  end
-
-  if #candidateList <= 0 then
-    for _, relic in ipairs(RelicRegistry.listAll()) do
-      local relicId = tostring(relic.relicId or "")
-      if relicId ~= "" and not ownedSet[relicId] then
-        local optionId = "relic:" .. relicId
-        local effectGroupId = "relic:" .. relicId
-        if not excludedOptionIdSet[optionId] and not excludedEffectGroupIdSet[effectGroupId] then
-          candidateList[#candidateList + 1] = relic
-        end
-      end
-    end
-  end
-  if #candidateList <= 0 then
+  local slotIndex = math.max(1, math.floor(tonumber(context.optionSlotIndex) or 1))
+  local relicDef = ProcRelicGenerator.createRelic({
+    rng = context.rng,
+    runSeed = context.runSeed,
+    runId = context.runId,
+    stageIndex = context.stageIndex,
+    waveIndex = context.waveIndex,
+    optionSlotIndex = slotIndex
+  })
+  local relicId = tostring(relicDef and relicDef.relicId or "")
+  if relicId == "" then
     return nil
   end
 
-  local pickedRelic = candidateList[randomInt(context.rng, 1, #candidateList)]
-  local relicId = tostring(pickedRelic.relicId or "")
+  local optionId = "relic:" .. relicId
+  local effectGroupId = "relic:" .. relicId
+  if excludedOptionIdSet[optionId] or excludedEffectGroupIdSet[effectGroupId] then
+    return nil
+  end
+  local isRegistered = RuntimeRelicStore.register(relicDef)
+  if not isRegistered then
+    return nil
+  end
+
   return {
-    optionId = "relic:" .. relicId,
-    effectGroupId = "relic:" .. relicId,
+    optionId = optionId,
+    effectGroupId = effectGroupId,
     category = UpgradeDraft.CATEGORY_RELIC,
-    rarity = tostring(pickedRelic.rarity or "COMMON"),
-    titleKey = "single.relic.name." .. relicId,
-    descKey = "single.relic.desc." .. relicId,
-    titleText = relicId,
-    descText = "",
+    rarity = tostring(relicDef.rarity or "Common"),
+    titleKey = "",
+    descKey = "",
+    titleText = tostring(relicDef.name or relicId),
+    descText = tostring(relicDef.descText or ""),
     payload = {
       relicId = relicId
     }
@@ -290,6 +270,7 @@ function UpgradeDraft.build(optionContext)
     local pickedOption = nil
     for _ = 1, 12 do
       local categoryId = weightedPick(CATEGORY_WEIGHT_LIST, context.rng) or UpgradeDraft.CATEGORY_HAND_OP
+      context.optionSlotIndex = #optionList + 1
       local candidate = buildOptionByCategory(context, categoryId, excludedOptionIdSet, excludedEffectGroupIdSet)
       if candidate then
         pickedOption = candidate
@@ -297,6 +278,7 @@ function UpgradeDraft.build(optionContext)
       end
     end
     if not pickedOption then
+      context.optionSlotIndex = #optionList + 1
       pickedOption = pickHandOpOption(context, excludedOptionIdSet, excludedEffectGroupIdSet)
         or pickCardOption(context, excludedOptionIdSet, excludedEffectGroupIdSet)
         or pickRelicOption(context, excludedOptionIdSet, excludedEffectGroupIdSet)
