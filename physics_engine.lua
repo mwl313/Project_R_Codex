@@ -28,6 +28,40 @@ local function getRules(context)
   return (context and context.constants) or Constants
 end
 
+local function isFiniteNumber(value)
+  return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
+end
+
+local function getStoneRadius(context, rules, stone)
+  if type(context) == "table" and type(context.getStoneRadius) == "function" then
+    local radius = context.getStoneRadius(stone)
+    if isFiniteNumber(radius) and radius > 0 then
+      return radius
+    end
+  end
+  return rules.STONE_RADIUS
+end
+
+local function getStoneMass(context, _rules, stone)
+  if type(context) == "table" and type(context.getStoneMass) == "function" then
+    local mass = context.getStoneMass(stone)
+    if isFiniteNumber(mass) and mass > 0 then
+      return mass
+    end
+  end
+  return 1.0
+end
+
+local function getStoneDampingPerSec(context, rules, stone)
+  if type(context) == "table" and type(context.getStoneDampingPerSec) == "function" then
+    local damping = context.getStoneDampingPerSec(stone)
+    if isFiniteNumber(damping) and damping >= 0 then
+      return damping
+    end
+  end
+  return rules.PHYSICS_DAMPING_PER_SEC
+end
+
 function PhysicsEngine.resolveObstacleCollision(context, stone, obstacle)
   if type(context) ~= "table" or type(stone) ~= "table" or type(obstacle) ~= "table" then
     return false, nil, nil
@@ -48,7 +82,8 @@ function PhysicsEngine.resolveObstacleCollision(context, stone, obstacle)
   local dx = stone.x - closestX
   local dy = stone.y - closestY
   local distanceSq = dx * dx + dy * dy
-  local minDistanceSq = rules.STONE_RADIUS * rules.STONE_RADIUS
+  local stoneRadius = getStoneRadius(context, rules, stone)
+  local minDistanceSq = stoneRadius * stoneRadius
 
   if distanceSq >= minDistanceSq then
     return false, nil, nil
@@ -62,7 +97,7 @@ function PhysicsEngine.resolveObstacleCollision(context, stone, obstacle)
     local distance = math.sqrt(distanceSq)
     normalX = dx / distance
     normalY = dy / distance
-    overlap = rules.STONE_RADIUS - distance
+    overlap = stoneRadius - distance
   else
     local penLeft = math.abs(stone.x - left)
     local penRight = math.abs(right - stone.x)
@@ -71,16 +106,16 @@ function PhysicsEngine.resolveObstacleCollision(context, stone, obstacle)
     local minPen = math.min(penLeft, penRight, penTop, penBottom)
     if minPen == penLeft then
       normalX, normalY = -1, 0
-      overlap = rules.STONE_RADIUS + penLeft
+      overlap = stoneRadius + penLeft
     elseif minPen == penRight then
       normalX, normalY = 1, 0
-      overlap = rules.STONE_RADIUS + penRight
+      overlap = stoneRadius + penRight
     elseif minPen == penTop then
       normalX, normalY = 0, -1
-      overlap = rules.STONE_RADIUS + penTop
+      overlap = stoneRadius + penTop
     else
       normalX, normalY = 0, 1
-      overlap = rules.STONE_RADIUS + penBottom
+      overlap = stoneRadius + penBottom
     end
   end
 
@@ -110,7 +145,9 @@ function PhysicsEngine.resolveStoneCollision(context, firstStone, secondStone)
   local dx = secondStone.x - firstStone.x
   local dy = secondStone.y - firstStone.y
   local distanceSq = dx * dx + dy * dy
-  local minDistance = rules.STONE_RADIUS * 2
+  local firstRadius = getStoneRadius(context, rules, firstStone)
+  local secondRadius = getStoneRadius(context, rules, secondStone)
+  local minDistance = firstRadius + secondRadius
   local minDistanceSq = minDistance * minDistance
 
   if distanceSq >= minDistanceSq then
@@ -137,12 +174,21 @@ function PhysicsEngine.resolveStoneCollision(context, firstStone, secondStone)
     firstStone.x = firstStone.x - normalX * penetration
     firstStone.y = firstStone.y - normalY * penetration
   else
-    local correctionX = normalX * penetration * 0.5
-    local correctionY = normalY * penetration * 0.5
-    firstStone.x = firstStone.x - correctionX
-    firstStone.y = firstStone.y - correctionY
-    secondStone.x = secondStone.x + correctionX
-    secondStone.y = secondStone.y + correctionY
+    local firstMass = getStoneMass(context, rules, firstStone)
+    local secondMass = getStoneMass(context, rules, secondStone)
+    local firstInvMass = 1 / math.max(0.0001, firstMass)
+    local secondInvMass = 1 / math.max(0.0001, secondMass)
+    local totalInvMass = firstInvMass + secondInvMass
+    local firstCorrectionRatio = 0.5
+    local secondCorrectionRatio = 0.5
+    if totalInvMass > 0 then
+      firstCorrectionRatio = firstInvMass / totalInvMass
+      secondCorrectionRatio = secondInvMass / totalInvMass
+    end
+    firstStone.x = firstStone.x - normalX * penetration * firstCorrectionRatio
+    firstStone.y = firstStone.y - normalY * penetration * firstCorrectionRatio
+    secondStone.x = secondStone.x + normalX * penetration * secondCorrectionRatio
+    secondStone.y = secondStone.y + normalY * penetration * secondCorrectionRatio
   end
 
   local firstVelocity = context.getStoneVelocity(firstStone.id)
@@ -159,14 +205,22 @@ function PhysicsEngine.resolveStoneCollision(context, firstStone, secondStone)
   local relativeY = secondVelocity.vy - firstVelocity.vy
   local normalSpeed = relativeX * normalX + relativeY * normalY
   if normalSpeed < 0 then
-    local impulse = -(1 + rules.PHYSICS_RESTITUTION) * normalSpeed * 0.5
+    local firstMass = getStoneMass(context, rules, firstStone)
+    local secondMass = getStoneMass(context, rules, secondStone)
+    local firstInvMass = firstInvincible and 0 or (1 / math.max(0.0001, firstMass))
+    local secondInvMass = secondInvincible and 0 or (1 / math.max(0.0001, secondMass))
+    local denominator = firstInvMass + secondInvMass
+    local impulse = 0
+    if denominator > 0 then
+      impulse = -(1 + rules.PHYSICS_RESTITUTION) * normalSpeed / denominator
+    end
     if not firstInvincible then
-      firstVelocity.vx = firstVelocity.vx - impulse * normalX
-      firstVelocity.vy = firstVelocity.vy - impulse * normalY
+      firstVelocity.vx = firstVelocity.vx - impulse * firstInvMass * normalX
+      firstVelocity.vy = firstVelocity.vy - impulse * firstInvMass * normalY
     end
     if not secondInvincible then
-      secondVelocity.vx = secondVelocity.vx + impulse * normalX
-      secondVelocity.vy = secondVelocity.vy + impulse * normalY
+      secondVelocity.vx = secondVelocity.vx + impulse * secondInvMass * normalX
+      secondVelocity.vy = secondVelocity.vy + impulse * secondInvMass * normalY
     end
   end
 
@@ -185,12 +239,6 @@ function PhysicsEngine.simulateShotStep(context, stepSec)
 
   local rules = getRules(context)
   local aliveStoneList = {}
-  local minX = rules.STONE_RADIUS
-  local maxX = rules.BOARD_W - rules.STONE_RADIUS
-  local minY = rules.STONE_RADIUS
-  local maxY = rules.BOARD_H - rules.STONE_RADIUS
-  local damping = math.max(0, 1 - rules.PHYSICS_DAMPING_PER_SEC * stepSec)
-
   for _, stone in ipairs(context.stoneList) do
     local velocity = context.getStoneVelocity(stone.id)
     if stone.alive ~= false then
@@ -230,6 +278,11 @@ function PhysicsEngine.simulateShotStep(context, stepSec)
   for _, stone in ipairs(context.stoneList) do
     local velocity = context.getStoneVelocity(stone.id)
     if stone.alive ~= false then
+      local stoneRadius = getStoneRadius(context, rules, stone)
+      local minX = stoneRadius
+      local maxX = rules.BOARD_W - stoneRadius
+      local minY = stoneRadius
+      local maxY = rules.BOARD_H - stoneRadius
       if stone.x < minX or stone.x > maxX or stone.y < minY or stone.y > maxY then
         if type(context.isShockwaveShotStone) == "function" and type(context.applyShockwaveFromPoint) == "function" and context.isShockwaveShotStone(stone.id) then
           context.applyShockwaveFromPoint(stone.x, stone.y)
@@ -238,6 +291,8 @@ function PhysicsEngine.simulateShotStep(context, stepSec)
         velocity.vx = 0
         velocity.vy = 0
       else
+        local dampingPerSec = getStoneDampingPerSec(context, rules, stone)
+        local damping = math.max(0, 1 - dampingPerSec * stepSec)
         velocity.vx = velocity.vx * damping
         velocity.vy = velocity.vy * damping
         local speed = math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy)

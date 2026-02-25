@@ -27,8 +27,12 @@ local PhysicsEngine = require("physics_engine")
 
 local GameMechanics = {}
 
+local function isFiniteNumber(value)
+  return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
+end
+
 local function buildPhysicsContext(matchContext)
-  return {
+  local context = {
     constants = Constants,
     stoneList = matchContext._playingStoneList,
     obstacleList = matchContext._obstacleList,
@@ -51,6 +55,22 @@ local function buildPhysicsContext(matchContext)
       return false
     end
   }
+  if type(matchContext.getStoneRadius) == "function" then
+    context.getStoneRadius = function(stone)
+      return matchContext:getStoneRadius(stone)
+    end
+  end
+  if type(matchContext.getStoneMass) == "function" then
+    context.getStoneMass = function(stone)
+      return matchContext:getStoneMass(stone)
+    end
+  end
+  if type(matchContext.getStoneDampingPerSec) == "function" then
+    context.getStoneDampingPerSec = function(stone)
+      return matchContext:getStoneDampingPerSec(stone)
+    end
+  end
+  return context
 end
 
 function GameMechanics.resetStoneVelocities(matchContext)
@@ -116,7 +136,19 @@ function GameMechanics.applyShotImpulse(matchContext, shotPayload)
   end
 
   local velocity = matchContext:getStoneVelocity(stone.id)
-  local speed = math.max(0, shotPayload.power * Constants.SHOT_SPEED_SCALE)
+  local speedScale = nil
+  if isFiniteNumber(shotPayload.shotSpeedScale) and shotPayload.shotSpeedScale > 0 then
+    speedScale = shotPayload.shotSpeedScale
+  elseif type(matchContext.getShotSpeedScaleForStone) == "function" then
+    local autoScale = matchContext:getShotSpeedScaleForStone(stone)
+    if isFiniteNumber(autoScale) and autoScale > 0 then
+      speedScale = autoScale
+    end
+  end
+  if not speedScale then
+    speedScale = Constants.SHOT_SPEED_SCALE
+  end
+  local speed = math.max(0, shotPayload.power * speedScale)
   velocity.vx = shotPayload.dirX / directionLength * speed
   velocity.vy = shotPayload.dirY / directionLength * speed
   if matchContext._shockwaveOwnerPlayerIndex and stone.ownerPlayerIndex == matchContext._shockwaveOwnerPlayerIndex then

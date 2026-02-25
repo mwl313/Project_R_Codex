@@ -44,7 +44,14 @@
       "aiProfileId": "ai_easy_01",
       "enemyModifiers": {
         "extraStones": 0,
-        "maxShotPowerMul": 1.0
+        "maxShotPowerMul": 1.0,
+        "combatStatsMul": {
+          "maxShotPowerMul": 1.0,
+          "shotSpeedScaleMul": 1.0,
+          "physicsDampingPerSecMul": 1.0,
+          "stoneRadiusMul": 1.0,
+          "stoneMassMul": 1.0
+        }
       },
       "gimmicks": []
     },
@@ -55,7 +62,14 @@
       "aiProfileId": "ai_boss_01",
       "enemyModifiers": {
         "extraStones": 1,
-        "maxShotPowerMul": 1.05
+        "maxShotPowerMul": 1.05,
+        "combatStatsMul": {
+          "maxShotPowerMul": 1.05,
+          "shotSpeedScaleMul": 1.0,
+          "physicsDampingPerSecMul": 1.0,
+          "stoneRadiusMul": 1.0,
+          "stoneMassMul": 1.0
+        }
       },
       "gimmicks": [
         "boss_rockfall"

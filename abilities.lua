@@ -43,6 +43,37 @@ local function clamp(value, minValue, maxValue)
   return math.max(minValue, math.min(maxValue, value))
 end
 
+local function getSceneStoneRadius(scene, stoneOrPlayerIndex)
+  if type(scene) ~= "table" then
+    return Constants.STONE_RADIUS
+  end
+  if type(stoneOrPlayerIndex) == "table" and type(scene.getStoneRadius) == "function" then
+    local radius = scene:getStoneRadius(stoneOrPlayerIndex)
+    if type(radius) == "number" and radius > 0 then
+      return radius
+    end
+  end
+  if type(stoneOrPlayerIndex) == "table" and type(scene.getStoneRadiusForPlayer) == "function" then
+    local radius = scene:getStoneRadiusForPlayer(stoneOrPlayerIndex.ownerPlayerIndex)
+    if type(radius) == "number" and radius > 0 then
+      return radius
+    end
+  end
+  if type(stoneOrPlayerIndex) == "number" and type(scene.getStoneRadiusForPlayer) == "function" then
+    local radius = scene:getStoneRadiusForPlayer(stoneOrPlayerIndex)
+    if type(radius) == "number" and radius > 0 then
+      return radius
+    end
+  end
+  if type(stoneOrPlayerIndex) == "number" and type(scene.getStoneRadius) == "function" then
+    local radius = scene:getStoneRadius(stoneOrPlayerIndex)
+    if type(radius) == "number" and radius > 0 then
+      return radius
+    end
+  end
+  return Constants.STONE_RADIUS
+end
+
 local function listToSet(valueList)
   local valueSet = {}
   for _, value in ipairs(valueList or {}) do
@@ -51,7 +82,7 @@ local function listToSet(valueList)
   return valueSet
 end
 
-local function intersectsStoneAndObstacle(stoneX, stoneY, obstacle)
+local function intersectsStoneAndObstacle(stoneX, stoneY, obstacle, stoneRadius)
   local halfW = (obstacle.width or Constants.ROCK_OBSTACLE_WIDTH) * 0.5
   local halfH = (obstacle.height or Constants.ROCK_OBSTACLE_HEIGHT) * 0.5
   local left = obstacle.x - halfW
@@ -62,7 +93,8 @@ local function intersectsStoneAndObstacle(stoneX, stoneY, obstacle)
   local closestY = clamp(stoneY, top, bottom)
   local dx = stoneX - closestX
   local dy = stoneY - closestY
-  return dx * dx + dy * dy < Constants.STONE_RADIUS * Constants.STONE_RADIUS
+  local radius = math.max(1, tonumber(stoneRadius) or Constants.STONE_RADIUS)
+  return dx * dx + dy * dy < radius * radius
 end
 
 local function intersectsObstacleAndObstacle(firstObstacle, secondObstacle)
@@ -210,7 +242,7 @@ function Abilities.canPlaceRockfallAtCanonical(scene, canonicalX, canonicalY)
   }
 
   for _, stone in ipairs(scene._playingStoneList) do
-    if stone.alive ~= false and intersectsStoneAndObstacle(stone.x, stone.y, previewObstacle) then
+    if stone.alive ~= false and intersectsStoneAndObstacle(stone.x, stone.y, previewObstacle, getSceneStoneRadius(scene, stone)) then
       return false, t("abilities.validate.rockfall_overlap_stone")
     end
   end
@@ -227,10 +259,11 @@ end
 function Abilities.canPlaceReinforcementAtCanonical(scene, canonicalX, canonicalY)
   local reinforcementRule = CardRules.getReinforcementRule()
   local minPlaceDistance = math.max(1, reinforcementRule.min_place_distance or Constants.MIN_PLACE_DISTANCE)
-  local minX = Constants.STONE_RADIUS
-  local maxX = Constants.BOARD_W - Constants.STONE_RADIUS
-  local minY = Constants.STONE_RADIUS
-  local maxY = Constants.BOARD_H - Constants.STONE_RADIUS
+  local placementRadius = getSceneStoneRadius(scene, 1)
+  local minX = placementRadius
+  local maxX = Constants.BOARD_W - placementRadius
+  local minY = placementRadius
+  local maxY = Constants.BOARD_H - placementRadius
   if canonicalX < minX or canonicalX > maxX or canonicalY < minY or canonicalY > maxY then
     return false, t("abilities.validate.reinforcement_out_of_board")
   end
@@ -251,7 +284,7 @@ function Abilities.canPlaceReinforcementAtCanonical(scene, canonicalX, canonical
     y = canonicalY
   }
   for _, obstacle in ipairs(scene._obstacleList) do
-    if intersectsStoneAndObstacle(previewStone.x, previewStone.y, obstacle) then
+    if intersectsStoneAndObstacle(previewStone.x, previewStone.y, obstacle, placementRadius) then
       return false, t("abilities.validate.reinforcement_overlap_obstacle")
     end
   end
@@ -377,7 +410,7 @@ function Abilities.drawPendingCardPreview(scene, mouseX, mouseY)
     love.graphics.rectangle("line", mouseX - width * 0.5, mouseY - height * 0.5, width, height, 6, 6)
   else
     canPlace = Abilities.canPlaceReinforcementAtCanonical(scene, canonicalX, canonicalY)
-    local radius = Constants.STONE_RADIUS
+    local radius = getSceneStoneRadius(scene, 1)
     local color = canPlace and { 0.36, 0.90, 0.50, 0.35 } or { 0.90, 0.30, 0.30, 0.35 }
     local borderColor = canPlace and { 0.36, 0.90, 0.50, 1.0 } or { 0.90, 0.30, 0.30, 1.0 }
     love.graphics.setColor(color)

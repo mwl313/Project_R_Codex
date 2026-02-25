@@ -115,6 +115,7 @@ Constants = {
   BOARD_H = readNumberRule("BOARD_H", 600),
   STONE_COUNT_PER_PLAYER = readNumberRule("STONE_COUNT_PER_PLAYER", 7),
   STONE_RADIUS = readNumberRule("STONE_RADIUS", 14),
+  STONE_MASS = readNumberRule("STONE_MASS", 1.0),
   PLACE_GAP_PX = readNumberRule("PLACE_GAP_PX", 5),
   NO_PLACE_BUFFER = readNumberRule("NO_PLACE_BUFFER", 19),
   CARD_PICK_SEC = readNumberRule("CARD_PICK_SEC", 15),

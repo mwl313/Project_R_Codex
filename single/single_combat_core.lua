@@ -24,6 +24,7 @@ local InputCaptureGuard = require("utils.input_capture_guard")
 local SingleCampaignRulesLoader = require("single.single_campaign_rules_loader")
 local RelicEffects = require("single.relic_effects")
 local EncountersLoader = require("single.encounters_loader")
+local SingleCombatTuning = require("single.single_combat_tuning")
 
 local SingleCombatCore = {}
 SingleCombatCore.__index = SingleCombatCore
@@ -199,6 +200,8 @@ function SingleCombatCore.new(params)
 
     _baseDrawPerBattle = 5,
     _maxShotPower = Constants.MAX_SHOT_POWER,
+    _combatTuning = nil,
+    _combatStatsByPlayerIndex = {},
     _isTurnTimerDisabled = params.disableTurnTimer == true,
     _isHudSuppressed = params.suppressHud == true,
     _initialHandCardIdList = type(params.initialHandCardIdList) == "table" and params.initialHandCardIdList or nil,
@@ -227,7 +230,13 @@ function SingleCombatCore.new(params)
   local campaignRules = SingleCampaignRulesLoader.load()
   local deckRules = type(campaignRules.deck) == "table" and campaignRules.deck or {}
   self._baseDrawPerBattle = math.max(1, math.floor(tonumber(deckRules.drawPerBattle) or 5))
-  self._maxShotPower = RelicEffects.applyShotModifiers(self._runState, Constants.MAX_SHOT_POWER)
+  self._combatTuning = SingleCombatTuning.build({
+    runState = self._runState,
+    nodeType = self._nodeType,
+    stageIndex = self._stageIndex
+  })
+  self._combatStatsByPlayerIndex = type(self._combatTuning.byPlayerIndex) == "table" and self._combatTuning.byPlayerIndex or {}
+  self._maxShotPower = self:getMaxShotPowerForPlayer(1)
   self._bossRng = makeRng((tonumber(self._runState and self._runState.rngSeed) or os.time()) + self._stageIndex * 409)
   self:initializeBossGimmicks()
 
@@ -247,11 +256,102 @@ function SingleCombatCore:createId(prefix)
   return string.format("%s_%d_%d", tostring(prefix or "e"), self._playingTurnIndex, self._handEntrySeq)
 end
 
+function SingleCombatCore:getSideCombatStats(playerIndex)
+  local targetPlayerIndex = math.max(1, math.floor(tonumber(playerIndex) or 1))
+  local stats = self._combatStatsByPlayerIndex and self._combatStatsByPlayerIndex[targetPlayerIndex]
+  if type(stats) ~= "table" and type(self._combatStatsByPlayerIndex) == "table" then
+    stats = self._combatStatsByPlayerIndex[tostring(targetPlayerIndex)]
+  end
+  if type(stats) == "table" then
+    return stats
+  end
+  return {
+    maxShotPower = Constants.MAX_SHOT_POWER,
+    shotSpeedScale = Constants.SHOT_SPEED_SCALE,
+    physicsDampingPerSec = Constants.PHYSICS_DAMPING_PER_SEC,
+    stoneRadius = Constants.STONE_RADIUS,
+    stoneMass = Constants.STONE_MASS or 1.0
+  }
+end
+
+function SingleCombatCore:getMaxShotPowerForPlayer(playerIndex)
+  return math.max(1, tonumber(self:getSideCombatStats(playerIndex).maxShotPower) or Constants.MAX_SHOT_POWER)
+end
+
+function SingleCombatCore:getShotSpeedScaleForPlayer(playerIndex)
+  return math.max(0.01, tonumber(self:getSideCombatStats(playerIndex).shotSpeedScale) or Constants.SHOT_SPEED_SCALE)
+end
+
+function SingleCombatCore:getStoneRadiusForPlayer(playerIndex)
+  return math.max(1, tonumber(self:getSideCombatStats(playerIndex).stoneRadius) or Constants.STONE_RADIUS)
+end
+
+function SingleCombatCore:getStoneMassForPlayer(playerIndex)
+  return math.max(0.01, tonumber(self:getSideCombatStats(playerIndex).stoneMass) or (Constants.STONE_MASS or 1.0))
+end
+
+function SingleCombatCore:getStoneDampingPerSecForPlayer(playerIndex)
+  return math.max(0, tonumber(self:getSideCombatStats(playerIndex).physicsDampingPerSec) or Constants.PHYSICS_DAMPING_PER_SEC)
+end
+
+function SingleCombatCore:getStoneRadius(stone)
+  if type(stone) == "number" then
+    return self:getStoneRadiusForPlayer(stone)
+  end
+  if type(stone) ~= "table" then
+    stone = self:getPlayingStoneById(stone)
+  end
+  if type(stone) ~= "table" then
+    return Constants.STONE_RADIUS
+  end
+  return self:getStoneRadiusForPlayer(stone.ownerPlayerIndex)
+end
+
+function SingleCombatCore:getStoneMass(stone)
+  if type(stone) == "number" then
+    return self:getStoneMassForPlayer(stone)
+  end
+  if type(stone) ~= "table" then
+    stone = self:getPlayingStoneById(stone)
+  end
+  if type(stone) ~= "table" then
+    return Constants.STONE_MASS or 1.0
+  end
+  return self:getStoneMassForPlayer(stone.ownerPlayerIndex)
+end
+
+function SingleCombatCore:getStoneDampingPerSec(stone)
+  if type(stone) == "number" then
+    return self:getStoneDampingPerSecForPlayer(stone)
+  end
+  if type(stone) ~= "table" then
+    stone = self:getPlayingStoneById(stone)
+  end
+  if type(stone) ~= "table" then
+    return Constants.PHYSICS_DAMPING_PER_SEC
+  end
+  return self:getStoneDampingPerSecForPlayer(stone.ownerPlayerIndex)
+end
+
+function SingleCombatCore:getShotSpeedScaleForStone(stone)
+  if type(stone) == "number" then
+    return self:getShotSpeedScaleForPlayer(stone)
+  end
+  if type(stone) ~= "table" then
+    stone = self:getPlayingStoneById(stone)
+  end
+  if type(stone) ~= "table" then
+    return Constants.SHOT_SPEED_SCALE
+  end
+  return self:getShotSpeedScaleForPlayer(stone.ownerPlayerIndex)
+end
+
 function SingleCombatCore:initializeBattlefield()
   self._playingStoneList = {}
   local centerX = Constants.BOARD_W * 0.5
-  local spreadX = 58
-  local rowGap = 52
+  local maxStoneRadius = math.max(self:getStoneRadiusForPlayer(1), self:getStoneRadiusForPlayer(2), Constants.STONE_RADIUS)
+  local spreadX = math.max(58, maxStoneRadius * 2 + 8)
+  local rowGap = math.max(52, maxStoneRadius * 2 + 8)
   local function spawn(owner, startY)
     local counts = { 3, 2, 2 }
     local index = 1
@@ -575,6 +675,7 @@ end
 
 function SingleCombatCore:startTurn(playerIndex, initial)
   self._activePlayerIndex = playerIndex
+  self._maxShotPower = self:getMaxShotPowerForPlayer(playerIndex)
   if not initial then
     self._playingTurnIndex = self._playingTurnIndex + 1
   end
@@ -746,12 +847,14 @@ function SingleCombatCore:commitAimDrag()
     self:setStatus(t("single.combat.status.shot_too_short"), Constants.COLOR_DANGER)
     return
   end
+  local maxShotPower = self:getMaxShotPowerForPlayer(1)
 
   GameMechanics.applyShotImpulse(self, {
     stoneId = stone.id,
     dirX = dx / len,
     dirY = dy / len,
-    power = clamp(len * Constants.POWER_PER_PIXEL, 0, self._maxShotPower)
+    power = clamp(len * Constants.POWER_PER_PIXEL, 0, maxShotPower),
+    shotSpeedScale = self:getShotSpeedScaleForPlayer(1)
   })
   self._pendingShotResolution = {
     ownerPlayerIndex = 1,
@@ -981,9 +1084,11 @@ function SingleCombatCore:update(dt, mouseX, mouseY)
         aiPlayerIndex = 2,
         stoneList = self._playingStoneList,
         obstacleList = self._obstacleList,
-        maxShotPower = self._maxShotPower
+        maxShotPower = self:getMaxShotPowerForPlayer(2),
+        combatStatsByPlayerIndex = self._combatStatsByPlayerIndex
       })
       if shot then
+        shot.shotSpeedScale = tonumber(shot.shotSpeedScale) or self:getShotSpeedScaleForPlayer(2)
         GameMechanics.applyShotImpulse(self, shot)
         self._pendingShotResolution = {
           ownerPlayerIndex = 2,
@@ -1029,10 +1134,11 @@ function SingleCombatCore:draw(mouseX, mouseY)
   for _, stone in ipairs(self._playingStoneList) do
     if stone.alive ~= false then
       local color = stone.ownerPlayerIndex == 1 and Constants.COLOR_STONE_HOST or Constants.COLOR_STONE_GUEST
+      local radius = self:getStoneRadius(stone)
       love.graphics.setColor(color)
-      love.graphics.circle("fill", self._boardX + stone.x, self._boardY + stone.y, Constants.STONE_RADIUS)
+      love.graphics.circle("fill", self._boardX + stone.x, self._boardY + stone.y, radius)
       love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
-      love.graphics.circle("line", self._boardX + stone.x, self._boardY + stone.y, Constants.STONE_RADIUS)
+      love.graphics.circle("line", self._boardX + stone.x, self._boardY + stone.y, radius)
     end
   end
   if self._isAimDragging and self._aimStoneId then
@@ -1044,7 +1150,7 @@ function SingleCombatCore:draw(mouseX, mouseY)
       local dx = sx - ax
       local dy = sy - ay
       local dist = math.sqrt(dx * dx + dy * dy)
-      local power = math.min(self._maxShotPower, dist * Constants.POWER_PER_PIXEL)
+      local power = math.min(self:getMaxShotPowerForPlayer(1), dist * Constants.POWER_PER_PIXEL)
       love.graphics.setColor(0.95, 0.92, 0.35, 0.95)
       love.graphics.setLineWidth(2)
       love.graphics.line(sx, sy, ax, ay)
@@ -1119,8 +1225,9 @@ function SingleCombatCore:mousepressed(worldX, worldY, button)
   if not lx then return false end
   for _, stone in ipairs(self._playingStoneList) do
     if stone.alive ~= false and stone.ownerPlayerIndex == 1 and self._lockedStoneIdSet[stone.id] ~= true then
+      local radius = self:getStoneRadius(stone)
       local dx, dy = stone.x - lx, stone.y - ly
-      if dx * dx + dy * dy <= (Constants.STONE_RADIUS + 4) ^ 2 then
+      if dx * dx + dy * dy <= (radius + 4) ^ 2 then
         self:beginAimDrag(worldX, worldY, stone)
         return true
       end

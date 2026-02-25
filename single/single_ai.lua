@@ -210,6 +210,15 @@ local function pickShooterAndTarget(stoneList, aiPlayerIndex)
 end
 
 local function makePhysicsContext(simStoneList, simObstacleList, velocityMap)
+  local function getStoneRadius(_stone)
+    return nil
+  end
+  local function getStoneMass(_stone)
+    return nil
+  end
+  local function getStoneDampingPerSec(_stone)
+    return nil
+  end
   return {
     constants = Constants,
     stoneList = simStoneList,
@@ -232,11 +241,62 @@ local function makePhysicsContext(simStoneList, simObstacleList, velocityMap)
     end,
     applyInvincibleCollisionResponse = function(_firstInvincible, _secondInvincible, _normalX, _normalY, _firstVelocity, _secondVelocity)
       return false
+    end,
+    getStoneRadius = getStoneRadius,
+    getStoneMass = getStoneMass,
+    getStoneDampingPerSec = getStoneDampingPerSec
+  }
+end
+
+local function buildStatsResolver(params)
+  local byPlayerIndex = (params and type(params.combatStatsByPlayerIndex) == "table") and params.combatStatsByPlayerIndex or {}
+
+  local function getForOwner(ownerPlayerIndex, fieldName, fallback)
+    local stats = byPlayerIndex[ownerPlayerIndex]
+    if type(stats) ~= "table" then
+      stats = byPlayerIndex[tostring(ownerPlayerIndex)]
+    end
+    if type(stats) ~= "table" then
+      return fallback
+    end
+    local value = tonumber(stats[fieldName])
+    if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+      return value
+    end
+    return fallback
+  end
+
+  return {
+    getRadiusByOwner = function(ownerPlayerIndex)
+      return math.max(1, getForOwner(ownerPlayerIndex, "stoneRadius", Constants.STONE_RADIUS))
+    end,
+    getMassByOwner = function(ownerPlayerIndex)
+      return math.max(0.01, getForOwner(ownerPlayerIndex, "stoneMass", Constants.STONE_MASS or 1.0))
+    end,
+    getDampingByOwner = function(ownerPlayerIndex)
+      return math.max(0, getForOwner(ownerPlayerIndex, "physicsDampingPerSec", Constants.PHYSICS_DAMPING_PER_SEC))
+    end,
+    getShotSpeedScaleByOwner = function(ownerPlayerIndex)
+      return math.max(0.01, getForOwner(ownerPlayerIndex, "shotSpeedScale", Constants.SHOT_SPEED_SCALE))
     end
   }
 end
 
-local function evaluateCandidate(baseContext, shooterStoneId, candidate)
+local function makePhysicsContextWithResolver(simStoneList, simObstacleList, velocityMap, statsResolver)
+  local physicsContext = makePhysicsContext(simStoneList, simObstacleList, velocityMap)
+  physicsContext.getStoneRadius = function(stone)
+    return statsResolver.getRadiusByOwner(stone and stone.ownerPlayerIndex or 1)
+  end
+  physicsContext.getStoneMass = function(stone)
+    return statsResolver.getMassByOwner(stone and stone.ownerPlayerIndex or 1)
+  end
+  physicsContext.getStoneDampingPerSec = function(stone)
+    return statsResolver.getDampingByOwner(stone and stone.ownerPlayerIndex or 1)
+  end
+  return physicsContext
+end
+
+local function evaluateCandidate(baseContext, shooterStoneId, candidate, statsResolver, shotSpeedScale)
   local beforeStoneList = baseContext.stoneList
   local afterStoneList = copyStoneList(baseContext.stoneList)
   local obstacleList = copyObstacleList(baseContext.obstacleList)
@@ -247,12 +307,12 @@ local function evaluateCandidate(baseContext, shooterStoneId, candidate)
     return -math.huge
   end
 
-  local speed = math.max(0, candidate.power * Constants.SHOT_SPEED_SCALE)
+  local speed = math.max(0, candidate.power * shotSpeedScale)
   local velocity = velocityMap[shooter.id]
   velocity.vx = candidate.dirX * speed
   velocity.vy = candidate.dirY * speed
 
-  local physicsContext = makePhysicsContext(afterStoneList, obstacleList, velocityMap)
+  local physicsContext = makePhysicsContextWithResolver(afterStoneList, obstacleList, velocityMap, statsResolver)
   local maxSimSec = 0.50
   local elapsedSec = 0
   local stepSec = Constants.PHYSICS_FIXED_STEP_SEC
@@ -271,7 +331,6 @@ local function evaluateCandidate(baseContext, shooterStoneId, candidate)
   local selfOut = countAlive(beforeStoneList, aiIndex) - countAlive(afterStoneList, aiIndex)
   local score = (enemyOut * 1000) - (selfOut * 1200)
 
-  local radius = Constants.STONE_RADIUS
   local enemyEdgeDelta = 0
   local selfEdgeRisk = 0
   local beforeById = {}
@@ -283,12 +342,14 @@ local function evaluateCandidate(baseContext, shooterStoneId, candidate)
     if afterStone.alive ~= false then
       local beforeStone = beforeById[afterStone.id]
       if beforeStone and beforeStone.alive ~= false then
-        local beforeEdge = distanceToEdge(beforeStone, Constants.BOARD_W, Constants.BOARD_H, radius)
-        local afterEdge = distanceToEdge(afterStone, Constants.BOARD_W, Constants.BOARD_H, radius)
+        local beforeRadius = statsResolver.getRadiusByOwner(beforeStone.ownerPlayerIndex)
+        local afterRadius = statsResolver.getRadiusByOwner(afterStone.ownerPlayerIndex)
+        local beforeEdge = distanceToEdge(beforeStone, Constants.BOARD_W, Constants.BOARD_H, beforeRadius)
+        local afterEdge = distanceToEdge(afterStone, Constants.BOARD_W, Constants.BOARD_H, afterRadius)
         if afterStone.ownerPlayerIndex == enemyIndex then
           enemyEdgeDelta = enemyEdgeDelta + (beforeEdge - afterEdge)
         else
-          local riskThreshold = radius * 2.2
+          local riskThreshold = afterRadius * 2.2
           selfEdgeRisk = selfEdgeRisk + math.max(0, riskThreshold - afterEdge)
         end
       end
@@ -323,6 +384,8 @@ function SingleAI.chooseShot(params)
   local aiPlayerIndex = params and tonumber(params.aiPlayerIndex) or 2
   local turnIndex = params and tonumber(params.turnIndex) or 1
   local maxShotPower = math.max(80, tonumber(params and params.maxShotPower) or Constants.MAX_SHOT_POWER)
+  local statsResolver = buildStatsResolver(params)
+  local shotSpeedScale = statsResolver.getShotSpeedScaleByOwner(aiPlayerIndex)
 
   local shooter, target = pickShooterAndTarget(stoneList, aiPlayerIndex)
   if not shooter or not target then
@@ -342,7 +405,7 @@ function SingleAI.chooseShot(params)
 
   for _ = 1, config.candidateCount do
     local candidate = buildCandidate(rng, shooter, target, config, maxShotPower)
-    local score = evaluateCandidate(evalContext, shooter.id, candidate)
+    local score = evaluateCandidate(evalContext, shooter.id, candidate, statsResolver, shotSpeedScale)
     if score > bestScore then
       bestScore = score
       bestCandidate = candidate
@@ -367,7 +430,8 @@ function SingleAI.chooseShot(params)
     stoneId = shooter.id,
     dirX = bestCandidate.dirX,
     dirY = bestCandidate.dirY,
-    power = bestCandidate.power
+    power = bestCandidate.power,
+    shotSpeedScale = shotSpeedScale
   }
 end
 

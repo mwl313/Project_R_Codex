@@ -17,7 +17,14 @@ local DEFAULT_DATA = {
       aiProfileId = "ai_easy_01",
       enemyModifiers = {
         extraStones = 0,
-        maxShotPowerMul = 1.0
+        maxShotPowerMul = 1.0,
+        combatStatsMul = {
+          maxShotPowerMul = 1.0,
+          shotSpeedScaleMul = 1.0,
+          physicsDampingPerSecMul = 1.0,
+          stoneRadiusMul = 1.0,
+          stoneMassMul = 1.0
+        }
       },
       gimmicks = {}
     },
@@ -28,7 +35,14 @@ local DEFAULT_DATA = {
       aiProfileId = "ai_boss_01",
       enemyModifiers = {
         extraStones = 1,
-        maxShotPowerMul = 1.05
+        maxShotPowerMul = 1.05,
+        combatStatsMul = {
+          maxShotPowerMul = 1.05,
+          shotSpeedScaleMul = 1.0,
+          physicsDampingPerSecMul = 1.0,
+          stoneRadiusMul = 1.0,
+          stoneMassMul = 1.0
+        }
       },
       gimmicks = { "boss_rockfall" }
     }
@@ -47,11 +61,20 @@ local DEFAULT_DATA = {
 local function sanitizeEncounter(entry)
   local source = LoaderUtils.toTable(entry, {})
   local enemyModifiers = LoaderUtils.toTable(source.enemyModifiers, {})
+  local combatStatsMul = LoaderUtils.toTable(enemyModifiers.combatStatsMul, {})
   local gimmicks = {}
   for _, gimmick in ipairs(LoaderUtils.toArray(source.gimmicks, {})) do
     if type(gimmick) == "string" and gimmick ~= "" then
       gimmicks[#gimmicks + 1] = gimmick
     end
+  end
+
+  local function toPositiveMultiplier(value)
+    local number = LoaderUtils.toNumber(value, 1.0)
+    if number <= 0 then
+      return 1.0
+    end
+    return number
   end
 
   return {
@@ -61,7 +84,14 @@ local function sanitizeEncounter(entry)
     aiProfileId = LoaderUtils.toString(source.aiProfileId, "ai_easy_01"),
     enemyModifiers = {
       extraStones = LoaderUtils.toNumber(enemyModifiers.extraStones, 0),
-      maxShotPowerMul = LoaderUtils.toNumber(enemyModifiers.maxShotPowerMul, 1.0)
+      maxShotPowerMul = toPositiveMultiplier(enemyModifiers.maxShotPowerMul),
+      combatStatsMul = {
+        maxShotPowerMul = toPositiveMultiplier(combatStatsMul.maxShotPowerMul),
+        shotSpeedScaleMul = toPositiveMultiplier(combatStatsMul.shotSpeedScaleMul),
+        physicsDampingPerSecMul = toPositiveMultiplier(combatStatsMul.physicsDampingPerSecMul),
+        stoneRadiusMul = toPositiveMultiplier(combatStatsMul.stoneRadiusMul),
+        stoneMassMul = toPositiveMultiplier(combatStatsMul.stoneMassMul)
+      }
     },
     gimmicks = gimmicks
   }
