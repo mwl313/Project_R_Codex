@@ -162,11 +162,20 @@ function SingleCombatScene:draw()
   end
 
   self._backButton:draw(mouseX, mouseY)
+
+  -- 컷신은 백버튼 포함 모든 UI 위에 출력한다.
+  if self._core and self._core.drawTopOverlay then
+    self._core:drawTopOverlay(mouseX, mouseY)
+  end
 end
 
 function SingleCombatScene:mousepressed(mouseX, mouseY, button)
+  local handledByCore = false
   if self._core then
-    self._core:mousepressed(mouseX, mouseY, button)
+    handledByCore = self._core:mousepressed(mouseX, mouseY, button) == true
+  end
+  if handledByCore then
+    return
   end
   if button ~= 1 then
     return

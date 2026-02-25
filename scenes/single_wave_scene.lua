@@ -1228,6 +1228,11 @@ function SingleWaveScene:draw()
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(self._statusColor)
   love.graphics.printf(self._statusText, 0, 694, Constants.BASE_WORLD_W, "center")
+
+  -- 컷신은 모든 HUD/패널/오버레이보다 최상단에서 그린다.
+  if self._core and self._core.drawTopOverlay then
+    self._core:drawTopOverlay(mouseX, mouseY)
+  end
 end
 
 function SingleWaveScene:handleRelicScrollMousePressed(mouseX, mouseY, button)

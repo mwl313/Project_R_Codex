@@ -16,6 +16,7 @@ local CardRegistry = require("single.card_registry")
 local GameMechanics = require("game_mechanics")
 local Abilities = require("abilities")
 local CardHandBar = require("ui.card_hand_bar")
+local CutsceneManager = require("ui.cutscene_manager")
 local EffectManager = require("effects.effect_manager")
 local SingleAI = require("single.single_ai")
 local SingleRunState = require("single.single_run_state")
@@ -193,6 +194,8 @@ function SingleCombatCore.new(params)
     _pendingCardTargetId = nil,
     _pendingCardTargetEntryId = nil,
     _pendingCardTargetCardId = nil,
+    _cutsceneManager = nil,
+    _pendingCardCutsceneUse = nil,
 
     _baseDrawPerBattle = 5,
     _maxShotPower = Constants.MAX_SHOT_POWER,
@@ -219,6 +222,7 @@ function SingleCombatCore.new(params)
       self:setStatus(t("single.combat.status.card_cannot_use"), Constants.COLOR_DANGER)
     end
   })
+  self._cutsceneManager = CutsceneManager.new()
 
   local campaignRules = SingleCampaignRulesLoader.load()
   local deckRules = type(campaignRules.deck) == "table" and campaignRules.deck or {}
@@ -476,6 +480,91 @@ function SingleCombatCore:initializeHand()
   self:refreshHandUi()
 end
 
+function SingleCombatCore:removeHandEntry(entry)
+  if type(entry) ~= "table" or entry.entryId == nil then
+    return
+  end
+  for i, e in ipairs(self._handEntryList) do
+    if e.entryId == entry.entryId then
+      table.remove(self._handEntryList, i)
+      break
+    end
+  end
+  if type(self._onCardConsumed) == "function" then
+    self._onCardConsumed(CardRegistry.fromRuntimeCardId(entry.cardId), entry.cardId)
+  end
+  self._handEntryById[entry.entryId] = nil
+  self:refreshHandUi()
+end
+
+function SingleCombatCore:restoreHandEntry(entry)
+  if type(entry) ~= "table" then
+    return
+  end
+  local restored = {
+    entryId = tostring(entry.entryId or self:createId("card")),
+    cardId = tostring(entry.cardId or ""),
+    label = tostring(entry.label or Abilities.getCardLabel(entry.cardId))
+  }
+  if restored.cardId == "" then
+    return
+  end
+  self._handEntryList[#self._handEntryList + 1] = restored
+  self._handEntryById[restored.entryId] = restored
+  self:refreshHandUi()
+end
+
+function SingleCombatCore:startCardUseCutscene(entry, target)
+  if type(entry) ~= "table" then
+    return false
+  end
+  if not self._cutsceneManager then
+    return false
+  end
+  local started = self._cutsceneManager:start({
+    cardId = entry.cardId,
+    ownerPlayerIndex = 1,
+    isLocalUser = true,
+    skillName = entry.label
+  })
+  -- 싱글은 서버 동기화 대기가 없으므로 로컬 컷신만 재생한다.
+  self._cutsceneManager:setBlockedByServerPaused(false)
+  self._pendingCardCutsceneUse = {
+    entry = {
+      entryId = entry.entryId,
+      cardId = entry.cardId,
+      label = entry.label
+    },
+    target = target
+  }
+  if started then
+    self:setStatus(t("match.status.cutscene_playing", {
+      cardLabel = tostring(entry.label or entry.cardId)
+    }), Constants.COLOR_TEXT_SUB)
+  end
+  return true
+end
+
+function SingleCombatCore:updatePendingCardCutsceneUse()
+  if type(self._pendingCardCutsceneUse) ~= "table" then
+    return
+  end
+  if self._cutsceneManager and self._cutsceneManager:isActive() then
+    return
+  end
+
+  local pending = self._pendingCardCutsceneUse
+  self._pendingCardCutsceneUse = nil
+  local entry = pending.entry
+  local ok, reason = self:applyCardEffect(entry.cardId, pending.target)
+  if not ok then
+    self:restoreHandEntry(entry)
+    self:setStatus(reason or t("single.combat.status.card_cannot_use"), Constants.COLOR_DANGER)
+    return
+  end
+  self:setStatus(t("single.combat.status.card_used", { card = entry.label }), Constants.COLOR_TEXT_SUB)
+end
+
 function SingleCombatCore:refreshHandUi()
   local list = {}
   for _, entry in ipairs(self._handEntryList) do
@@ -506,6 +595,10 @@ function SingleCombatCore:startTurn(playerIndex, initial)
   self._pendingCardTargetId = nil
   self._pendingCardTargetEntryId = nil
   self._pendingCardTargetCardId = nil
+  self._pendingCardCutsceneUse = nil
+  if self._cutsceneManager then
+    self._cutsceneManager:reset()
+  end
   self._pendingShotResolution = nil
   self:cancelAimDrag(true)
   if playerIndex == 2 then
@@ -794,23 +887,8 @@ function SingleCombatCore:onCardDeclared(entryId)
     self:setStatus(Abilities.getPendingTargetStartStatus(entry.cardId), Constants.COLOR_TEXT_SUB)
     return false
   end
-  local ok, reason = self:applyCardEffect(entry.cardId, nil)
-  if not ok then
-    self:setStatus(reason or t("single.combat.status.card_cannot_use"), Constants.COLOR_DANGER)
-    return false
-  end
-  for i, e in ipairs(self._handEntryList) do
-    if e.entryId == entry.entryId then
-      table.remove(self._handEntryList, i)
-      break
-    end
-  end
-  if type(self._onCardConsumed) == "function" then
-    self._onCardConsumed(CardRegistry.fromRuntimeCardId(entry.cardId), entry.cardId)
-  end
-  self._handEntryById[entry.entryId] = nil
-  self:refreshHandUi()
-  self:setStatus(t("single.combat.status.card_used", { card = entry.label }), Constants.COLOR_TEXT_SUB)
+  self:removeHandEntry(entry)
+  self:startCardUseCutscene(entry, nil)
   return true
 end
 
@@ -827,30 +905,34 @@ function SingleCombatCore:commitPendingTarget(worldX, worldY)
     self:setStatus(Abilities.getPendingTargetOutOfBoardStatus(self._pendingCardTargetCardId), Constants.COLOR_DANGER)
     return true
   end
-  local ok, reason = self:applyCardEffect(entry.cardId, { x = lx, y = ly })
+  local ok, reason = true, nil
+  if entry.cardId == "reinforcement" then
+    ok, reason = Abilities.canPlaceReinforcementAtCanonical(self, lx, ly)
+  elseif entry.cardId == "rockfall" then
+    ok, reason = Abilities.canPlaceRockfallAtCanonical(self, lx, ly)
+  end
   if not ok then
     self:setStatus(reason or t("single.combat.status.card_target_invalid"), Constants.COLOR_DANGER)
     return true
   end
-  for i, e in ipairs(self._handEntryList) do
-    if e.entryId == entry.entryId then
-      table.remove(self._handEntryList, i)
-      break
-    end
-  end
-  if type(self._onCardConsumed) == "function" then
-    self._onCardConsumed(CardRegistry.fromRuntimeCardId(entry.cardId), entry.cardId)
-  end
-  self._handEntryById[entry.entryId] = nil
+  -- 실적용은 컷신 종료 후 수행한다. 여기서는 유효성 확인만 하고 타겟을 고정한다.
+  self:removeHandEntry(entry)
   self._pendingCardTargetEntryId = nil
   self._pendingCardTargetCardId = nil
-  self:refreshHandUi()
-  self:setStatus(t("single.combat.status.card_used", { card = entry.label }), Constants.COLOR_TEXT_SUB)
+  self:startCardUseCutscene(entry, { x = lx, y = ly })
   return true
 end
 
 function SingleCombatCore:update(dt, mouseX, mouseY)
   if self._isFinished then return end
+  if self._cutsceneManager then
+    self._cutsceneManager:update(dt)
+  end
+  self:updatePendingCardCutsceneUse()
+  if self._cutsceneManager and self._cutsceneManager:isInputBlocked() then
+    self:updateAimDragInput()
+    return
+  end
   self:updateAimDragInput()
   self._effectManager:update(dt)
   self._playingCardHandBar:update(dt, mouseX, mouseY, { isPlayingPhase = true, isStoneDragging = self._isAimDragging })
@@ -1007,40 +1089,54 @@ function SingleCombatCore:draw(mouseX, mouseY)
   end
 end
 
+function SingleCombatCore:drawTopOverlay(mouseX, mouseY)
+  if self._cutsceneManager then
+    self._cutsceneManager:draw(mouseX, mouseY)
+  end
+end
+
 function SingleCombatCore:mousepressed(worldX, worldY, button)
-  if self._isFinished then return end
+  if self._isFinished then return false end
+  if self._cutsceneManager and self._cutsceneManager:mousepressed(worldX, worldY, button) then
+    return true
+  end
   if button == 2 then
     if self._pendingCardTargetCardId then
       self._pendingCardTargetCardId = nil
       self._pendingCardTargetEntryId = nil
       self._pendingCardTargetId = nil
       self:setStatus(t("single.combat.status.card_target_cancel"), Constants.COLOR_TEXT_SUB)
-      return
+      return true
     end
     self:cancelAimDrag(true)
-    return
+    return true
   end
-  if button ~= 1 then return end
-  if self._pendingCardTargetCardId and self:commitPendingTarget(worldX, worldY) then return end
-  if self._playingCardHandBar:mousepressed(worldX, worldY, button) then return end
-  if not self:isMyTurn() or self._isShotSimulating or self._playingShotUsed >= self._playingShotBudget then return end
+  if button ~= 1 then return false end
+  if self._pendingCardTargetCardId and self:commitPendingTarget(worldX, worldY) then return true end
+  if self._playingCardHandBar:mousepressed(worldX, worldY, button) then return true end
+  if not self:isMyTurn() or self._isShotSimulating or self._playingShotUsed >= self._playingShotBudget then return false end
   local lx, ly = self:toBoardLocal(worldX, worldY)
-  if not lx then return end
+  if not lx then return false end
   for _, stone in ipairs(self._playingStoneList) do
     if stone.alive ~= false and stone.ownerPlayerIndex == 1 and self._lockedStoneIdSet[stone.id] ~= true then
       local dx, dy = stone.x - lx, stone.y - ly
       if dx * dx + dy * dy <= (Constants.STONE_RADIUS + 4) ^ 2 then
         self:beginAimDrag(worldX, worldY, stone)
-        return
+        return true
       end
     end
   end
+  return false
 end
 
 function SingleCombatCore:mousereleased(worldX, worldY, button)
-  if self._isFinished or button ~= 1 then return end
-  if self._playingCardHandBar:mousereleased(worldX, worldY, button) then return end
+  if self._isFinished or button ~= 1 then return false end
+  if self._cutsceneManager and self._cutsceneManager:mousereleased(worldX, worldY, button) then
+    return true
+  end
+  if self._playingCardHandBar:mousereleased(worldX, worldY, button) then return true end
   self:commitAimDrag()
+  return true
 end
 
 function SingleCombatCore:mousemoved(_worldX, _worldY, _dx, _dy)
@@ -1049,6 +1145,9 @@ end
 function SingleCombatCore:wheelmoved(_worldX, _worldY, _dx, _dy) end
 
 function SingleCombatCore:keypressed(key)
+  if self._cutsceneManager and self._cutsceneManager:keypressed(key) then
+    return true
+  end
   if key == "escape" and self._pendingCardTargetCardId then
     self._pendingCardTargetCardId = nil
     self._pendingCardTargetEntryId = nil
@@ -1074,10 +1173,18 @@ end
 
 function SingleCombatCore:onSceneWillChange(_event)
   self:cancelAimDrag(true)
+  self._pendingCardCutsceneUse = nil
+  if self._cutsceneManager then
+    self._cutsceneManager:reset()
+  end
 end
 
 function SingleCombatCore:exit()
   self:cancelAimDrag(true)
+  self._pendingCardCutsceneUse = nil
+  if self._cutsceneManager then
+    self._cutsceneManager:reset()
+  end
 end
 
 function SingleCombatCore:getCurrentHandCardIdList()
