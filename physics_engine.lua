@@ -36,6 +36,10 @@ function PhysicsEngine.resolveObstacleCollision(context, stone, obstacle)
     return false, nil, nil
   end
 
+  if type(context.canStoneCollideWithObstacle) == "function" and not context.canStoneCollideWithObstacle(stone, obstacle) then
+    return false, nil, nil
+  end
+
   local rules = getRules(context)
   local halfW = (obstacle.width or rules.ROCK_OBSTACLE_WIDTH) * 0.5
   local halfH = (obstacle.height or rules.ROCK_OBSTACLE_HEIGHT) * 0.5
@@ -103,6 +107,10 @@ function PhysicsEngine.resolveStoneCollision(context, firstStone, secondStone)
     return false, nil, nil
   end
   if type(context.getStoneVelocity) ~= "function" or type(context.isInvincibleOnCurrentTurn) ~= "function" then
+    return false, nil, nil
+  end
+
+  if type(context.canStoneCollideWithStone) == "function" and not context.canStoneCollideWithStone(firstStone, secondStone) then
     return false, nil, nil
   end
 
@@ -192,6 +200,15 @@ function PhysicsEngine.simulateShotStep(context, stepSec)
   for _, stone in ipairs(context.stoneList) do
     local velocity = context.getStoneVelocity(stone.id)
     if stone.alive ~= false then
+      if type(context.getStepAccelerationForStone) == "function" then
+        local accelX, accelY = context.getStepAccelerationForStone(stone, velocity, stepSec)
+        if type(accelX) == "number" and accelX == accelX then
+          velocity.vx = velocity.vx + accelX * stepSec
+        end
+        if type(accelY) == "number" and accelY == accelY then
+          velocity.vy = velocity.vy + accelY * stepSec
+        end
+      end
       stone.x = stone.x + velocity.vx * stepSec
       stone.y = stone.y + velocity.vy * stepSec
       aliveStoneList[#aliveStoneList + 1] = stone
@@ -202,10 +219,12 @@ function PhysicsEngine.simulateShotStep(context, stepSec)
   end
 
   for _, stone in ipairs(aliveStoneList) do
-    for _, obstacle in ipairs(context.obstacleList) do
-      local collided = PhysicsEngine.resolveObstacleCollision(context, stone, obstacle)
-      if collided and type(context.isShockwaveShotStone) == "function" and type(context.applyShockwaveFromPoint) == "function" and context.isShockwaveShotStone(stone.id) then
-        context.applyShockwaveFromPoint(stone.x, stone.y)
+    if stone.alive ~= false then
+      for _, obstacle in ipairs(context.obstacleList) do
+        local collided = PhysicsEngine.resolveObstacleCollision(context, stone, obstacle)
+        if collided and type(context.isShockwaveShotStone) == "function" and type(context.applyShockwaveFromPoint) == "function" and context.isShockwaveShotStone(stone.id) then
+          context.applyShockwaveFromPoint(stone.x, stone.y)
+        end
       end
     end
   end
@@ -214,12 +233,17 @@ function PhysicsEngine.simulateShotStep(context, stepSec)
     for secondIndex = firstIndex + 1, #aliveStoneList do
       local firstStone = aliveStoneList[firstIndex]
       local secondStone = aliveStoneList[secondIndex]
-      local collided = PhysicsEngine.resolveStoneCollision(context, firstStone, secondStone)
-      if collided and type(context.isShockwaveShotStone) == "function" and type(context.applyShockwaveFromPoint) == "function" then
-        if context.isShockwaveShotStone(firstStone.id) then
-          context.applyShockwaveFromPoint(firstStone.x, firstStone.y)
-        elseif context.isShockwaveShotStone(secondStone.id) then
-          context.applyShockwaveFromPoint(secondStone.x, secondStone.y)
+      if firstStone.alive ~= false and secondStone.alive ~= false then
+        local collided, collisionX, collisionY = PhysicsEngine.resolveStoneCollision(context, firstStone, secondStone)
+        if collided and type(context.onStoneCollisionResolved) == "function" then
+          context.onStoneCollisionResolved(firstStone, secondStone, collisionX, collisionY)
+        end
+        if collided and type(context.isShockwaveShotStone) == "function" and type(context.applyShockwaveFromPoint) == "function" then
+          if context.isShockwaveShotStone(firstStone.id) then
+            context.applyShockwaveFromPoint(firstStone.x, firstStone.y)
+          elseif context.isShockwaveShotStone(secondStone.id) then
+            context.applyShockwaveFromPoint(secondStone.x, secondStone.y)
+          end
         end
       end
     end
@@ -231,6 +255,9 @@ function PhysicsEngine.simulateShotStep(context, stepSec)
       if stone.x < minX or stone.x > maxX or stone.y < minY or stone.y > maxY then
         if type(context.isShockwaveShotStone) == "function" and type(context.applyShockwaveFromPoint) == "function" and context.isShockwaveShotStone(stone.id) then
           context.applyShockwaveFromPoint(stone.x, stone.y)
+        end
+        if type(context.onStoneOut) == "function" then
+          context.onStoneOut(stone, "out_of_board")
         end
         stone.alive = false
         velocity.vx = 0

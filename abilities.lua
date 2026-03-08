@@ -247,6 +247,22 @@ function Abilities.drawStoneStatusOverlays(scene)
   AbilityBoardEffects.drawStoneStatusOverlays(scene)
 end
 
+function Abilities.canStoneCollideWithObstacle(scene, stone, obstacle)
+  return AbilityBoardEffects.canStoneCollideWithObstacle(scene, stone, obstacle)
+end
+
+function Abilities.canStoneCollideWithStone(scene, firstStone, secondStone)
+  return AbilityBoardEffects.canStoneCollideWithStone(scene, firstStone, secondStone)
+end
+
+function Abilities.shouldRenderStone(scene, stone)
+  return AbilityBoardEffects.shouldRenderStone(scene, stone)
+end
+
+function Abilities.getStepAccelerationForStone(scene, stone, velocity, stepSec)
+  return AbilityBoardEffects.getStepAccelerationForStone(scene, stone, velocity, stepSec)
+end
+
 function Abilities.drawPendingCardPreview(scene, mouseX, mouseY)
   if scene._pendingCardTargetId and not scene._pendingCardTargetState then
     scene._pendingCardTargetState = AbilityTargeted.createPendingState(scene._pendingCardTargetId)
@@ -256,6 +272,14 @@ end
 
 function Abilities.isPlayerAbilitySealed(scene, playerIndex)
   return AbilityBoardEffects.isPlayerAbilitySealed(scene, playerIndex)
+end
+
+function Abilities.isPlayerAbilityBlocked(scene, playerIndex)
+  return AbilityBoardEffects.isPlayerAbilityBlocked(scene, playerIndex)
+end
+
+function Abilities.getPlayerStatus(scene, playerIndex)
+  return AbilityBoardEffects.getPlayerStatus(scene, playerIndex)
 end
 
 function Abilities.isStoneBoundOnCurrentTurn(scene, stoneId)
@@ -297,6 +321,10 @@ end
 function Abilities.onStoneOut(scene, stone, cause)
   AbilityBoardEffects.onStoneOut(scene, stone, cause)
   AbilitySpecial.onStoneOut(scene, stone, cause)
+end
+
+function Abilities.onStoneCollisionResolved(scene, firstStone, secondStone)
+  AbilityBoardEffects.onStoneCollisionResolved(scene, firstStone, secondStone)
 end
 
 return Abilities

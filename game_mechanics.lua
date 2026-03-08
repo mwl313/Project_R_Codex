@@ -50,6 +50,34 @@ local function buildPhysicsContext(matchContext)
       end
       return false
     end,
+    canStoneCollideWithObstacle = function(stone, obstacle)
+      if type(matchContext.canStoneCollideWithObstacle) == "function" then
+        return matchContext:canStoneCollideWithObstacle(stone, obstacle)
+      end
+      return true
+    end,
+    canStoneCollideWithStone = function(firstStone, secondStone)
+      if type(matchContext.canStoneCollideWithStone) == "function" then
+        return matchContext:canStoneCollideWithStone(firstStone, secondStone)
+      end
+      return true
+    end,
+    getStepAccelerationForStone = function(stone, velocity, stepSec)
+      if type(matchContext.getStepAccelerationForStone) == "function" then
+        return matchContext:getStepAccelerationForStone(stone, velocity, stepSec)
+      end
+      return 0, 0
+    end,
+    onStoneCollisionResolved = function(firstStone, secondStone, collisionX, collisionY)
+      if type(matchContext.onStoneCollisionResolved) == "function" then
+        matchContext:onStoneCollisionResolved(firstStone, secondStone, collisionX, collisionY)
+      end
+    end,
+    onStoneOut = function(stone, cause)
+      if type(matchContext.onStoneOut) == "function" then
+        matchContext:onStoneOut(stone, cause)
+      end
+    end,
     getDampingPerSecMultiplier = function(stone)
       if type(matchContext.getStoneDampingMultiplier) == "function" then
         return matchContext:getStoneDampingMultiplier(stone)

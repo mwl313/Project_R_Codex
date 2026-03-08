@@ -12,6 +12,15 @@
     "seal",
     "blink",
     "swap",
+    "ghost",
+    "rebirth",
+    "reposition",
+    "blackhole",
+    "explosive",
+    "stealth",
+    "nongae",
+    "reversal",
+    "quick_finish",
     "guard_shell",
     "quick_reload",
     "stone_polish",
@@ -147,6 +156,115 @@
       "tags": ["CONTROL", "TRICK"],
       "tunables": {
         "target_mode": "STONE_SELF_THEN_STONE_ENEMY"
+      }
+    },
+    "ghost": {
+      "id": "ghost",
+      "rarity": "RARE",
+      "mode": "MULTI_OK",
+      "enabled": true,
+      "tags": ["DEFENSE", "TRICK"],
+      "tunables": {
+        "target_mode": "NONE",
+        "duration_turns": 1,
+        "pass_through_obstacles": true,
+        "pass_through_stones": false
+      }
+    },
+    "rebirth": {
+      "id": "rebirth",
+      "rarity": "EPIC",
+      "mode": "MULTI_OK",
+      "enabled": true,
+      "tags": ["DEFENSE", "UTILITY"],
+      "tunables": {
+        "target_mode": "NONE",
+        "min_place_distance": 28
+      }
+    },
+    "reposition": {
+      "id": "reposition",
+      "rarity": "EPIC",
+      "mode": "MULTI_OK",
+      "enabled": true,
+      "tags": ["TRICK", "CONTROL"],
+      "tunables": {
+        "target_mode": "NONE",
+        "min_place_distance": 28
+      }
+    },
+    "blackhole": {
+      "id": "blackhole",
+      "rarity": "EPIC",
+      "mode": "MULTI_OK",
+      "enabled": true,
+      "tags": ["CONTROL", "OBSTACLE"],
+      "tunables": {
+        "target_mode": "POINT",
+        "radius_px": 130,
+        "duration_ms": 650,
+        "accel_px_per_sec2": 220
+      }
+    },
+    "explosive": {
+      "id": "explosive",
+      "rarity": "RARE",
+      "mode": "MULTI_OK",
+      "enabled": true,
+      "tags": ["OBSTACLE", "OFFENSE"],
+      "tunables": {
+        "target_mode": "POINT",
+        "delay_turns": 7,
+        "radius_px": 120,
+        "impulse_px_per_sec": 650,
+        "min_place_distance": 28
+      }
+    },
+    "stealth": {
+      "id": "stealth",
+      "rarity": "RARE",
+      "mode": "MULTI_OK",
+      "enabled": true,
+      "tags": ["TRICK", "DEFENSE"],
+      "tunables": {
+        "target_mode": "NONE",
+        "duration_turns": 1
+      }
+    },
+    "nongae": {
+      "id": "nongae",
+      "rarity": "EPIC",
+      "mode": "MULTI_OK",
+      "enabled": true,
+      "tags": ["TRICK", "OFFENSE"],
+      "tunables": {
+        "target_mode": "NONE",
+        "affectsObstacles": false,
+        "selfDestructAtTurnEnd": true
+      }
+    },
+    "reversal": {
+      "id": "reversal",
+      "rarity": "EPIC",
+      "mode": "MULTI_OK",
+      "enabled": true,
+      "tags": ["TRICK", "UTILITY"],
+      "tunables": {
+        "target_mode": "NONE",
+        "lockTurns": 10,
+        "rewardMultiplier": 2.0
+      }
+    },
+    "quick_finish": {
+      "id": "quick_finish",
+      "rarity": "EPIC",
+      "mode": "MULTI_OK",
+      "enabled": true,
+      "tags": ["TRICK", "UTILITY"],
+      "tunables": {
+        "target_mode": "NONE",
+        "deadlineTurns": 7,
+        "cardsPerTurnAfterActivation": 1
       }
     },
     "guard_shell": {

@@ -50,6 +50,13 @@ export interface AbilityPlayerStatus {
   suddenDeathEndTurn: number | null;
   drawOneRandomCardPerTurnUntilTurn: number | null;
   nextShotPowerMultiplier: number;
+  pendingNongaeUntilTurn: number | null;
+  reversalRewardPending: boolean;
+  reversalRewardCount: number;
+  quickFinishActive: boolean;
+  quickFinishActivationTurn: number | null;
+  quickFinishDeadlineTurn: number | null;
+  quickFinishCardsPerTurn: number;
 }
 
 export interface AbilityIceZone {
@@ -64,16 +71,42 @@ export interface AbilityIceZone {
 
 export interface AbilityBoardEffects {
   iceZones: AbilityIceZone[];
-  bombs: Array<Record<string, unknown>>;
-  blackholeEffects: Array<Record<string, unknown>>;
+  bombs: AbilityBombEffect[];
+  blackholeEffects: AbilityBlackholeEffect[];
 }
 
 export interface AbilityTurnHistory {
   lastOpponentTurnDeaths: string[];
+  spawnPositionByStoneId: Record<string, { x: number; y: number }>;
+}
+
+export interface AbilityBombEffect {
+  id: string;
+  ownerPlayerIndex: 1 | 2;
+  x: number;
+  y: number;
+  explodeAtTurn: number;
+  radius: number;
+  impulse: number;
+}
+
+export interface AbilityBlackholeEffect {
+  id: string;
+  ownerPlayerIndex: 1 | 2;
+  x: number;
+  y: number;
+  radius: number;
+  durationMs: number;
+  accelPxPerSec2: number;
+  createdAtMs: number;
 }
 
 export interface AbilityPlayingState {
   turnIndex: number;
+  personalTurnCountByPlayer: {
+    1: number;
+    2: number;
+  };
   shotBudget: number;
   lockedStoneIds: string[];
   obstacles: AbilityObstacle[];
@@ -96,6 +129,8 @@ export interface AbilityApplyContext {
   payload: AbilityCardUsePayload;
   playerIndex: 1 | 2;
   playing: AbilityPlayingState;
+  currentHandCount: number;
+  currentPersonalTurnCount: number;
   createPlayingEntityId: (prefix: string) => string;
   canPlaceStoneAt: (x: number, y: number, minDistance: number) => boolean;
   canPlaceStoneAtExcludingStone: (excludeStoneId: string, x: number, y: number, minDistance: number) => boolean;
@@ -111,6 +146,7 @@ export interface AbilityApplyResult {
 
 const CARD_SET = new Set<string>(CARD_POOL as readonly string[]);
 type AbilityHandler = (context: AbilityApplyContext, effectPayload: Record<string, unknown>) => AbilityApplyResult;
+const DEBUG_ABILITY_LOG = false;
 
 function getCardRule(cardId: string) {
   const fallback = CARD_RULES.cards.agile;
@@ -163,7 +199,14 @@ function getDefaultPlayerStatus(): AbilityPlayerStatus {
     cannotUseAbilityUntilTurn: null,
     suddenDeathEndTurn: null,
     drawOneRandomCardPerTurnUntilTurn: null,
-    nextShotPowerMultiplier: 1
+    nextShotPowerMultiplier: 1,
+    pendingNongaeUntilTurn: null,
+    reversalRewardPending: false,
+    reversalRewardCount: 0,
+    quickFinishActive: false,
+    quickFinishActivationTurn: null,
+    quickFinishDeadlineTurn: null,
+    quickFinishCardsPerTurn: 0
   };
 }
 
@@ -201,11 +244,15 @@ function ensureStatusContainers(playing: AbilityPlayingState): void {
   }
   if (!playing.turnHistory || typeof playing.turnHistory !== "object") {
     playing.turnHistory = {
-      lastOpponentTurnDeaths: []
+      lastOpponentTurnDeaths: [],
+      spawnPositionByStoneId: {}
     };
   }
   if (!Array.isArray(playing.turnHistory.lastOpponentTurnDeaths)) {
     playing.turnHistory.lastOpponentTurnDeaths = [];
+  }
+  if (!playing.turnHistory.spawnPositionByStoneId || typeof playing.turnHistory.spawnPositionByStoneId !== "object") {
+    playing.turnHistory.spawnPositionByStoneId = {};
   }
 }
 
@@ -237,6 +284,17 @@ function getPlayerStatus(playing: AbilityPlayingState, playerIndex: 1 | 2): Abil
   return playing.playerStatusByIndex[playerIndex];
 }
 
+function logAbilityDebug(message: string, payload?: Record<string, unknown>): void {
+  if (!DEBUG_ABILITY_LOG) {
+    return;
+  }
+  if (payload) {
+    console.log(`[ability] ${message}`, payload);
+    return;
+  }
+  console.log(`[ability] ${message}`);
+}
+
 function isPointInsideBoard(x: number, y: number): boolean {
   return x >= 0 && x <= BOARD_W && y >= 0 && y <= BOARD_H;
 }
@@ -259,6 +317,101 @@ function buildPlayerStatusPatch(playing: AbilityPlayingState): AbilityPlayingSta
     1: { ...getPlayerStatus(playing, 1) },
     2: { ...getPlayerStatus(playing, 2) }
   };
+}
+
+function isStoneOverlappingObstacle(x: number, y: number, obstacle: AbilityObstacle): boolean {
+  const halfW = (obstacle.width || 0) * 0.5;
+  const halfH = (obstacle.height || 0) * 0.5;
+  const left = obstacle.x - halfW;
+  const right = obstacle.x + halfW;
+  const top = obstacle.y - halfH;
+  const bottom = obstacle.y + halfH;
+  const closestX = Math.max(left, Math.min(right, x));
+  const closestY = Math.max(top, Math.min(bottom, y));
+  const dx = x - closestX;
+  const dy = y - closestY;
+  return dx * dx + dy * dy < STONE_RADIUS * STONE_RADIUS;
+}
+
+function findFallbackRebirthPosition(
+  context: AbilityApplyContext,
+  anchorX: number,
+  anchorY: number,
+  minDistance: number
+): { x: number; y: number } | null {
+  if (context.canPlaceStoneAt(anchorX, anchorY, minDistance)) {
+    return { x: anchorX, y: anchorY };
+  }
+  const radiusStep = 18;
+  const maxRadius = 180;
+  for (let radius = radiusStep; radius <= maxRadius; radius += radiusStep) {
+    const sampleCount = Math.max(8, Math.floor((Math.PI * 2 * radius) / 24));
+    for (let index = 0; index < sampleCount; index += 1) {
+      const theta = (Math.PI * 2 * index) / sampleCount;
+      const candidateX = anchorX + Math.cos(theta) * radius;
+      const candidateY = anchorY + Math.sin(theta) * radius;
+      if (context.canPlaceStoneAt(candidateX, candidateY, minDistance)) {
+        return { x: candidateX, y: candidateY };
+      }
+    }
+  }
+  return null;
+}
+
+function tryGenerateValidRepositionSet(
+  context: AbilityApplyContext,
+  stoneList: AbilityPlayingStone[],
+  minDistance: number
+): Array<{ id: string; x: number; y: number }> | null {
+  const placed: Array<{ id: string; x: number; y: number }> = [];
+  const minX = STONE_RADIUS;
+  const maxX = BOARD_W - STONE_RADIUS;
+  const minY = STONE_RADIUS;
+  const maxY = BOARD_H - STONE_RADIUS;
+
+  const isValid = (x: number, y: number): boolean => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return false;
+    }
+    if (x < minX || x > maxX || y < minY || y > maxY) {
+      return false;
+    }
+    for (const obstacle of context.playing.obstacles) {
+      if (isStoneOverlappingObstacle(x, y, obstacle)) {
+        return false;
+      }
+    }
+    for (const other of placed) {
+      const dx = other.x - x;
+      const dy = other.y - y;
+      if (Math.sqrt(dx * dx + dy * dy) < minDistance) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  for (const stone of stoneList) {
+    let found: { x: number; y: number } | null = null;
+    for (let tries = 0; tries < 250; tries += 1) {
+      const candidateX = minX + Math.random() * (maxX - minX);
+      const candidateY = minY + Math.random() * (maxY - minY);
+      if (isValid(candidateX, candidateY)) {
+        found = { x: candidateX, y: candidateY };
+        break;
+      }
+    }
+    if (!found) {
+      return null;
+    }
+    placed.push({
+      id: stone.id,
+      x: found.x,
+      y: found.y
+    });
+  }
+
+  return placed;
 }
 
 const AGILE_HANDLER: AbilityHandler = (context, effectPayload) => {
@@ -291,6 +444,13 @@ const REINFORCEMENT_HANDLER: AbilityHandler = (context, effectPayload) => {
     alive: true
   };
   context.playing.stones.push(newStone);
+  if (!context.playing.turnHistory.spawnPositionByStoneId || typeof context.playing.turnHistory.spawnPositionByStoneId !== "object") {
+    context.playing.turnHistory.spawnPositionByStoneId = {};
+  }
+  context.playing.turnHistory.spawnPositionByStoneId[newStone.id] = {
+    x: newStone.x,
+    y: newStone.y
+  };
   getStoneStatus(context.playing, newStone.id).spawnLockedThisTurn = true;
   if (readTunablesBoolean("reinforcement", "lock_spawned_stone_for_turn", true)) {
     context.playing.lockedStoneIds.push(newStone.id);
@@ -518,12 +678,327 @@ const SWAP_HANDLER: AbilityHandler = (context, effectPayload) => {
   };
 };
 
+const GHOST_HANDLER: AbilityHandler = (context, effectPayload) => {
+  const durationTurns = Math.max(1, Math.floor(readTunablesNumber("ghost", "duration_turns", 1)));
+  const affectedStoneIds: string[] = [];
+  for (const stone of context.playing.stones) {
+    if (stone.ownerPlayerIndex !== context.playerIndex) {
+      continue;
+    }
+    const stoneStatus = getStoneStatus(context.playing, stone.id);
+    stoneStatus.ghostUntilTurn = context.playing.turnIndex + durationTurns;
+    stoneStatus.isGhost = true;
+    affectedStoneIds.push(stone.id);
+  }
+  effectPayload.stoneStatusById = buildStoneStatusPatch(context.playing, affectedStoneIds);
+  logAbilityDebug("ghost_applied", { playerIndex: context.playerIndex, count: affectedStoneIds.length });
+  return {
+    ok: true,
+    appliedCardId: context.payload.cardId,
+    effectPayload
+  };
+};
+
+const STEALTH_HANDLER: AbilityHandler = (context, effectPayload) => {
+  const durationTurns = Math.max(1, Math.floor(readTunablesNumber("stealth", "duration_turns", 1)));
+  const affectedStoneIds: string[] = [];
+  for (const stone of context.playing.stones) {
+    if (stone.ownerPlayerIndex !== context.playerIndex) {
+      continue;
+    }
+    const stoneStatus = getStoneStatus(context.playing, stone.id);
+    stoneStatus.invisibleToOpponentUntilTurn = context.playing.turnIndex + durationTurns;
+    stoneStatus.isInvisibleToOpponent = true;
+    affectedStoneIds.push(stone.id);
+  }
+  effectPayload.stoneStatusById = buildStoneStatusPatch(context.playing, affectedStoneIds);
+  logAbilityDebug("stealth_applied", { playerIndex: context.playerIndex, count: affectedStoneIds.length });
+  return {
+    ok: true,
+    appliedCardId: context.payload.cardId,
+    effectPayload
+  };
+};
+
+const REBIRTH_HANDLER: AbilityHandler = (context, effectPayload) => {
+  ensureStatusContainers(context.playing);
+  const history = context.playing.turnHistory;
+  const deathStoneIdList = Array.isArray(history.lastOpponentTurnDeaths) ? history.lastOpponentTurnDeaths : [];
+  if (deathStoneIdList.length <= 0) {
+    return {
+      ok: false,
+      errorCode: "invalid_card_target",
+      effectPayload: {}
+    };
+  }
+
+  const spawnMap = history.spawnPositionByStoneId || {};
+  const minDistance = Math.max(1, readTunablesNumber("rebirth", "min_place_distance", STONE_RADIUS * 2));
+  const movedStones: Array<{ id: string; x: number; y: number; resetVelocity: boolean }> = [];
+  const patchedStoneIds: string[] = [];
+
+  for (const stoneId of deathStoneIdList) {
+    const stone = getStoneById(context.playing, stoneId);
+    if (!stone || stone.ownerPlayerIndex !== context.playerIndex || stone.alive) {
+      continue;
+    }
+    const spawn = spawnMap[stoneId];
+    const anchorX = spawn && typeof spawn.x === "number" ? spawn.x : stone.x;
+    const anchorY = spawn && typeof spawn.y === "number" ? spawn.y : stone.y;
+    const fallback = findFallbackRebirthPosition(context, anchorX, anchorY, minDistance);
+    if (!fallback) {
+      continue;
+    }
+    stone.x = fallback.x;
+    stone.y = fallback.y;
+    stone.alive = true;
+    const stoneStatus = getStoneStatus(context.playing, stone.id);
+    stoneStatus.boundUntilTurn = null;
+    stoneStatus.spawnLockedThisTurn = false;
+    patchedStoneIds.push(stone.id);
+    movedStones.push({
+      id: stone.id,
+      x: stone.x,
+      y: stone.y,
+      resetVelocity: true
+    });
+  }
+
+  if (movedStones.length <= 0) {
+    return {
+      ok: false,
+      errorCode: "invalid_card_target",
+      effectPayload: {}
+    };
+  }
+
+  effectPayload.movedStones = movedStones;
+  effectPayload.stoneStatusById = buildStoneStatusPatch(context.playing, patchedStoneIds);
+  logAbilityDebug("rebirth_applied", { playerIndex: context.playerIndex, revivedCount: movedStones.length });
+  return {
+    ok: true,
+    appliedCardId: context.payload.cardId,
+    effectPayload
+  };
+};
+
+const REPOSITION_HANDLER: AbilityHandler = (context, effectPayload) => {
+  const aliveStoneList = context.playing.stones.filter((stone) => stone.alive);
+  if (aliveStoneList.length <= 0) {
+    return {
+      ok: false,
+      errorCode: "invalid_card_target",
+      effectPayload: {}
+    };
+  }
+  const minDistance = Math.max(1, readTunablesNumber("reposition", "min_place_distance", STONE_RADIUS * 2));
+  let nextPositions: Array<{ id: string; x: number; y: number }> | null = null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    nextPositions = tryGenerateValidRepositionSet(context, aliveStoneList, minDistance);
+    if (nextPositions) {
+      break;
+    }
+  }
+  if (!nextPositions) {
+    return {
+      ok: false,
+      errorCode: "invalid_card_target",
+      effectPayload: {}
+    };
+  }
+
+  const movedStones: Array<{ id: string; x: number; y: number; resetVelocity: boolean }> = [];
+  const byId = new Map<string, { x: number; y: number }>();
+  for (const position of nextPositions) {
+    byId.set(position.id, position);
+  }
+  for (const stone of aliveStoneList) {
+    const next = byId.get(stone.id);
+    if (!next) {
+      continue;
+    }
+    stone.x = next.x;
+    stone.y = next.y;
+    movedStones.push({
+      id: stone.id,
+      x: stone.x,
+      y: stone.y,
+      resetVelocity: true
+    });
+  }
+  effectPayload.movedStones = movedStones;
+  logAbilityDebug("reposition_applied", { movedCount: movedStones.length });
+  return {
+    ok: true,
+    appliedCardId: context.payload.cardId,
+    effectPayload
+  };
+};
+
+const BLACKHOLE_HANDLER: AbilityHandler = (context, effectPayload) => {
+  const target = context.payload.target;
+  if (!target) {
+    return { ok: false, errorCode: "invalid_card_target", effectPayload: {} };
+  }
+  if (!isPointInsideBoard(target.x, target.y)) {
+    return { ok: false, errorCode: "invalid_card_target", effectPayload: {} };
+  }
+  const radius = Math.max(20, readTunablesNumber("blackhole", "radius_px", 130));
+  if (target.x - radius < 0 || target.x + radius > BOARD_W || target.y - radius < 0 || target.y + radius > BOARD_H) {
+    return { ok: false, errorCode: "invalid_card_target", effectPayload: {} };
+  }
+  const durationMs = Math.max(100, Math.floor(readTunablesNumber("blackhole", "duration_ms", 650)));
+  const accelPxPerSec2 = Math.max(1, readTunablesNumber("blackhole", "accel_px_per_sec2", 220));
+  const effect: AbilityBlackholeEffect = {
+    id: context.createPlayingEntityId("blackhole"),
+    ownerPlayerIndex: context.playerIndex,
+    x: target.x,
+    y: target.y,
+    radius,
+    durationMs,
+    accelPxPerSec2,
+    createdAtMs: Date.now()
+  };
+  context.playing.boardEffects.blackholeEffects.push(effect);
+  effectPayload.blackholeEffectAdded = { ...effect };
+  logAbilityDebug("blackhole_applied", { playerIndex: context.playerIndex, id: effect.id });
+  return {
+    ok: true,
+    appliedCardId: context.payload.cardId,
+    effectPayload
+  };
+};
+
+const EXPLOSIVE_HANDLER: AbilityHandler = (context, effectPayload) => {
+  const target = context.payload.target;
+  if (!target) {
+    return { ok: false, errorCode: "invalid_card_target", effectPayload: {} };
+  }
+  const minDistance = Math.max(1, readTunablesNumber("explosive", "min_place_distance", STONE_RADIUS * 2));
+  if (!context.canPlaceStoneAt(target.x, target.y, minDistance)) {
+    return { ok: false, errorCode: "invalid_card_target", effectPayload: {} };
+  }
+  const delayTurns = Math.max(1, Math.floor(readTunablesNumber("explosive", "delay_turns", 7)));
+  const radius = Math.max(20, readTunablesNumber("explosive", "radius_px", 120));
+  const impulse = Math.max(1, readTunablesNumber("explosive", "impulse_px_per_sec", 650));
+  const bomb: AbilityBombEffect = {
+    id: context.createPlayingEntityId("bomb"),
+    ownerPlayerIndex: context.playerIndex,
+    x: target.x,
+    y: target.y,
+    explodeAtTurn: context.playing.turnIndex + delayTurns,
+    radius,
+    impulse
+  };
+  context.playing.boardEffects.bombs.push(bomb);
+  effectPayload.bombAdded = { ...bomb };
+  logAbilityDebug("explosive_applied", { playerIndex: context.playerIndex, id: bomb.id, explodeAtTurn: bomb.explodeAtTurn });
+  return {
+    ok: true,
+    appliedCardId: context.payload.cardId,
+    effectPayload
+  };
+};
+
+const NONGAE_HANDLER: AbilityHandler = (context, effectPayload) => {
+  const playerStatus = getPlayerStatus(context.playing, context.playerIndex);
+  if (typeof playerStatus.pendingNongaeUntilTurn === "number" && playerStatus.pendingNongaeUntilTurn >= context.playing.turnIndex) {
+    return { ok: false, errorCode: "nongae_already_armed", effectPayload: {} };
+  }
+  playerStatus.pendingNongaeUntilTurn = context.playing.turnIndex;
+  effectPayload.playerStatusByIndex = buildPlayerStatusPatch(context.playing);
+  logAbilityDebug("nongae_armed", {
+    playerIndex: context.playerIndex,
+    turnIndex: context.playing.turnIndex
+  });
+  return {
+    ok: true,
+    appliedCardId: context.payload.cardId,
+    effectPayload
+  };
+};
+
+const REVERSAL_HANDLER: AbilityHandler = (context, effectPayload) => {
+  const playerStatus = getPlayerStatus(context.playing, context.playerIndex);
+  if (playerStatus.reversalRewardPending === true
+    || (typeof playerStatus.cannotUseAbilityUntilTurn === "number" && playerStatus.cannotUseAbilityUntilTurn >= context.playing.turnIndex)
+  ) {
+    return { ok: false, errorCode: "reversal_active", effectPayload: {} };
+  }
+
+  const lockTurns = Math.max(1, Math.floor(readTunablesNumber("reversal", "lockTurns", 10)));
+  const rewardMultiplier = Math.max(0, readTunablesNumber("reversal", "rewardMultiplier", 2));
+  const snapshotHandCount = Math.max(0, Math.floor(context.currentHandCount));
+  const rewardCount = Math.max(0, Math.floor(snapshotHandCount * rewardMultiplier));
+  const untilTurn = context.playing.turnIndex + lockTurns;
+
+  playerStatus.reverseUntilTurn = untilTurn;
+  playerStatus.cannotUseAbilityUntilTurn = untilTurn;
+  playerStatus.reversalRewardPending = true;
+  playerStatus.reversalRewardCount = rewardCount;
+  effectPayload.playerStatusByIndex = buildPlayerStatusPatch(context.playing);
+  effectPayload.reversalSnapshotHandCount = snapshotHandCount;
+  effectPayload.reversalRewardCount = rewardCount;
+  logAbilityDebug("reversal_applied", {
+    playerIndex: context.playerIndex,
+    lockTurns,
+    rewardCount
+  });
+
+  return {
+    ok: true,
+    appliedCardId: context.payload.cardId,
+    effectPayload
+  };
+};
+
+const QUICK_FINISH_HANDLER: AbilityHandler = (context, effectPayload) => {
+  const playerStatus = getPlayerStatus(context.playing, context.playerIndex);
+  if (playerStatus.quickFinishActive === true) {
+    return { ok: false, errorCode: "quick_finish_already_active", effectPayload: {} };
+  }
+  if (context.currentPersonalTurnCount !== 1) {
+    return { ok: false, errorCode: "quick_finish_first_turn_only", effectPayload: {} };
+  }
+
+  const deadlineTurns = Math.max(1, Math.floor(readTunablesNumber("quick_finish", "deadlineTurns", 7)));
+  const cardsPerTurn = Math.max(1, Math.floor(readTunablesNumber("quick_finish", "cardsPerTurnAfterActivation", 1)));
+  const deadlineTurn = context.playing.turnIndex + (deadlineTurns - 1);
+  playerStatus.quickFinishActive = true;
+  playerStatus.quickFinishActivationTurn = context.playing.turnIndex;
+  playerStatus.quickFinishDeadlineTurn = deadlineTurn;
+  playerStatus.quickFinishCardsPerTurn = cardsPerTurn;
+  playerStatus.suddenDeathEndTurn = deadlineTurn;
+  playerStatus.drawOneRandomCardPerTurnUntilTurn = deadlineTurn;
+  effectPayload.playerStatusByIndex = buildPlayerStatusPatch(context.playing);
+  effectPayload.quickFinishDiscardAllCards = true;
+  effectPayload.quickFinishDeadlineTurn = deadlineTurn;
+  effectPayload.quickFinishCardsPerTurn = cardsPerTurn;
+  logAbilityDebug("quick_finish_applied", {
+    playerIndex: context.playerIndex,
+    deadlineTurn,
+    cardsPerTurn
+  });
+  return {
+    ok: true,
+    appliedCardId: context.payload.cardId,
+    effectPayload
+  };
+};
+
 const BUFF_HANDLER_BY_ID: Record<string, AbilityHandler> = {
   agile: AGILE_HANDLER,
   invincible: INVINCIBLE_HANDLER,
   shockwave: SHOCKWAVE_HANDLER,
   power_move: POWER_MOVE_HANDLER,
-  seal: SEAL_HANDLER
+  seal: SEAL_HANDLER,
+  ghost: GHOST_HANDLER,
+  rebirth: REBIRTH_HANDLER,
+  reposition: REPOSITION_HANDLER,
+  stealth: STEALTH_HANDLER,
+  nongae: NONGAE_HANDLER,
+  reversal: REVERSAL_HANDLER,
+  quick_finish: QUICK_FINISH_HANDLER
 };
 
 const TARGETED_HANDLER_BY_ID: Record<string, AbilityHandler> = {
@@ -532,7 +1007,9 @@ const TARGETED_HANDLER_BY_ID: Record<string, AbilityHandler> = {
   bind: BIND_HANDLER,
   ice_field: ICE_FIELD_HANDLER,
   blink: BLINK_HANDLER,
-  swap: SWAP_HANDLER
+  swap: SWAP_HANDLER,
+  blackhole: BLACKHOLE_HANDLER,
+  explosive: EXPLOSIVE_HANDLER
 };
 
 const CARD_ABILITY_HANDLER_BY_ID: Record<string, AbilityHandler> = {

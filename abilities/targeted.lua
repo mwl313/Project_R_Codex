@@ -48,7 +48,11 @@ local function getHoverStone(scene, worldX, worldY, predicate)
   local hitRadiusSq = hitRadius * hitRadius
 
   for _, stone in ipairs(scene._playingStoneList or {}) do
-    if stone.alive ~= false and (not predicate or predicate(stone)) then
+    local isRenderable = true
+    if type(scene.shouldRenderStone) == "function" then
+      isRenderable = scene:shouldRenderStone(stone)
+    end
+    if stone.alive ~= false and isRenderable and (not predicate or predicate(stone)) then
       local dx = stone.x - canonicalX
       local dy = stone.y - canonicalY
       local distanceSq = dx * dx + dy * dy
@@ -111,6 +115,12 @@ function AbilityTargeted.getPendingTargetHint(cardId, pendingState)
   if cardId == "bind" then
     return t("abilities.hint.bind_click")
   end
+  if cardId == "blackhole" then
+    return t("abilities.hint.blackhole_click")
+  end
+  if cardId == "explosive" then
+    return t("abilities.hint.explosive_click")
+  end
   if cardId == "blink" then
     if pendingState and pendingState.step == 2 then
       return t("abilities.hint.blink_step2_click")
@@ -139,6 +149,12 @@ function AbilityTargeted.getPendingTargetStartStatus(cardId, pendingState)
   if cardId == "bind" then
     return t("abilities.hint.bind_start")
   end
+  if cardId == "blackhole" then
+    return t("abilities.hint.blackhole_start")
+  end
+  if cardId == "explosive" then
+    return t("abilities.hint.explosive_start")
+  end
   if cardId == "blink" then
     if pendingState and pendingState.step == 2 then
       return t("abilities.hint.blink_step2_start")
@@ -164,6 +180,12 @@ function AbilityTargeted.getPendingTargetOutOfBoardStatus(cardId, pendingState)
   if cardId == "ice_field" then
     return t("abilities.hint.ice_field_out_of_board")
   end
+  if cardId == "blackhole" then
+    return t("abilities.hint.blackhole_out_of_board")
+  end
+  if cardId == "explosive" then
+    return t("abilities.hint.explosive_out_of_board")
+  end
   if cardId == "blink" and pendingState and pendingState.step == 2 then
     return t("abilities.hint.blink_step2_out_of_board")
   end
@@ -182,6 +204,12 @@ function AbilityTargeted.getPendingTargetRequestStatus(cardId)
   end
   if cardId == "bind" then
     return t("abilities.hint.bind_sending")
+  end
+  if cardId == "blackhole" then
+    return t("abilities.hint.blackhole_sending")
+  end
+  if cardId == "explosive" then
+    return t("abilities.hint.explosive_sending")
   end
   if cardId == "blink" then
     return t("abilities.hint.blink_sending")
@@ -254,6 +282,57 @@ function AbilityTargeted.resolvePendingClick(scene, pendingState, worldX, worldY
         handled = true,
         keepPending = true,
         statusText = t("abilities.validate.ice_field_out_of_board"),
+        statusColor = Constants.COLOR_DANGER
+      }
+    end
+    return {
+      handled = true,
+      keepPending = false,
+      payload = {
+        turnIndex = scene._playingTurnIndex,
+        cardId = cardId,
+        target = { x = canonicalX, y = canonicalY }
+      },
+      statusText = AbilityTargeted.getPendingTargetRequestStatus(cardId),
+      statusColor = Constants.COLOR_TEXT_SUB
+    }
+  end
+
+  if cardId == "blackhole" then
+    local tunables = CardRules.getCardTunables(cardId)
+    local radius = math.max(20, tonumber(tunables.radius_px) or 130)
+    local canPlace = canPlaceIceFieldAtCanonical(canonicalX, canonicalY, radius)
+    if not canPlace then
+      return {
+        handled = true,
+        keepPending = true,
+        statusText = t("abilities.validate.blackhole_out_of_board"),
+        statusColor = Constants.COLOR_DANGER
+      }
+    end
+    return {
+      handled = true,
+      keepPending = false,
+      payload = {
+        turnIndex = scene._playingTurnIndex,
+        cardId = cardId,
+        target = { x = canonicalX, y = canonicalY }
+      },
+      statusText = AbilityTargeted.getPendingTargetRequestStatus(cardId),
+      statusColor = Constants.COLOR_TEXT_SUB
+    }
+  end
+
+  if cardId == "explosive" then
+    local tunables = CardRules.getCardTunables(cardId)
+    local minDistance = math.max(1, tonumber(tunables.min_place_distance) or Constants.STONE_RADIUS * 2)
+    local canPlace = type(scene.canPlaceStoneAtCanonicalExcluding) == "function"
+      and scene:canPlaceStoneAtCanonicalExcluding(nil, canonicalX, canonicalY, minDistance)
+    if not canPlace then
+      return {
+        handled = true,
+        keepPending = true,
+        statusText = t("abilities.validate.explosive_cannot_place"),
         statusColor = Constants.COLOR_DANGER
       }
     end
@@ -493,6 +572,38 @@ function AbilityTargeted.drawPendingCardPreview(scene, mouseX, mouseY, pendingSt
     if hoverStone then
       drawStoneOutline(scene, hoverStone, { 0.98, 0.55, 0.10, 1.0 }, 3)
     end
+    return
+  end
+
+  if cardId == "blackhole" then
+    local tunables = CardRules.getCardTunables(cardId)
+    local radius = math.max(20, tonumber(tunables.radius_px) or 130)
+    local canPlace = canPlaceIceFieldAtCanonical(canonicalX, canonicalY, radius)
+    local color = canPlace and { 0.15, 0.10, 0.18, 0.30 } or { 0.90, 0.30, 0.30, 0.20 }
+    local borderColor = canPlace and { 0.65, 0.55, 0.96, 0.80 } or { 0.90, 0.30, 0.30, 0.75 }
+    love.graphics.setColor(color)
+    love.graphics.circle("fill", mouseX, mouseY, radius)
+    love.graphics.setColor(borderColor)
+    love.graphics.circle("line", mouseX, mouseY, radius)
+    love.graphics.setColor(borderColor[1], borderColor[2], borderColor[3], 0.45)
+    love.graphics.circle("line", mouseX, mouseY, radius * 0.6)
+    return
+  end
+
+  if cardId == "explosive" then
+    local tunables = CardRules.getCardTunables(cardId)
+    local minDistance = math.max(1, tonumber(tunables.min_place_distance) or Constants.STONE_RADIUS * 2)
+    local canPlace = type(scene.canPlaceStoneAtCanonicalExcluding) == "function"
+      and scene:canPlaceStoneAtCanonicalExcluding(nil, canonicalX, canonicalY, minDistance)
+    local fill = canPlace and { 0.95, 0.34, 0.22, 0.32 } or { 0.90, 0.30, 0.30, 0.25 }
+    local line = canPlace and { 1.0, 0.75, 0.22, 1.0 } or { 0.90, 0.30, 0.30, 1.0 }
+    love.graphics.setColor(fill)
+    love.graphics.circle("fill", mouseX, mouseY, 12)
+    love.graphics.setColor(line)
+    love.graphics.circle("line", mouseX, mouseY, 12)
+    local radius = math.max(20, tonumber(tunables.radius_px) or 120)
+    love.graphics.setColor(line[1], line[2], line[3], 0.25)
+    love.graphics.circle("line", mouseX, mouseY, radius)
     return
   end
 
