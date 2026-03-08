@@ -70,6 +70,16 @@ local function buildPhysicsContext(matchContext)
       return matchContext:getStoneDampingPerSec(stone)
     end
   end
+  if type(matchContext.shouldTreatOutAsWall) == "function" then
+    context.shouldTreatOutAsWall = function(stone)
+      return matchContext:shouldTreatOutAsWall(stone)
+    end
+  end
+  if type(matchContext.consumePiercingCollision) == "function" then
+    context.consumePiercingCollision = function(stone, collisionKind)
+      return matchContext:consumePiercingCollision(stone, collisionKind)
+    end
+  end
   return context
 end
 
@@ -151,6 +161,9 @@ function GameMechanics.applyShotImpulse(matchContext, shotPayload)
   local speed = math.max(0, shotPayload.power * speedScale)
   velocity.vx = shotPayload.dirX / directionLength * speed
   velocity.vy = shotPayload.dirY / directionLength * speed
+  if type(matchContext.onShotImpulseApplied) == "function" then
+    matchContext:onShotImpulseApplied(stone, shotPayload)
+  end
   if matchContext._shockwaveOwnerPlayerIndex and stone.ownerPlayerIndex == matchContext._shockwaveOwnerPlayerIndex then
     matchContext._shockwaveSourceStoneId = stone.id
   else

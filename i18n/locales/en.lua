@@ -383,6 +383,7 @@ local LocaleEn = {
           card_to_hand = "Card added to hand.",
           card_to_deck = "Hand is full. Added to deck and shuffled.",
           relic_added = "Relic acquired.",
+          god_relic_added = "God relic acquired.",
           relic_skip = "Relic already owned. Skipped.",
           hand_op_applied = "Hand operation applied.",
           apply_failed = "Failed to apply upgrade."
@@ -826,15 +827,20 @@ local LocaleEn = {
   },
   single_dummy = {
     title = "Single Dummy (Manual Test)",
-    subtitle = "Shockwave(1): {shockwave} | Opponent Invincible(2): {invincible} | R: Reset | ESC: Lobby",
+    subtitle = "Shockwave(1): {shockwave} | Opponent Invincible(2): {invincible} | God Relics(3~7) | 8: GOD reset | R: Reset | ESC: Lobby",
     back_button = "Back",
+    god_debug_title = "God Relic Debug",
+    god_debug_hint = "Add stacks with buttons/keys (3~7), reset with 8",
+    god_debug_empty = "No god relic acquired.",
     status = {
       entered = "Dummy mode: drag to shoot / 1=shockwave / 2=opponent invincible / R=reset",
       exited = "Single dummy test ended",
       drag_too_short = "Drag distance is too short.",
       reset_done = "Dummy state has been reset.",
       shockwave_toggle = "Shockwave toggle: {value}",
-      invincible_toggle = "Opponent invincible toggle: {value}"
+      invincible_toggle = "Opponent invincible toggle: {value}",
+      god_relic_added = "God relic added: {name} (x{count})",
+      god_relic_cleared = "God relic debug stacks have been reset."
     }
   }
 }

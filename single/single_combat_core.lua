@@ -25,6 +25,8 @@ local SingleCampaignRulesLoader = require("single.single_campaign_rules_loader")
 local RelicEffects = require("single.relic_effects")
 local EncountersLoader = require("single.encounters_loader")
 local SingleCombatTuning = require("single.single_combat_tuning")
+local GodRelicDefs = require("single.god_relic_defs")
+local GodRelicRuntime = require("single.god_relic_runtime")
 
 local SingleCombatCore = {}
 SingleCombatCore.__index = SingleCombatCore
@@ -124,6 +126,68 @@ local function countAlive(stones, owner)
   return count
 end
 
+local function computeAimPreviewSegments(boardX, boardY, stoneRadius, directionX, directionY, bounceCount, startX, startY)
+  local segmentList = {}
+  local dirLen = math.sqrt(directionX * directionX + directionY * directionY)
+  if dirLen <= 0.0001 then
+    return segmentList
+  end
+
+  local dirX = directionX / dirLen
+  local dirY = directionY / dirLen
+  local minX = boardX + stoneRadius
+  local maxX = boardX + Constants.BOARD_W - stoneRadius
+  local minY = boardY + stoneRadius
+  local maxY = boardY + Constants.BOARD_H - stoneRadius
+  local x = startX
+  local y = startY
+  local maxSegmentCount = math.max(1, math.floor(tonumber(bounceCount) or 0) + 1)
+  local epsilon = 0.0001
+
+  for _ = 1, maxSegmentCount do
+    local tx = math.huge
+    if dirX > epsilon then
+      tx = (maxX - x) / dirX
+    elseif dirX < -epsilon then
+      tx = (minX - x) / dirX
+    end
+
+    local ty = math.huge
+    if dirY > epsilon then
+      ty = (maxY - y) / dirY
+    elseif dirY < -epsilon then
+      ty = (minY - y) / dirY
+    end
+
+    local travel = math.min(tx, ty)
+    if travel == math.huge or travel <= epsilon then
+      break
+    end
+
+    local hitX = x + dirX * travel
+    local hitY = y + dirY * travel
+    segmentList[#segmentList + 1] = {
+      x1 = x,
+      y1 = y,
+      x2 = hitX,
+      y2 = hitY
+    }
+
+    local nearXHit = math.abs(tx - travel) <= 0.001
+    local nearYHit = math.abs(ty - travel) <= 0.001
+    if nearXHit then
+      dirX = -dirX
+    end
+    if nearYHit then
+      dirY = -dirY
+    end
+    x = hitX
+    y = hitY
+  end
+
+  return segmentList
+end
+
 local NODE_TITLE_KEY_BY_TYPE = {
   mob = "single.node.mob",
   elite = "single.node.elite",
@@ -134,6 +198,8 @@ local NODE_TITLE_KEY_BY_TYPE = {
   event = "single.node.event"
 }
 
+local SINGLE_HAND_MAX_COUNT = 8
+
 function SingleCombatCore.new(params)
   local boardX = (Constants.BASE_WORLD_W - Constants.BOARD_W) * 0.5
   local boardY = (Constants.BASE_WORLD_H - Constants.BOARD_H) * 0.5
@@ -141,12 +207,14 @@ function SingleCombatCore.new(params)
     _app = params.app,
     _profile = params.profile,
     _runState = params.runState,
+    _enableGodRelics = params.enableGodRelics == true,
     _nodeType = tostring(params.nodeType or "mob"),
     _nodeId = tostring(params.nodeId or ""),
     _stageIndex = math.max(1, math.floor(tonumber(params.stageIndex) or 1)),
     _onCombatEnd = params.onCombatEnd,
     _onCardConsumed = params.onCardConsumed,
     _onShotResolved = params.onShotResolved,
+    _onTurnDrawRequest = params.onTurnDrawRequest,
     _boardX = boardX,
     _boardY = boardY,
     _statusText = "",
@@ -209,7 +277,11 @@ function SingleCombatCore.new(params)
     _bossId = nil,
     _bossGimmickList = {},
     _bossBindUntilTurnByStoneId = {},
-    _bossRng = nil
+    _bossRng = nil,
+    _playerPiercingChargesLeft = 0,
+    _activeShotStoneId = nil,
+    _activeShotOwnerPlayerIndex = nil,
+    _activeShotPierceConsumed = false
   }, SingleCombatCore)
 
   self._playingCardHandBar = CardHandBar.new({
@@ -238,6 +310,9 @@ function SingleCombatCore.new(params)
   self._combatStatsByPlayerIndex = type(self._combatTuning.byPlayerIndex) == "table" and self._combatTuning.byPlayerIndex or {}
   self._maxShotPower = self:getMaxShotPowerForPlayer(1)
   self._bossRng = makeRng((tonumber(self._runState and self._runState.rngSeed) or os.time()) + self._stageIndex * 409)
+  if self._enableGodRelics then
+    GodRelicRuntime.initRunState(self._runState)
+  end
   self:initializeBossGimmicks()
 
   self:initializeBattlefield()
@@ -686,6 +761,10 @@ function SingleCombatCore:startTurn(playerIndex, initial)
   end
   self._playingShotBudget = 1
   self._playingShotUsed = 0
+  self._playerPiercingChargesLeft = 0
+  self._activeShotStoneId = nil
+  self._activeShotOwnerPlayerIndex = nil
+  self._activeShotPierceConsumed = false
   self._hasUsedCardThisTurn = false
   self._isTurnShotCommitted = false
   self._lockedStoneIdSet = {}
@@ -706,6 +785,7 @@ function SingleCombatCore:startTurn(playerIndex, initial)
     self._aiThinkRemainSec = 0.20
     self:setStatus(t("single.combat.status.ai_turn"), Constants.COLOR_TEXT_SUB)
   else
+    self:applyGodRelicsOnPlayerTurnStart()
     self._aiThinkRemainSec = 0
     self:setStatus(t("single.combat.status.player_turn"), Constants.COLOR_TEXT_SUB)
   end
@@ -912,6 +992,60 @@ function SingleCombatCore:getCardUpgradeScale(runtimeCardId)
   return 1.0 + math.max(0, level) * 0.10
 end
 
+function SingleCombatCore:getCurrentHandCount()
+  return #self._handEntryList
+end
+
+function SingleCombatCore:getGodRelicCount(godRelicId)
+  if not self._enableGodRelics then
+    return 0
+  end
+  return GodRelicRuntime.getCount(self._runState, godRelicId)
+end
+
+function SingleCombatCore:getAimPreviewBounceCount()
+  return math.max(0, self:getGodRelicCount(GodRelicDefs.ID_PRECISION_CONTROL))
+end
+
+function SingleCombatCore:addHandEntriesFromSaveCardIdList(saveCardIdList)
+  local addedCount = 0
+  for _, saveCardId in ipairs(saveCardIdList or {}) do
+    local normalized = tostring(saveCardId or "")
+    if normalized ~= "" then
+      local runtimeCardId = CardRegistry.toRuntimeCardId(normalized)
+      local entryId = self:createId("card")
+      local entry = { entryId = entryId, cardId = runtimeCardId, label = Abilities.getCardLabel(runtimeCardId) }
+      self._handEntryList[#self._handEntryList + 1] = entry
+      self._handEntryById[entryId] = entry
+      addedCount = addedCount + 1
+    end
+  end
+  if addedCount > 0 then
+    self:refreshHandUi()
+  end
+  return addedCount
+end
+
+function SingleCombatCore:applyGodRelicsOnPlayerTurnStart()
+  local actionBonus = math.max(0, self:getGodRelicCount(GodRelicDefs.ID_ACTION_POWER))
+  self._playingShotBudget = 1 + actionBonus
+  self._playerPiercingChargesLeft = math.max(0, self:getGodRelicCount(GodRelicDefs.ID_PIERCING_SHOT))
+
+  local drawPerTurn = math.max(0, self:getGodRelicCount(GodRelicDefs.ID_INFINITE_POWER))
+  if drawPerTurn <= 0 then
+    return
+  end
+  if type(self._onTurnDrawRequest) ~= "function" then
+    return
+  end
+
+  local drawnCardIdList = self._onTurnDrawRequest(drawPerTurn, self:getCurrentHandCount(), SINGLE_HAND_MAX_COUNT)
+  if type(drawnCardIdList) ~= "table" or #drawnCardIdList <= 0 then
+    return
+  end
+  self:addHandEntriesFromSaveCardIdList(drawnCardIdList)
+end
+
 function SingleCombatCore:canUseHandEntry(entryId)
   local entry = self._handEntryById[tostring(entryId or "")]
   if not entry then
@@ -993,6 +1127,45 @@ function SingleCombatCore:onCardDeclared(entryId)
   self:removeHandEntry(entry)
   self:startCardUseCutscene(entry, nil)
   return true
+end
+
+function SingleCombatCore:onShotImpulseApplied(stone, _shotPayload)
+  local stoneId = type(stone) == "table" and tostring(stone.id or "") or ""
+  local owner = type(stone) == "table" and math.floor(tonumber(stone.ownerPlayerIndex) or 0) or 0
+  self._activeShotStoneId = stoneId ~= "" and stoneId or nil
+  self._activeShotOwnerPlayerIndex = owner > 0 and owner or nil
+  self._activeShotPierceConsumed = false
+end
+
+function SingleCombatCore:consumePiercingCollision(stone, _collisionKind)
+  if type(stone) ~= "table" then
+    return false
+  end
+  if self._activeShotPierceConsumed then
+    return false
+  end
+  if self._activeShotOwnerPlayerIndex ~= 1 then
+    return false
+  end
+  if tostring(stone.id or "") ~= tostring(self._activeShotStoneId or "") then
+    return false
+  end
+  if self._playerPiercingChargesLeft <= 0 then
+    return false
+  end
+  self._playerPiercingChargesLeft = self._playerPiercingChargesLeft - 1
+  self._activeShotPierceConsumed = true
+  return true
+end
+
+function SingleCombatCore:shouldTreatOutAsWall(stone)
+  if type(stone) ~= "table" then
+    return false
+  end
+  if tonumber(stone.ownerPlayerIndex) ~= 1 then
+    return false
+  end
+  return self:getGodRelicCount(GodRelicDefs.ID_SAFETY) > 0
 end
 
 function SingleCombatCore:commitPendingTarget(worldX, worldY)
@@ -1160,6 +1333,27 @@ function SingleCombatCore:draw(mouseX, mouseY)
       love.graphics.printf(t("match.power_label", {
         power = string.format("%.0f", power)
       }), sx - 56, sy - 28, 112, "center")
+
+      local bounceCount = self:getAimPreviewBounceCount()
+      if bounceCount > 0 then
+        local previewSegments = computeAimPreviewSegments(
+          self._boardX,
+          self._boardY,
+          self:getStoneRadius(stone),
+          dx,
+          dy,
+          bounceCount,
+          sx,
+          sy
+        )
+        love.graphics.setColor(0.66, 0.92, 1.0, 0.92)
+        love.graphics.setLineWidth(2)
+        for _, segment in ipairs(previewSegments) do
+          love.graphics.line(segment.x1, segment.y1, segment.x2, segment.y2)
+          love.graphics.circle("fill", segment.x2, segment.y2, 2.5)
+        end
+        love.graphics.setLineWidth(1)
+      end
     end
   end
   self._effectManager:draw(self._boardX, self._boardY, function(x, y) return x, y end)

@@ -22,6 +22,8 @@ local EffectManager = require("effects.effect_manager")
 local Abilities = require("abilities")
 local GameMechanics = require("game_mechanics")
 local InputCaptureGuard = require("utils.input_capture_guard")
+local GodRelicDefs = require("single.god_relic_defs")
+local GodRelicRuntime = require("single.god_relic_runtime")
 
 local SingleDummyScene = {}
 SingleDummyScene.__index = SingleDummyScene
@@ -88,6 +90,76 @@ local function intersectSegmentWithWorldRect(fromX, fromY, toX, toY)
   end
   return clamp(toX, minX, maxX), clamp(toY, minY, maxY)
 end
+
+local function computeAimPreviewSegments(boardX, boardY, stoneRadius, directionX, directionY, bounceCount, startX, startY)
+  local segmentList = {}
+  local dirLength = math.sqrt(directionX * directionX + directionY * directionY)
+  if dirLength <= 0.0001 then
+    return segmentList
+  end
+
+  local dirX = directionX / dirLength
+  local dirY = directionY / dirLength
+  local minX = boardX + stoneRadius
+  local maxX = boardX + Constants.BOARD_W - stoneRadius
+  local minY = boardY + stoneRadius
+  local maxY = boardY + Constants.BOARD_H - stoneRadius
+  local x = startX
+  local y = startY
+  local maxSegmentCount = math.max(1, math.min(20, math.floor(tonumber(bounceCount) or 0) + 1))
+  local epsilon = 0.0001
+
+  for _ = 1, maxSegmentCount do
+    local tx = math.huge
+    if dirX > epsilon then
+      tx = (maxX - x) / dirX
+    elseif dirX < -epsilon then
+      tx = (minX - x) / dirX
+    end
+
+    local ty = math.huge
+    if dirY > epsilon then
+      ty = (maxY - y) / dirY
+    elseif dirY < -epsilon then
+      ty = (minY - y) / dirY
+    end
+
+    local travel = math.min(tx, ty)
+    if travel == math.huge or travel <= epsilon then
+      break
+    end
+
+    local hitX = x + dirX * travel
+    local hitY = y + dirY * travel
+    segmentList[#segmentList + 1] = {
+      x1 = x,
+      y1 = y,
+      x2 = hitX,
+      y2 = hitY
+    }
+
+    local nearXHit = math.abs(tx - travel) <= 0.001
+    local nearYHit = math.abs(ty - travel) <= 0.001
+    if nearXHit then
+      dirX = -dirX
+    end
+    if nearYHit then
+      dirY = -dirY
+    end
+    x = hitX
+    y = hitY
+  end
+
+  return segmentList
+end
+
+local GOD_RELIC_DEBUG_BINDING_LIST = {
+  { key = "3", kpKey = "kp3", id = GodRelicDefs.ID_ACTION_POWER },
+  { key = "4", kpKey = "kp4", id = GodRelicDefs.ID_INFINITE_POWER },
+  { key = "5", kpKey = "kp5", id = GodRelicDefs.ID_SAFETY },
+  { key = "6", kpKey = "kp6", id = GodRelicDefs.ID_PRECISION_CONTROL },
+  { key = "7", kpKey = "kp7", id = GodRelicDefs.ID_PIERCING_SHOT }
+}
 
 local function createDummyStoneList()
   local stoneList = {}
@@ -159,7 +231,13 @@ function SingleDummyScene.new(app)
     _shockwaveSourceStoneId = nil,
     _isShockwaveEnabled = false,
     _isOpponentInvincible = false,
-    _backButton = nil
+    _backButton = nil,
+    _godRelicRunState = { godRelicCounts = {}, godRelicIds = {} },
+    _godRelicDebugButtonList = {},
+    _playerPiercingChargesLeft = 0,
+    _activeShotStoneId = nil,
+    _activeShotOwnerPlayerIndex = nil,
+    _activeShotPierceConsumed = false
   }
   setmetatable(instance, SingleDummyScene)
   instance._effectManager = EffectManager.new()
@@ -174,6 +252,36 @@ function SingleDummyScene.new(app)
         statusText = t("single_dummy.status.exited"),
         statusColor = Constants.COLOR_TEXT_SUB
       }, Config.TRANSITION_BACK)
+    end
+  })
+  local debugButtonX = Constants.BASE_WORLD_W - 308
+  local debugButtonY = 166
+  local debugButtonW = 276
+  local debugButtonH = 34
+  for index, binding in ipairs(GOD_RELIC_DEBUG_BINDING_LIST) do
+    local relicDef = GodRelicDefs.getById(binding.id)
+    local keyText = tostring(binding.key or "")
+    local label = string.format("%s) %s", keyText, tostring(relicDef and relicDef.nameKo or binding.id))
+    local button = Button.new({
+      x = debugButtonX,
+      y = debugButtonY + (index - 1) * (debugButtonH + 8),
+      w = debugButtonW,
+      h = debugButtonH,
+      label = label,
+      onClick = function()
+        instance:addGodRelicDebug(binding.id)
+      end
+    })
+    instance._godRelicDebugButtonList[#instance._godRelicDebugButtonList + 1] = button
+  end
+  instance._godRelicDebugButtonList[#instance._godRelicDebugButtonList + 1] = Button.new({
+    x = debugButtonX,
+    y = debugButtonY + #GOD_RELIC_DEBUG_BINDING_LIST * (debugButtonH + 8) + 6,
+    w = debugButtonW,
+    h = debugButtonH,
+    label = "8) GOD RESET",
+    onClick = function()
+      instance:clearGodRelicDebug()
     end
   })
   return instance
@@ -198,6 +306,11 @@ function SingleDummyScene:resetDummyState()
   self._shockwaveSourceStoneId = nil
   self._shockwaveOwnerPlayerIndex = nil
   self._invincibleTurnByPlayer = { [1] = nil, [2] = nil }
+  GodRelicRuntime.clear(self._godRelicRunState)
+  self._playerPiercingChargesLeft = 0
+  self._activeShotStoneId = nil
+  self._activeShotOwnerPlayerIndex = nil
+  self._activeShotPierceConsumed = false
   if self._effectManager then
     self._effectManager:clear()
   end
@@ -206,8 +319,34 @@ end
 
 function SingleDummyScene:enter(params)
   self._backScene = (params and params.backScene) or "lobby"
+  GodRelicRuntime.initRunState(self._godRelicRunState)
   self:resetDummyState()
   self:setStatus(t("single_dummy.status.entered"), Constants.COLOR_TEXT_SUB)
+end
+
+function SingleDummyScene:getGodRelicCount(godRelicId)
+  return GodRelicRuntime.getCount(self._godRelicRunState, godRelicId)
+end
+
+function SingleDummyScene:addGodRelicDebug(godRelicId)
+  local relicDef = GodRelicDefs.getById(godRelicId)
+  local ok, nextCount = GodRelicRuntime.addGodRelic(self._godRelicRunState, godRelicId)
+  if not ok then
+    return
+  end
+  self:setStatus(t("single_dummy.status.god_relic_added", {
+    name = tostring(relicDef and relicDef.nameKo or godRelicId),
+    count = tostring(nextCount)
+  }), Constants.COLOR_TEXT_SUB)
+end
+
+function SingleDummyScene:clearGodRelicDebug()
+  GodRelicRuntime.clear(self._godRelicRunState)
+  self._playerPiercingChargesLeft = 0
+  self._activeShotStoneId = nil
+  self._activeShotOwnerPlayerIndex = nil
+  self._activeShotPierceConsumed = false
+  self:setStatus(t("single_dummy.status.god_relic_cleared"), Constants.COLOR_TEXT_SUB)
 end
 
 function SingleDummyScene:getPlayingStoneById(stoneId)
@@ -277,6 +416,50 @@ end
 
 function SingleDummyScene:isShotInputEnabled()
   return not self._isShotSimulating
+end
+
+function SingleDummyScene:getAimPreviewBounceCount()
+  return math.max(0, self:getGodRelicCount(GodRelicDefs.ID_PRECISION_CONTROL))
+end
+
+function SingleDummyScene:onShotImpulseApplied(stone, _shotPayload)
+  local stoneId = type(stone) == "table" and tostring(stone.id or "") or ""
+  local owner = type(stone) == "table" and math.floor(tonumber(stone.ownerPlayerIndex) or 0) or 0
+  self._activeShotStoneId = stoneId ~= "" and stoneId or nil
+  self._activeShotOwnerPlayerIndex = owner > 0 and owner or nil
+  self._activeShotPierceConsumed = false
+  self._playerPiercingChargesLeft = math.max(0, self:getGodRelicCount(GodRelicDefs.ID_PIERCING_SHOT))
+end
+
+function SingleDummyScene:consumePiercingCollision(stone, _collisionKind)
+  if type(stone) ~= "table" then
+    return false
+  end
+  if self._activeShotPierceConsumed then
+    return false
+  end
+  if self._activeShotOwnerPlayerIndex ~= 1 then
+    return false
+  end
+  if tostring(stone.id or "") ~= tostring(self._activeShotStoneId or "") then
+    return false
+  end
+  if self._playerPiercingChargesLeft <= 0 then
+    return false
+  end
+  self._playerPiercingChargesLeft = self._playerPiercingChargesLeft - 1
+  self._activeShotPierceConsumed = true
+  return true
+end
+
+function SingleDummyScene:shouldTreatOutAsWall(stone)
+  if type(stone) ~= "table" then
+    return false
+  end
+  if tonumber(stone.ownerPlayerIndex) ~= 1 then
+    return false
+  end
+  return self:getGodRelicCount(GodRelicDefs.ID_SAFETY) > 0
 end
 
 function SingleDummyScene:beginAimDrag(worldX, worldY)
@@ -501,12 +684,72 @@ function SingleDummyScene:drawAimGuide(mouseX, mouseY)
   love.graphics.setColor(0.95, 0.92, 0.35, 0.95)
   love.graphics.setLineWidth(2)
   love.graphics.line(stoneWorldX, stoneWorldY, aimWorldX, aimWorldY)
+
+  local bounceCount = self:getAimPreviewBounceCount()
+  if bounceCount > 0 then
+    local segmentList = computeAimPreviewSegments(
+      self._boardX,
+      self._boardY,
+      Constants.STONE_RADIUS,
+      dirX,
+      dirY,
+      bounceCount,
+      stoneWorldX,
+      stoneWorldY
+    )
+    love.graphics.setColor(0.35, 0.95, 1.00, 0.70)
+    love.graphics.setLineWidth(2)
+    for _, segment in ipairs(segmentList) do
+      love.graphics.line(segment.x1, segment.y1, segment.x2, segment.y2)
+    end
+  end
   love.graphics.setLineWidth(1)
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT)
   love.graphics.printf(t("match.power_label", {
     power = string.format("%.0f", power)
   }), stoneWorldX - 50, stoneWorldY - 30, 100, "center")
+end
+
+function SingleDummyScene:drawGodRelicDebugPanel(mouseX, mouseY)
+  local panelX = Constants.BASE_WORLD_W - 320
+  local panelY = 98
+  local panelW = 292
+  local panelH = 560
+
+  love.graphics.setColor(0.10, 0.16, 0.24, 0.92)
+  love.graphics.rectangle("fill", panelX, panelY, panelW, panelH, 10, 10)
+  love.graphics.setColor(Constants.COLOR_PANEL_BORDER)
+  love.graphics.rectangle("line", panelX, panelY, panelW, panelH, 10, 10)
+
+  love.graphics.setFont(FontManager.getFont("body"))
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  love.graphics.printf(t("single_dummy.god_debug_title"), panelX + 14, panelY + 14, panelW - 28, "left")
+
+  love.graphics.setFont(FontManager.getFont("small"))
+  love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+  love.graphics.printf(t("single_dummy.god_debug_hint"), panelX + 14, panelY + 42, panelW - 28, "left")
+
+  for _, button in ipairs(self._godRelicDebugButtonList) do
+    button:draw(mouseX, mouseY)
+  end
+
+  local lineY = panelY + 402
+  local uiLineList = GodRelicRuntime.toUiLines(self._godRelicRunState)
+  if #uiLineList == 0 then
+    love.graphics.setColor(Constants.COLOR_TEXT_SUB)
+    love.graphics.printf(t("single_dummy.god_debug_empty"), panelX + 14, lineY, panelW - 28, "left")
+    return
+  end
+
+  love.graphics.setColor(Constants.COLOR_TEXT)
+  for _, line in ipairs(uiLineList) do
+    love.graphics.printf(line, panelX + 14, lineY, panelW - 28, "left")
+    lineY = lineY + 20
+    if lineY > panelY + panelH - 24 then
+      break
+    end
+  end
 end
 
 function SingleDummyScene:drawSelectedStoneHighlight()
@@ -560,6 +803,7 @@ function SingleDummyScene:draw()
   self:drawStones()
   self:drawSelectedStoneHighlight()
   self:drawAimGuide(mouseX, mouseY)
+  self:drawGodRelicDebugPanel(mouseX, mouseY)
 
   if self._effectManager then
     self._effectManager:draw(self._boardX, self._boardY, function(canonicalX, canonicalY)
@@ -586,6 +830,12 @@ function SingleDummyScene:mousepressed(mouseX, mouseY, button)
   if self._backButton:isHovered(mouseX, mouseY) then
     self._backButton:onClick()
     return
+  end
+  for _, buttonItem in ipairs(self._godRelicDebugButtonList) do
+    if buttonItem:isHovered(mouseX, mouseY) then
+      buttonItem:onClick()
+      return
+    end
   end
   self:beginAimDrag(mouseX, mouseY)
 end
@@ -627,6 +877,16 @@ function SingleDummyScene:keypressed(key)
     self:setStatus(t("single_dummy.status.invincible_toggle", {
       value = self._isOpponentInvincible and t("common.on") or t("common.off")
     }), Constants.COLOR_TEXT_SUB)
+    return
+  end
+  for _, binding in ipairs(GOD_RELIC_DEBUG_BINDING_LIST) do
+    if key == binding.key or key == binding.kpKey then
+      self:addGodRelicDebug(binding.id)
+      return
+    end
+  end
+  if key == "8" or key == "kp8" then
+    self:clearGodRelicDebug()
   end
 end
 

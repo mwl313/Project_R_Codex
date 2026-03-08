@@ -62,6 +62,69 @@ local function getStoneDampingPerSec(context, rules, stone)
   return rules.PHYSICS_DAMPING_PER_SEC
 end
 
+local function applyPierceIfNeeded(context, stone, velocity, preSpeed, collisionKind)
+  if type(context) ~= "table" or type(context.consumePiercingCollision) ~= "function" then
+    return false
+  end
+  if type(stone) ~= "table" or type(velocity) ~= "table" then
+    return false
+  end
+  local safePreSpeed = tonumber(preSpeed) or 0
+  if safePreSpeed <= 0 then
+    return false
+  end
+  local shouldConsume = context.consumePiercingCollision(stone, collisionKind)
+  if not shouldConsume then
+    return false
+  end
+  local postSpeed = math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy)
+  if postSpeed <= 0.0001 then
+    return false
+  end
+  local scale = safePreSpeed / postSpeed
+  velocity.vx = velocity.vx * scale
+  velocity.vy = velocity.vy * scale
+  return true
+end
+
+local function resolveBoundaryAsWall(rules, stone, velocity, stoneRadius)
+  local minX = stoneRadius
+  local maxX = rules.BOARD_W - stoneRadius
+  local minY = stoneRadius
+  local maxY = rules.BOARD_H - stoneRadius
+  local bounced = false
+
+  if stone.x < minX then
+    stone.x = minX
+    if velocity.vx < 0 then
+      velocity.vx = -velocity.vx * rules.PHYSICS_RESTITUTION
+    end
+    bounced = true
+  elseif stone.x > maxX then
+    stone.x = maxX
+    if velocity.vx > 0 then
+      velocity.vx = -velocity.vx * rules.PHYSICS_RESTITUTION
+    end
+    bounced = true
+  end
+
+  if stone.y < minY then
+    stone.y = minY
+    if velocity.vy < 0 then
+      velocity.vy = -velocity.vy * rules.PHYSICS_RESTITUTION
+    end
+    bounced = true
+  elseif stone.y > maxY then
+    stone.y = maxY
+    if velocity.vy > 0 then
+      velocity.vy = -velocity.vy * rules.PHYSICS_RESTITUTION
+    end
+    bounced = true
+  end
+
+  return bounced
+end
+
 function PhysicsEngine.resolveObstacleCollision(context, stone, obstacle)
   if type(context) ~= "table" or type(stone) ~= "table" or type(obstacle) ~= "table" then
     return false, nil, nil
@@ -123,12 +186,14 @@ function PhysicsEngine.resolveObstacleCollision(context, stone, obstacle)
   stone.y = stone.y + normalY * overlap
 
   local velocity = context.getStoneVelocity(stone.id)
+  local preSpeed = math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy)
   local normalSpeed = velocity.vx * normalX + velocity.vy * normalY
   if normalSpeed < 0 then
     local reflectScale = -(1 + rules.PHYSICS_RESTITUTION) * normalSpeed
     velocity.vx = velocity.vx + reflectScale * normalX
     velocity.vy = velocity.vy + reflectScale * normalY
   end
+  applyPierceIfNeeded(context, stone, velocity, preSpeed, "obstacle")
 
   return true, closestX, closestY
 end
@@ -201,6 +266,8 @@ function PhysicsEngine.resolveStoneCollision(context, firstStone, secondStone)
     end
   end
 
+  local firstPreSpeed = math.sqrt(firstVelocity.vx * firstVelocity.vx + firstVelocity.vy * firstVelocity.vy)
+  local secondPreSpeed = math.sqrt(secondVelocity.vx * secondVelocity.vx + secondVelocity.vy * secondVelocity.vy)
   local relativeX = secondVelocity.vx - firstVelocity.vx
   local relativeY = secondVelocity.vy - firstVelocity.vy
   local normalSpeed = relativeX * normalX + relativeY * normalY
@@ -223,6 +290,9 @@ function PhysicsEngine.resolveStoneCollision(context, firstStone, secondStone)
       secondVelocity.vy = secondVelocity.vy + impulse * secondInvMass * normalY
     end
   end
+
+  applyPierceIfNeeded(context, firstStone, firstVelocity, firstPreSpeed, "stone")
+  applyPierceIfNeeded(context, secondStone, secondVelocity, secondPreSpeed, "stone")
 
   local collisionX = (firstStone.x + secondStone.x) * 0.5
   local collisionY = (firstStone.y + secondStone.y) * 0.5
@@ -284,12 +354,22 @@ function PhysicsEngine.simulateShotStep(context, stepSec)
       local minY = stoneRadius
       local maxY = rules.BOARD_H - stoneRadius
       if stone.x < minX or stone.x > maxX or stone.y < minY or stone.y > maxY then
-        if type(context.isShockwaveShotStone) == "function" and type(context.applyShockwaveFromPoint) == "function" and context.isShockwaveShotStone(stone.id) then
-          context.applyShockwaveFromPoint(stone.x, stone.y)
+        local treatedAsWall = false
+        if type(context.shouldTreatOutAsWall) == "function" and context.shouldTreatOutAsWall(stone) then
+          local preSpeed = math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy)
+          treatedAsWall = resolveBoundaryAsWall(rules, stone, velocity, stoneRadius)
+          if treatedAsWall then
+            applyPierceIfNeeded(context, stone, velocity, preSpeed, "boundary")
+          end
         end
-        stone.alive = false
-        velocity.vx = 0
-        velocity.vy = 0
+        if not treatedAsWall then
+          if type(context.isShockwaveShotStone) == "function" and type(context.applyShockwaveFromPoint) == "function" and context.isShockwaveShotStone(stone.id) then
+            context.applyShockwaveFromPoint(stone.x, stone.y)
+          end
+          stone.alive = false
+          velocity.vx = 0
+          velocity.vy = 0
+        end
       else
         local dampingPerSec = getStoneDampingPerSec(context, rules, stone)
         local damping = math.max(0, 1 - dampingPerSec * stepSec)

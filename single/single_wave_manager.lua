@@ -10,6 +10,7 @@
 local CardRegistry = require("single.card_registry")
 local RelicRegistry = require("single.relic_registry")
 local RuntimeRelicStore = require("single.runtime_relic_store")
+local GodRelicRuntime = require("single.god_relic_runtime")
 
 local SingleWaveManager = {}
 SingleWaveManager.__index = SingleWaveManager
@@ -94,6 +95,8 @@ function SingleWaveManager.new(profile)
     _discardPileCardIdList = {},
     _handCardIdList = {},
     _relicIdList = {},
+    _godRelicIdList = {},
+    _godRelicCounts = {},
     _runtimeState = nil
   }
   setmetatable(instance, SingleWaveManager)
@@ -114,6 +117,8 @@ function SingleWaveManager:reset(profile)
   self._discardPileCardIdList = {}
   self._handCardIdList = {}
   self._relicIdList = {}
+  self._godRelicIdList = {}
+  self._godRelicCounts = {}
   self._runtimeState = {
     runId = self._runId,
     stageIndex = self._stageIndex,
@@ -124,9 +129,14 @@ function SingleWaveManager:reset(profile)
       cards = cloneList(self._drawPileCardIdList)
     },
     relicIds = self._relicIdList,
+    godRelicIds = self._godRelicIdList,
+    godRelicCounts = self._godRelicCounts,
     cardUpgrades = {},
     tempModifiers = {}
   }
+  GodRelicRuntime.initRunState(self._runtimeState)
+  self._godRelicIdList = self._runtimeState.godRelicIds
+  self._godRelicCounts = self._runtimeState.godRelicCounts
   shuffleListInPlace(self._drawPileCardIdList, self._rng)
   self:syncRuntimeDeck()
 end
@@ -134,8 +144,13 @@ end
 function SingleWaveManager:clearRuntimeRelics()
   RuntimeRelicStore.clear()
   self._relicIdList = {}
+  self._godRelicIdList = {}
+  self._godRelicCounts = {}
   if type(self._runtimeState) == "table" then
     self._runtimeState.relicIds = self._relicIdList
+    GodRelicRuntime.clear(self._runtimeState)
+    self._godRelicIdList = self._runtimeState.godRelicIds
+    self._godRelicCounts = self._runtimeState.godRelicCounts
   end
 end
 
@@ -325,6 +340,31 @@ function SingleWaveManager:addRelic(relicId)
   return true
 end
 
+function SingleWaveManager:addGodRelic(godRelicId)
+  if type(self._runtimeState) ~= "table" then
+    return false, 0
+  end
+  local isAdded, nextCount = GodRelicRuntime.addGodRelic(self._runtimeState, godRelicId)
+  self._godRelicIdList = self._runtimeState.godRelicIds
+  self._godRelicCounts = self._runtimeState.godRelicCounts
+  return isAdded, nextCount
+end
+
+function SingleWaveManager:getGodRelicCount(godRelicId)
+  if type(self._runtimeState) ~= "table" then
+    return 0
+  end
+  return GodRelicRuntime.getCount(self._runtimeState, godRelicId)
+end
+
+function SingleWaveManager:getGodRelicCounts()
+  local copied = {}
+  for key, value in pairs(self._godRelicCounts or {}) do
+    copied[key] = math.max(0, math.floor(tonumber(value) or 0))
+  end
+  return copied
+end
+
 function SingleWaveManager:getRelicIdList()
   return cloneList(self._relicIdList)
 end
@@ -337,7 +377,34 @@ function SingleWaveManager:getRelicBuffEntryList()
       list[#list + 1] = relic
     end
   end
+  local godLineList = GodRelicRuntime.toUiLines(self._runtimeState)
+  for _, line in ipairs(godLineList) do
+    list[#list + 1] = {
+      relicId = "",
+      name = tostring(line),
+      descText = ""
+    }
+  end
   return list
+end
+
+function SingleWaveManager:drawCardsForCombat(drawCount, currentHandCount, maxHandCount)
+  local drawnList = {}
+  local targetDrawCount = math.max(0, math.floor(tonumber(drawCount) or 0))
+  local handCount = math.max(0, math.floor(tonumber(currentHandCount) or 0))
+  local handLimit = math.max(1, math.floor(tonumber(maxHandCount) or 8))
+  for _ = 1, targetDrawCount do
+    if handCount >= handLimit then
+      break
+    end
+    local cardId = self:drawOneCard()
+    if not cardId then
+      break
+    end
+    drawnList[#drawnList + 1] = cardId
+    handCount = handCount + 1
+  end
+  return drawnList
 end
 
 function SingleWaveManager:applyHandOperation(handOpId, maxHandCount)

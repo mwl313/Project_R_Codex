@@ -383,6 +383,7 @@ local LocaleKo = {
           card_to_hand = "카드를 손패에 추가했습니다.",
           card_to_deck = "손패가 가득 차 덱에 추가 후 셔플했습니다.",
           relic_added = "유물을 획득했습니다.",
+          god_relic_added = "갓 유물을 획득했습니다.",
           relic_skip = "이미 보유 중인 유물이라 적용되지 않았습니다.",
           hand_op_applied = "패조작 효과를 적용했습니다.",
           apply_failed = "업그레이드 적용에 실패했습니다."
@@ -826,15 +827,20 @@ local LocaleKo = {
   },
   single_dummy = {
     title = "Single Dummy (Manual Test)",
-    subtitle = "충격파(1): {shockwave} | 상대 무적(2): {invincible} | R: 리셋 | ESC: 로비",
+    subtitle = "충격파(1): {shockwave} | 상대 무적(2): {invincible} | 갓유물(3~7) | 8: GOD 초기화 | R: 리셋 | ESC: 로비",
     back_button = "뒤로",
+    god_debug_title = "갓 유물 디버그",
+    god_debug_hint = "버튼/단축키(3~7)로 스택 추가, 8로 초기화",
+    god_debug_empty = "획득한 갓 유물이 없습니다.",
     status = {
       entered = "더미 모드: 드래그 발사 / 1=충격파 / 2=상대 무적 / R=리셋",
       exited = "싱글 더미 테스트 종료",
       drag_too_short = "드래그 거리가 너무 짧습니다.",
       reset_done = "더미 상태를 초기화했습니다.",
       shockwave_toggle = "충격파 토글: {value}",
-      invincible_toggle = "상대 무적 토글: {value}"
+      invincible_toggle = "상대 무적 토글: {value}",
+      god_relic_added = "갓 유물 추가: {name} (x{count})",
+      god_relic_cleared = "갓 유물 디버그 스택을 초기화했습니다."
     }
   }
 }

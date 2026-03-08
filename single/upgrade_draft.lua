@@ -11,6 +11,7 @@ local CardRules = require("shared.card_rules")
 local CardRegistry = require("single.card_registry")
 local ProcRelicGenerator = require("single.proc_relic_generator")
 local RuntimeRelicStore = require("single.runtime_relic_store")
+local GodRelicDefs = require("single.god_relic_defs")
 
 local UpgradeDraft = {}
 
@@ -112,6 +113,42 @@ local function weightedRarityPick(weightMap, rng)
   return picked or "COMMON"
 end
 
+local function shouldPickGodRelic(context)
+  if type(context) ~= "table" then
+    return false
+  end
+  if tostring(context.modeTag or "") ~= "single_wave" then
+    return false
+  end
+  local chance = tonumber(GodRelicDefs.GOD_CHANCE) or 0.03
+  chance = math.max(0, math.min(1, chance))
+  if chance <= 0 then
+    return false
+  end
+  return randomFloat(context.rng) < chance
+end
+
+local function pickGodRelicId(context, excludedOptionIdSet, excludedEffectGroupIdSet)
+  local weightedList = {}
+  for _, relicDef in ipairs(GodRelicDefs.LIST or {}) do
+    local relicId = tostring(relicDef.id or "")
+    if relicId ~= "" then
+      local optionId = "god_relic:" .. relicId
+      local effectGroupId = "god_relic:" .. relicId
+      if (not excludedOptionIdSet[optionId]) and (not excludedEffectGroupIdSet[effectGroupId]) then
+        weightedList[#weightedList + 1] = {
+          id = relicId,
+          weight = math.max(0, tonumber(relicDef.weight) or 1)
+        }
+      end
+    end
+  end
+  if #weightedList <= 0 then
+    return nil
+  end
+  return weightedPick(weightedList, context and context.rng)
+end
+
 local function buildSingleCardPool()
   local runtimeCardIdList = CardRules.getCardPool(CardRules.GAME_MODE_SINGLE)
   local list = {}
@@ -172,6 +209,29 @@ local function pickCardOption(context, excludedOptionIdSet, excludedEffectGroupI
 end
 
 local function pickRelicOption(context, excludedOptionIdSet, excludedEffectGroupIdSet)
+  if shouldPickGodRelic(context) then
+    local godRelicId = pickGodRelicId(context, excludedOptionIdSet, excludedEffectGroupIdSet)
+    if godRelicId then
+      local godRelicDef = GodRelicDefs.getById(godRelicId) or {}
+      local optionId = "god_relic:" .. godRelicId
+      local effectGroupId = "god_relic:" .. godRelicId
+      return {
+        optionId = optionId,
+        effectGroupId = effectGroupId,
+        category = UpgradeDraft.CATEGORY_RELIC,
+        rarity = "GOD",
+        titleKey = "",
+        descKey = "",
+        titleText = string.format("[GOD] %s", tostring(godRelicDef.nameKo or godRelicId)),
+        descText = tostring(godRelicDef.descKo or ""),
+        payload = {
+          kind = "god_relic",
+          godRelicId = godRelicId
+        }
+      }
+    end
+  end
+
   local slotIndex = math.max(1, math.floor(tonumber(context.optionSlotIndex) or 1))
   local relicDef = ProcRelicGenerator.createRelic({
     rng = context.rng,
@@ -206,6 +266,7 @@ local function pickRelicOption(context, excludedOptionIdSet, excludedEffectGroup
     titleText = tostring(relicDef.name or relicId),
     descText = tostring(relicDef.descText or ""),
     payload = {
+      kind = "relic",
       relicId = relicId
     }
   }

@@ -262,9 +262,13 @@ function SingleWaveScene:startCurrentWaveCombat()
     nodeType = nodeType,
     nodeId = nodeId,
     stageIndex = stageIndex,
+    enableGodRelics = true,
     disableTurnTimer = true,
     suppressHud = true,
     initialHandCardIdList = self._waveManager:getHandCardIdList(),
+    onTurnDrawRequest = function(drawCount, currentHandCount, maxHandCount)
+      return self._waveManager:drawCardsForCombat(drawCount, currentHandCount, maxHandCount)
+    end,
     onCardConsumed = function(saveCardId)
       self._waveManager:addConsumedCard(saveCardId)
     end,
@@ -298,6 +302,7 @@ function SingleWaveScene:openUpgradeOverlay()
   self._isUpgradeHiddenByEsc = false
   self._selectedUpgradeIndex = nil
   self._upgradeOptionList = UpgradeDraft.build({
+    modeTag = "single_wave",
     rng = self._waveManager:getRng(),
     relicIdList = self._waveManager:getRelicIdList(),
     runSeed = tonumber(self._waveManager:getRuntimeState() and self._waveManager:getRuntimeState().rngSeed) or os.time(),
@@ -452,13 +457,26 @@ function SingleWaveScene:applyUpgradeOption(option, sourceX, sourceY)
   end
 
   if option.category == UpgradeDraft.CATEGORY_RELIC then
-    local relicId = option.payload and option.payload.relicId
-    local isAdded = self._waveManager:addRelic(relicId)
+    local isAdded = false
+    local payload = type(option.payload) == "table" and option.payload or {}
+    if payload.kind == "god_relic" and payload.godRelicId then
+      isAdded = self._waveManager:addGodRelic(payload.godRelicId)
+      if isAdded then
+        self:setStatus(t("single.wave.upgrade.status.god_relic_added"), Constants.COLOR_TEXT_SUB)
+      else
+        self:setStatus(t("single.wave.upgrade.status.relic_skip"), Constants.COLOR_TEXT_SUB)
+      end
+    else
+      local relicId = payload.relicId
+      isAdded = self._waveManager:addRelic(relicId)
+      if isAdded then
+        self:setStatus(t("single.wave.upgrade.status.relic_added"), Constants.COLOR_TEXT_SUB)
+      else
+        self:setStatus(t("single.wave.upgrade.status.relic_skip"), Constants.COLOR_TEXT_SUB)
+      end
+    end
     if isAdded then
       self:scrollRelicListToBottom()
-      self:setStatus(t("single.wave.upgrade.status.relic_added"), Constants.COLOR_TEXT_SUB)
-    else
-      self:setStatus(t("single.wave.upgrade.status.relic_skip"), Constants.COLOR_TEXT_SUB)
     end
     local viewport = self:getRelicListViewportRect()
     local targetX = viewport.x + 52
