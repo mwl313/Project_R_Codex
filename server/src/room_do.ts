@@ -112,6 +112,48 @@ interface MatchPlayingStone {
   alive: boolean;
 }
 
+interface MatchPlayingStoneStatus {
+  ghostUntilTurn: number | null;
+  isGhost: boolean;
+  invisibleToOpponentUntilTurn: number | null;
+  isInvisibleToOpponent: boolean;
+  boundUntilTurn: number | null;
+  powerMoveCharges: number;
+  powerMoveUntilTurn: number | null;
+  nongaeUntilTurn: number | null;
+  isNongae: boolean;
+  spawnLockedThisTurn: boolean;
+}
+
+interface MatchPlayingPlayerStatus {
+  abilitySealUntilTurn: number | null;
+  reverseUntilTurn: number | null;
+  cannotUseAbilityUntilTurn: number | null;
+  suddenDeathEndTurn: number | null;
+  drawOneRandomCardPerTurnUntilTurn: number | null;
+  nextShotPowerMultiplier: number;
+}
+
+interface MatchIceZone {
+  id: string;
+  ownerPlayerIndex: 1 | 2;
+  x: number;
+  y: number;
+  radius: number;
+  dampingMultiplier: number;
+  expiresAtTurn: number;
+}
+
+interface MatchPlayingBoardEffects {
+  iceZones: MatchIceZone[];
+  bombs: Array<Record<string, unknown>>;
+  blackholeEffects: Array<Record<string, unknown>>;
+}
+
+interface MatchPlayingTurnHistory {
+  lastOpponentTurnDeaths: string[];
+}
+
 interface MatchObstacle {
   id: string;
   x: number;
@@ -134,6 +176,13 @@ interface MatchPlayingState {
     2: number | null;
   };
   shockwaveOwnerPlayerIndex: 1 | 2 | null;
+  stoneStatusById: Record<string, MatchPlayingStoneStatus>;
+  playerStatusByIndex: {
+    1: MatchPlayingPlayerStatus;
+    2: MatchPlayingPlayerStatus;
+  };
+  boardEffects: MatchPlayingBoardEffects;
+  turnHistory: MatchPlayingTurnHistory;
   shotCommitted: boolean;
   awaitingSnapshot: boolean;
   stones: MatchPlayingStone[];
@@ -218,6 +267,74 @@ function createEmptySlot(): PlayerSlot {
   };
 }
 
+function createDefaultStoneStatus(): MatchPlayingStoneStatus {
+  return {
+    ghostUntilTurn: null,
+    isGhost: false,
+    invisibleToOpponentUntilTurn: null,
+    isInvisibleToOpponent: false,
+    boundUntilTurn: null,
+    powerMoveCharges: 0,
+    powerMoveUntilTurn: null,
+    nongaeUntilTurn: null,
+    isNongae: false,
+    spawnLockedThisTurn: false
+  };
+}
+
+function createDefaultPlayerStatus(): MatchPlayingPlayerStatus {
+  return {
+    abilitySealUntilTurn: null,
+    reverseUntilTurn: null,
+    cannotUseAbilityUntilTurn: null,
+    suddenDeathEndTurn: null,
+    drawOneRandomCardPerTurnUntilTurn: null,
+    nextShotPowerMultiplier: 1
+  };
+}
+
+function createDefaultBoardEffects(): MatchPlayingBoardEffects {
+  return {
+    iceZones: [],
+    bombs: [],
+    blackholeEffects: []
+  };
+}
+
+function createDefaultTurnHistory(): MatchPlayingTurnHistory {
+  return {
+    lastOpponentTurnDeaths: []
+  };
+}
+
+function createDefaultPlayingState(): MatchPlayingState {
+  return {
+    turnIndex: 1,
+    activePlayerIndex: 1,
+    turnEndsAtMs: null,
+    shotBudget: 1,
+    shotUsed: 0,
+    hasCardUsedThisTurn: false,
+    lockedStoneIds: [],
+    obstacles: [],
+    invincibleTurnByPlayer: {
+      1: null,
+      2: null
+    },
+    shockwaveOwnerPlayerIndex: null,
+    stoneStatusById: {},
+    playerStatusByIndex: {
+      1: createDefaultPlayerStatus(),
+      2: createDefaultPlayerStatus()
+    },
+    boardEffects: createDefaultBoardEffects(),
+    turnHistory: createDefaultTurnHistory(),
+    shotCommitted: false,
+    awaitingSnapshot: false,
+    stones: []
+  };
+}
+
 function createDefaultRoomState(): RoomState {
   return {
     roomCode: null,
@@ -247,24 +364,7 @@ function createDefaultRoomState(): RoomState {
         guestLocked: false,
         selectEndsAtMs: null
       },
-      playing: {
-        turnIndex: 1,
-        activePlayerIndex: 1,
-        turnEndsAtMs: null,
-        shotBudget: 1,
-        shotUsed: 0,
-        hasCardUsedThisTurn: false,
-        lockedStoneIds: [],
-        obstacles: [],
-        invincibleTurnByPlayer: {
-          1: null,
-          2: null
-        },
-        shockwaveOwnerPlayerIndex: null,
-        shotCommitted: false,
-        awaitingSnapshot: false,
-        stones: []
-      }
+      playing: createDefaultPlayingState()
     },
     result: null
   };
@@ -386,24 +486,7 @@ export class RoomDO {
           guestLocked: false,
           selectEndsAtMs: null
         },
-        playing: {
-          turnIndex: 1,
-          activePlayerIndex: 1,
-          turnEndsAtMs: null,
-          shotBudget: 1,
-          shotUsed: 0,
-          hasCardUsedThisTurn: false,
-          lockedStoneIds: [],
-          obstacles: [],
-          invincibleTurnByPlayer: {
-            1: null,
-            2: null
-          },
-          shockwaveOwnerPlayerIndex: null,
-          shotCommitted: false,
-          awaitingSnapshot: false,
-          stones: []
-        }
+        playing: createDefaultPlayingState()
       };
       return;
     }
@@ -431,24 +514,7 @@ export class RoomDO {
     }
 
     if (!this.room.match.playing) {
-      this.room.match.playing = {
-        turnIndex: 1,
-        activePlayerIndex: 1,
-        turnEndsAtMs: null,
-        shotBudget: 1,
-        shotUsed: 0,
-        hasCardUsedThisTurn: false,
-        lockedStoneIds: [],
-        obstacles: [],
-        invincibleTurnByPlayer: {
-          1: null,
-          2: null
-        },
-        shockwaveOwnerPlayerIndex: null,
-        shotCommitted: false,
-        awaitingSnapshot: false,
-        stones: []
-      };
+      this.room.match.playing = createDefaultPlayingState();
       return;
     }
 
@@ -503,6 +569,45 @@ export class RoomDO {
     }
     if (this.room.match.playing.shotUsed > this.room.match.playing.shotBudget) {
       this.room.match.playing.shotUsed = this.room.match.playing.shotBudget;
+    }
+
+    if (!this.room.match.playing.stoneStatusById || typeof this.room.match.playing.stoneStatusById !== "object") {
+      this.room.match.playing.stoneStatusById = {};
+    }
+    for (const stone of this.room.match.playing.stones) {
+      if (!this.room.match.playing.stoneStatusById[stone.id]) {
+        this.room.match.playing.stoneStatusById[stone.id] = createDefaultStoneStatus();
+      }
+    }
+    if (!this.room.match.playing.playerStatusByIndex || typeof this.room.match.playing.playerStatusByIndex !== "object") {
+      this.room.match.playing.playerStatusByIndex = {
+        1: createDefaultPlayerStatus(),
+        2: createDefaultPlayerStatus()
+      };
+    }
+    if (!this.room.match.playing.playerStatusByIndex[1]) {
+      this.room.match.playing.playerStatusByIndex[1] = createDefaultPlayerStatus();
+    }
+    if (!this.room.match.playing.playerStatusByIndex[2]) {
+      this.room.match.playing.playerStatusByIndex[2] = createDefaultPlayerStatus();
+    }
+    if (!this.room.match.playing.boardEffects || typeof this.room.match.playing.boardEffects !== "object") {
+      this.room.match.playing.boardEffects = createDefaultBoardEffects();
+    }
+    if (!Array.isArray(this.room.match.playing.boardEffects.iceZones)) {
+      this.room.match.playing.boardEffects.iceZones = [];
+    }
+    if (!Array.isArray(this.room.match.playing.boardEffects.bombs)) {
+      this.room.match.playing.boardEffects.bombs = [];
+    }
+    if (!Array.isArray(this.room.match.playing.boardEffects.blackholeEffects)) {
+      this.room.match.playing.boardEffects.blackholeEffects = [];
+    }
+    if (!this.room.match.playing.turnHistory || typeof this.room.match.playing.turnHistory !== "object") {
+      this.room.match.playing.turnHistory = createDefaultTurnHistory();
+    }
+    if (!Array.isArray(this.room.match.playing.turnHistory.lastOpponentTurnDeaths)) {
+      this.room.match.playing.turnHistory.lastOpponentTurnDeaths = [];
     }
 
     if (this.room.result) {
@@ -792,6 +897,35 @@ export class RoomDO {
     return true;
   }
 
+  private canPlaceStoneAtExcludingStone(excludeStoneId: string, x: number, y: number, minDistance: number): boolean {
+    const minX = STONE_RADIUS;
+    const maxX = BOARD_W - STONE_RADIUS;
+    const minY = STONE_RADIUS;
+    const maxY = BOARD_H - STONE_RADIUS;
+    if (x < minX || x > maxX || y < minY || y > maxY) {
+      return false;
+    }
+
+    for (const stone of this.room.match.playing.stones) {
+      if (!stone.alive || stone.id === excludeStoneId) {
+        continue;
+      }
+      const dx = stone.x - x;
+      const dy = stone.y - y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      if (distance < minDistance) {
+        return false;
+      }
+    }
+
+    for (const obstacle of this.room.match.playing.obstacles) {
+      if (this.intersectsStoneAndObstacle(x, y, obstacle)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   private canPlaceObstacleAt(x: number, y: number, width: number, height: number, margin = ROCK_OBSTACLE_MARGIN): boolean {
     const halfW = width * 0.5;
     const halfH = height * 0.5;
@@ -891,6 +1025,19 @@ export class RoomDO {
             2: this.room.match.playing.invincibleTurnByPlayer[2]
           },
           shockwaveOwnerPlayerIndex: this.room.match.playing.shockwaveOwnerPlayerIndex,
+          stoneStatusById: { ...this.room.match.playing.stoneStatusById },
+          playerStatusByIndex: {
+            1: { ...this.room.match.playing.playerStatusByIndex[1] },
+            2: { ...this.room.match.playing.playerStatusByIndex[2] }
+          },
+          boardEffects: {
+            iceZones: this.room.match.playing.boardEffects.iceZones.map((zone) => ({ ...zone })),
+            bombs: this.room.match.playing.boardEffects.bombs.map((item) => ({ ...item })),
+            blackholeEffects: this.room.match.playing.boardEffects.blackholeEffects.map((item) => ({ ...item }))
+          },
+          turnHistory: {
+            lastOpponentTurnDeaths: [...this.room.match.playing.turnHistory.lastOpponentTurnDeaths]
+          },
           shotCommitted: this.room.match.playing.shotCommitted,
           awaitingSnapshot: this.room.match.playing.awaitingSnapshot,
           stones: clonePlayingStones(this.room.match.playing.stones)
@@ -1384,24 +1531,7 @@ export class RoomDO {
           guestLocked: false,
           selectEndsAtMs: null
         },
-        playing: {
-          turnIndex: 1,
-          activePlayerIndex: 1,
-          turnEndsAtMs: null,
-          shotBudget: 1,
-          shotUsed: 0,
-          hasCardUsedThisTurn: false,
-          lockedStoneIds: [],
-          obstacles: [],
-          invincibleTurnByPlayer: {
-            1: null,
-            2: null
-          },
-          shockwaveOwnerPlayerIndex: null,
-          shotCommitted: false,
-          awaitingSnapshot: false,
-          stones: []
-        }
+        playing: createDefaultPlayingState()
       },
       result: null
     };
@@ -1685,22 +1815,7 @@ export class RoomDO {
     this.room.match.cardSelect.guestLocked = false;
     this.room.match.cardSelect.selectEndsAtMs = null;
 
-    this.room.match.playing.turnIndex = 1;
-    this.room.match.playing.activePlayerIndex = 1;
-    this.room.match.playing.turnEndsAtMs = null;
-    this.room.match.playing.shotBudget = 1;
-    this.room.match.playing.shotUsed = 0;
-    this.room.match.playing.hasCardUsedThisTurn = false;
-    this.room.match.playing.lockedStoneIds = [];
-    this.room.match.playing.obstacles = [];
-    this.room.match.playing.invincibleTurnByPlayer = {
-      1: null,
-      2: null
-    };
-    this.room.match.playing.shockwaveOwnerPlayerIndex = null;
-    this.room.match.playing.shotCommitted = false;
-    this.room.match.playing.awaitingSnapshot = false;
-    this.room.match.playing.stones = [];
+    this.room.match.playing = createDefaultPlayingState();
   }
 
   private async startMatchFlow(): Promise<void> {
@@ -2087,6 +2202,87 @@ export class RoomDO {
       alive: true
     }));
     this.room.match.playing.stones = [...hostStones, ...guestStones];
+    this.room.match.playing.stoneStatusById = {};
+    for (const stone of this.room.match.playing.stones) {
+      this.room.match.playing.stoneStatusById[stone.id] = createDefaultStoneStatus();
+    }
+    this.room.match.playing.playerStatusByIndex = {
+      1: createDefaultPlayerStatus(),
+      2: createDefaultPlayerStatus()
+    };
+    this.room.match.playing.boardEffects = createDefaultBoardEffects();
+    this.room.match.playing.turnHistory = createDefaultTurnHistory();
+  }
+
+  private sanitizePlayingStateOnTurnStart(): void {
+    const playing = this.room.match.playing;
+    const turnIndex = playing.turnIndex;
+    if (!playing.stoneStatusById || typeof playing.stoneStatusById !== "object") {
+      playing.stoneStatusById = {};
+    }
+    if (!playing.playerStatusByIndex || typeof playing.playerStatusByIndex !== "object") {
+      playing.playerStatusByIndex = {
+        1: createDefaultPlayerStatus(),
+        2: createDefaultPlayerStatus()
+      };
+    }
+    if (!playing.boardEffects || typeof playing.boardEffects !== "object") {
+      playing.boardEffects = createDefaultBoardEffects();
+    }
+    if (!Array.isArray(playing.boardEffects.iceZones)) {
+      playing.boardEffects.iceZones = [];
+    }
+
+    for (const stone of playing.stones) {
+      if (!playing.stoneStatusById[stone.id]) {
+        playing.stoneStatusById[stone.id] = createDefaultStoneStatus();
+      }
+      const status = playing.stoneStatusById[stone.id];
+      status.spawnLockedThisTurn = false;
+      if (typeof status.boundUntilTurn === "number" && status.boundUntilTurn < turnIndex) {
+        status.boundUntilTurn = null;
+      }
+      if (typeof status.ghostUntilTurn === "number" && status.ghostUntilTurn < turnIndex) {
+        status.ghostUntilTurn = null;
+        status.isGhost = false;
+      }
+      if (typeof status.invisibleToOpponentUntilTurn === "number" && status.invisibleToOpponentUntilTurn < turnIndex) {
+        status.invisibleToOpponentUntilTurn = null;
+        status.isInvisibleToOpponent = false;
+      }
+      if (typeof status.powerMoveUntilTurn === "number" && status.powerMoveUntilTurn < turnIndex) {
+        status.powerMoveUntilTurn = null;
+      }
+      if (typeof status.nongaeUntilTurn === "number" && status.nongaeUntilTurn < turnIndex) {
+        status.nongaeUntilTurn = null;
+        status.isNongae = false;
+      }
+    }
+
+    for (const playerIndex of [1, 2] as const) {
+      if (!playing.playerStatusByIndex[playerIndex]) {
+        playing.playerStatusByIndex[playerIndex] = createDefaultPlayerStatus();
+      }
+      const status = playing.playerStatusByIndex[playerIndex];
+      if (typeof status.abilitySealUntilTurn === "number" && status.abilitySealUntilTurn < turnIndex) {
+        status.abilitySealUntilTurn = null;
+      }
+      if (typeof status.reverseUntilTurn === "number" && status.reverseUntilTurn < turnIndex) {
+        status.reverseUntilTurn = null;
+      }
+      if (typeof status.cannotUseAbilityUntilTurn === "number" && status.cannotUseAbilityUntilTurn < turnIndex) {
+        status.cannotUseAbilityUntilTurn = null;
+      }
+      if (typeof status.suddenDeathEndTurn === "number" && status.suddenDeathEndTurn < turnIndex) {
+        status.suddenDeathEndTurn = null;
+      }
+      if (typeof status.drawOneRandomCardPerTurnUntilTurn === "number" && status.drawOneRandomCardPerTurnUntilTurn < turnIndex) {
+        status.drawOneRandomCardPerTurnUntilTurn = null;
+      }
+      status.nextShotPowerMultiplier = 1;
+    }
+
+    playing.boardEffects.iceZones = playing.boardEffects.iceZones.filter((zone) => zone.expiresAtTurn >= turnIndex);
   }
 
   private startNewTurn(activePlayerIndex: 1 | 2): void {
@@ -2101,6 +2297,7 @@ export class RoomDO {
     this.room.match.playing.shockwaveOwnerPlayerIndex = null;
     this.room.match.playing.shotCommitted = false;
     this.room.match.playing.awaitingSnapshot = false;
+    this.sanitizePlayingStateOnTurnStart();
     this.room.timers.turnEndsAtMs = turnEndsAtMs;
     this.room.timers.snapshotEndsAtMs = undefined;
   }
@@ -2282,6 +2479,11 @@ export class RoomDO {
       this.emitToToken(token, "error.generic", errorPayload("card_use_window_closed"));
       return;
     }
+    const playerStatus = this.room.match.playing.playerStatusByIndex[session.playerIndex];
+    if (playerStatus && typeof playerStatus.abilitySealUntilTurn === "number" && playerStatus.abilitySealUntilTurn >= this.room.match.playing.turnIndex) {
+      this.emitToToken(token, "error.generic", errorPayload("ability_sealed"));
+      return;
+    }
     if (!(CARD_POOL as readonly string[]).includes(cardUsePayload.cardId)) {
       this.emitToToken(token, "error.generic", errorPayload("invalid_card_id"));
       return;
@@ -2299,6 +2501,7 @@ export class RoomDO {
       playing: this.room.match.playing,
       createPlayingEntityId: (prefix) => this.createPlayingEntityId(prefix),
       canPlaceStoneAt: (x, y, minDistance) => this.canPlaceStoneAt(x, y, minDistance),
+      canPlaceStoneAtExcludingStone: (excludeStoneId, x, y, minDistance) => this.canPlaceStoneAtExcludingStone(excludeStoneId, x, y, minDistance),
       canPlaceObstacleAt: (x, y, width, height, margin) => this.canPlaceObstacleAt(x, y, width, height, margin)
     });
     if (!abilityResult.ok || !abilityResult.appliedCardId) {
@@ -2315,7 +2518,9 @@ export class RoomDO {
       turnIndex: this.room.match.playing.turnIndex,
       playerIndex: session.playerIndex,
       cardId: abilityResult.appliedCardId,
-      target: cardUsePayload.target
+      target: cardUsePayload.target,
+      sourceStoneId: cardUsePayload.sourceStoneId,
+      targetStoneId: cardUsePayload.targetStoneId
     });
     this.emitBroadcast("match.turn.cardApplied", {
       turnIndex: this.room.match.playing.turnIndex,
@@ -2379,6 +2584,19 @@ export class RoomDO {
       this.emitToToken(token, "error.generic", errorPayload("stone_locked_this_turn"));
       return;
     }
+    const stoneStatus = this.room.match.playing.stoneStatusById[shotPayload.stoneId];
+    if (stoneStatus && typeof stoneStatus.boundUntilTurn === "number" && stoneStatus.boundUntilTurn >= this.room.match.playing.turnIndex) {
+      this.emitToToken(token, "error.generic", errorPayload("stone_locked_this_turn"));
+      return;
+    }
+
+    const playerStatus = this.room.match.playing.playerStatusByIndex[session.playerIndex];
+    const shotSpeedScale = playerStatus && typeof playerStatus.nextShotPowerMultiplier === "number"
+      ? Math.max(0.1, Math.min(3, playerStatus.nextShotPowerMultiplier))
+      : 1;
+    if (playerStatus) {
+      playerStatus.nextShotPowerMultiplier = 1;
+    }
 
     this.room.match.playing.shotUsed += 1;
     this.room.match.playing.shotCommitted = this.room.match.playing.shotUsed >= this.room.match.playing.shotBudget;
@@ -2391,6 +2609,7 @@ export class RoomDO {
       dirX: shotPayload.dirX / dirLength,
       dirY: shotPayload.dirY / dirLength,
       power: shotPayload.power,
+      shotSpeedScale,
       shotUsed: this.room.match.playing.shotUsed,
       shotBudget: this.room.match.playing.shotBudget
     });

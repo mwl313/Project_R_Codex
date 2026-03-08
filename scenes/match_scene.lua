@@ -24,6 +24,7 @@ local CardHandBar = require("ui.card_hand_bar")
 local InGameChat = require("ui.in_game_chat")
 local EffectManager = require("effects.effect_manager")
 local Abilities = require("abilities")
+local CardRules = require("shared.card_rules")
 local GameMechanics = require("game_mechanics")
 local TimeUtils = require("utils.time_utils")
 local InputCaptureGuard = require("utils.input_capture_guard")
@@ -141,6 +142,33 @@ local function createDefaultRoomState()
         obstacles = {},
         invincibleTurnByPlayer = { [1] = nil, [2] = nil },
         shockwaveOwnerPlayerIndex = nil,
+        stoneStatusById = {},
+        playerStatusByIndex = {
+          [1] = {
+            abilitySealUntilTurn = nil,
+            reverseUntilTurn = nil,
+            cannotUseAbilityUntilTurn = nil,
+            suddenDeathEndTurn = nil,
+            drawOneRandomCardPerTurnUntilTurn = nil,
+            nextShotPowerMultiplier = 1
+          },
+          [2] = {
+            abilitySealUntilTurn = nil,
+            reverseUntilTurn = nil,
+            cannotUseAbilityUntilTurn = nil,
+            suddenDeathEndTurn = nil,
+            drawOneRandomCardPerTurnUntilTurn = nil,
+            nextShotPowerMultiplier = 1
+          }
+        },
+        boardEffects = {
+          iceZones = {},
+          bombs = {},
+          blackholeEffects = {}
+        },
+        turnHistory = {
+          lastOpponentTurnDeaths = {}
+        },
         shotCommitted = false,
         awaitingSnapshot = false,
         stones = {}
@@ -244,6 +272,8 @@ function MatchScene.new(app)
     _boardX = boardX,
     _boardY = boardY,
     _forcedLocalRole = nil,
+    _isDebugLocalCardSandbox = false,
+    _debugEntitySeq = 0,
 
     _myStoneList = {},
     _isPlacementSubmitted = false,
@@ -278,11 +308,25 @@ function MatchScene.new(app)
     _invincibleTurnByPlayer = { [1] = nil, [2] = nil },
     _shockwaveOwnerPlayerIndex = nil,
     _shockwaveSourceStoneId = nil,
+    _stoneStatusById = {},
+    _playerStatusByIndex = {
+      [1] = {},
+      [2] = {}
+    },
+    _boardEffects = {
+      iceZones = {},
+      bombs = {},
+      blackholeEffects = {}
+    },
+    _turnHistory = {
+      lastOpponentTurnDeaths = {}
+    },
     _isPlayingShotCommitted = false,
     _isPlayingAwaitingSnapshot = false,
     _isTurnShotPending = false,
     _isCardUsePending = false,
     _pendingCardTargetId = nil,
+    _pendingCardTargetState = nil,
     _isSurrenderPending = false,
     _isAimDragging = false,
     _isAimRelativeMode = false,
@@ -393,6 +437,8 @@ end
 function MatchScene:enter(params)
   self._roomState = createDefaultRoomState()
   self._forcedLocalRole = params and params.localRole or nil
+  self._isDebugLocalCardSandbox = params and params.debugLocalCardSandbox == true or false
+  self._debugEntitySeq = 0
 
   self._myStoneList = {}
   self._isPlacementSubmitted = false
@@ -425,11 +471,25 @@ function MatchScene:enter(params)
   self._invincibleTurnByPlayer = { [1] = nil, [2] = nil }
   self._shockwaveOwnerPlayerIndex = nil
   self._shockwaveSourceStoneId = nil
+  self._stoneStatusById = {}
+  self._playerStatusByIndex = {
+    [1] = {},
+    [2] = {}
+  }
+  self._boardEffects = {
+    iceZones = {},
+    bombs = {},
+    blackholeEffects = {}
+  }
+  self._turnHistory = {
+    lastOpponentTurnDeaths = {}
+  }
   self._isPlayingShotCommitted = false
   self._isPlayingAwaitingSnapshot = false
   self._isTurnShotPending = false
   self._isCardUsePending = false
   self._pendingCardTargetId = nil
+  self._pendingCardTargetState = nil
   self._isSurrenderPending = false
   self._isAimDragging = false
   self._isAimRelativeMode = false
@@ -487,6 +547,15 @@ function MatchScene:getMyPlayerIndex()
     return 2
   end
   return nil
+end
+
+function MatchScene:isDebugLocalCardSandbox()
+  return self._isDebugLocalCardSandbox == true
+end
+
+function MatchScene:createDebugPlayingEntityId(prefix)
+  self._debugEntitySeq = (self._debugEntitySeq or 0) + 1
+  return string.format("%s_dbg_%d", tostring(prefix or "dbg"), self._debugEntitySeq)
 end
 
 function MatchScene:isPlacementPhase()
@@ -599,7 +668,11 @@ function MatchScene:findAimStoneAt(worldX, worldY)
   end
 
   for _, stone in ipairs(self._playingStoneList) do
-    if stone.alive ~= false and stone.ownerPlayerIndex == myPlayerIndex and (not self._lockedStoneIdSet[stone.id]) then
+    if stone.alive ~= false
+      and stone.ownerPlayerIndex == myPlayerIndex
+      and (not self._lockedStoneIdSet[stone.id])
+      and (not Abilities.isStoneBoundOnCurrentTurn(self, stone.id))
+    then
       local localX, localY = self:canonicalToLocal(stone.x, stone.y)
       local stoneWorldX = self._boardX + localX
       local stoneWorldY = self._boardY + localY
@@ -641,6 +714,26 @@ end
 
 function MatchScene:applyShockwaveFromPoint(centerX, centerY)
   Abilities.applyShockwaveFromPoint(self, centerX, centerY)
+end
+
+local function copyPlayerStatusByIndex(value)
+  local copied = {
+    [1] = {},
+    [2] = {}
+  }
+  for _, playerIndex in ipairs({ 1, 2 }) do
+    local source = type(value) == "table" and value[playerIndex] or nil
+    if type(source) == "table" then
+      for key, nested in pairs(source) do
+        copied[playerIndex][key] = nested
+      end
+    end
+  end
+  return copied
+end
+
+function MatchScene:getStoneDampingMultiplier(stone)
+  return Abilities.getStoneDampingMultiplier(self, stone)
 end
 
 function MatchScene:applyInvincibleCollisionResponse(firstInvincible, secondInvincible, normalX, normalY, firstVelocity, secondVelocity)
@@ -915,13 +1008,19 @@ function MatchScene:canUseCardInTurn(cardId)
   if self._isCardUsePending or self._isPlayingAwaitingSnapshot then
     return false
   end
-  if self._hasUsedCardThisTurn then
-    return false
-  end
-  if self._playingShotUsed > 0 then
-    return false
+  if not self:isDebugLocalCardSandbox() then
+    if self._hasUsedCardThisTurn then
+      return false
+    end
+    if self._playingShotUsed > 0 then
+      return false
+    end
   end
   if self._pendingCardTargetId then
+    return false
+  end
+  local myPlayerIndex = self:getMyPlayerIndex()
+  if myPlayerIndex and Abilities.isPlayerAbilitySealed(self, myPlayerIndex) then
     return false
   end
   return Abilities.isSupportedTurnCard(cardId)
@@ -959,6 +1058,11 @@ function MatchScene:restoreOptimisticConsumedCard(cardId)
 end
 
 function MatchScene:handleHandCardBlocked()
+  local myPlayerIndex = self:getMyPlayerIndex()
+  if myPlayerIndex and Abilities.isPlayerAbilitySealed(self, myPlayerIndex) then
+    self:setStatus(t("match.status.card_use_sealed"), Constants.COLOR_DANGER)
+    return
+  end
   if self._hasUsedCardThisTurn then
     self:setStatus(t("match.status.card_already_used_turn"), Constants.COLOR_TEXT_SUB)
     return
@@ -972,8 +1076,12 @@ function MatchScene:handleHandCardDeclared(cardId)
     return false
   end
 
+  if self:isDebugLocalCardSandbox() then
+    return true
+  end
+
   self._optimisticConsumedCardIdSet[cardId] = true
-  if cardId == "rockfall" or cardId == "reinforcement" then
+  if Abilities.needsTargeting(cardId) then
     self._pendingDeclaredTargetCardId = cardId
   else
     self._pendingDeclaredTargetCardId = nil
@@ -987,16 +1095,246 @@ function MatchScene:rebuildPlayingCardButtons()
   self:refreshPlayingCardHand()
 end
 
+function MatchScene:applyDebugLocalCardUsePayload(payload)
+  if type(payload) ~= "table" then
+    return false, "invalid_payload"
+  end
+  local cardId = tostring(payload.cardId or "")
+  local myPlayerIndex = self:getMyPlayerIndex()
+  if not myPlayerIndex then
+    return false, "role_missing"
+  end
+
+  local effectPayload = {}
+  local tunables = CardRules.getCardTunables(cardId)
+  local turnIndex = self._playingTurnIndex or 1
+  local opponentPlayerIndex = myPlayerIndex == 1 and 2 or 1
+
+  if cardId == "agile" then
+    local shotBudget = math.max(1, math.floor(tonumber(tunables.shot_budget) or 2))
+    effectPayload.shotBudget = math.max(self._playingShotBudget or 1, shotBudget)
+  elseif cardId == "invincible" then
+    local turnOffset = math.max(1, math.floor(tonumber(tunables.protect_after_turn_offset) or 1))
+    local invincibleByPlayer = {
+      [1] = self._invincibleTurnByPlayer and self._invincibleTurnByPlayer[1] or nil,
+      [2] = self._invincibleTurnByPlayer and self._invincibleTurnByPlayer[2] or nil
+    }
+    invincibleByPlayer[myPlayerIndex] = turnIndex + turnOffset
+    effectPayload.invincibleTurnByPlayer = invincibleByPlayer
+  elseif cardId == "shockwave" then
+    effectPayload.shockwaveOwnerPlayerIndex = myPlayerIndex
+  elseif cardId == "power_move" then
+    local playerStatusByIndex = copyPlayerStatusByIndex(self._playerStatusByIndex)
+    local myStatus = playerStatusByIndex[myPlayerIndex]
+    myStatus.nextShotPowerMultiplier = clamp(tonumber(tunables.power_multiplier) or 1.25, 1, 2)
+    effectPayload.playerStatusByIndex = playerStatusByIndex
+  elseif cardId == "seal" then
+    local playerStatusByIndex = copyPlayerStatusByIndex(self._playerStatusByIndex)
+    local durationTurns = math.max(1, math.floor(tonumber(tunables.duration_turns) or 2))
+    local opponentStatus = playerStatusByIndex[opponentPlayerIndex]
+    opponentStatus.abilitySealUntilTurn = turnIndex + durationTurns
+    effectPayload.playerStatusByIndex = playerStatusByIndex
+  elseif cardId == "reinforcement" then
+    local target = payload.target
+    if type(target) ~= "table" or type(target.x) ~= "number" or type(target.y) ~= "number" then
+      return false, "invalid_card_target"
+    end
+    local canPlace = self:canPlaceReinforcementAtCanonical(target.x, target.y)
+    if not canPlace then
+      return false, "invalid_card_target"
+    end
+    local stoneId = self:createDebugPlayingEntityId(string.format("p%d_r", myPlayerIndex))
+    effectPayload.spawnStone = {
+      id = stoneId,
+      ownerPlayerIndex = myPlayerIndex,
+      x = target.x,
+      y = target.y,
+      alive = true
+    }
+    if tunables.lock_spawned_stone_for_turn ~= false then
+      local nextLockedStoneIds = {}
+      for stoneIdValue in pairs(self._lockedStoneIdSet or {}) do
+        nextLockedStoneIds[#nextLockedStoneIds + 1] = stoneIdValue
+      end
+      nextLockedStoneIds[#nextLockedStoneIds + 1] = stoneId
+      effectPayload.lockedStoneIds = nextLockedStoneIds
+    end
+    effectPayload.stoneStatusById = {
+      [stoneId] = {
+        ghostUntilTurn = nil,
+        isGhost = false,
+        invisibleToOpponentUntilTurn = nil,
+        isInvisibleToOpponent = false,
+        boundUntilTurn = nil,
+        powerMoveCharges = 0,
+        powerMoveUntilTurn = nil,
+        nongaeUntilTurn = nil,
+        isNongae = false,
+        spawnLockedThisTurn = true
+      }
+    }
+  elseif cardId == "rockfall" then
+    local target = payload.target
+    if type(target) ~= "table" or type(target.x) ~= "number" or type(target.y) ~= "number" then
+      return false, "invalid_card_target"
+    end
+    local canPlace = self:canPlaceRockfallAtCanonical(target.x, target.y)
+    if not canPlace then
+      return false, "invalid_card_target"
+    end
+    effectPayload.obstacle = {
+      id = self:createDebugPlayingEntityId("rock"),
+      x = target.x,
+      y = target.y,
+      width = math.max(1, tonumber(tunables.width) or Constants.ROCK_OBSTACLE_WIDTH),
+      height = math.max(1, tonumber(tunables.height) or Constants.ROCK_OBSTACLE_HEIGHT)
+    }
+  elseif cardId == "bind" then
+    local targetStoneId = tostring(payload.targetStoneId or "")
+    local targetStone = self:getAliveStoneById(targetStoneId)
+    if not targetStone or targetStone.ownerPlayerIndex == myPlayerIndex then
+      return false, "invalid_card_target"
+    end
+    local sourceStatus = (self._stoneStatusById and self._stoneStatusById[targetStone.id]) or {}
+    local durationTurns = math.max(1, math.floor(tonumber(tunables.duration_turns) or 3))
+    effectPayload.stoneStatusById = {
+      [targetStone.id] = {
+        ghostUntilTurn = sourceStatus.ghostUntilTurn,
+        isGhost = sourceStatus.isGhost == true,
+        invisibleToOpponentUntilTurn = sourceStatus.invisibleToOpponentUntilTurn,
+        isInvisibleToOpponent = sourceStatus.isInvisibleToOpponent == true,
+        boundUntilTurn = turnIndex + durationTurns,
+        powerMoveCharges = tonumber(sourceStatus.powerMoveCharges) or 0,
+        powerMoveUntilTurn = sourceStatus.powerMoveUntilTurn,
+        nongaeUntilTurn = sourceStatus.nongaeUntilTurn,
+        isNongae = sourceStatus.isNongae == true,
+        spawnLockedThisTurn = sourceStatus.spawnLockedThisTurn == true
+      }
+    }
+  elseif cardId == "ice_field" then
+    local target = payload.target
+    if type(target) ~= "table" or type(target.x) ~= "number" or type(target.y) ~= "number" then
+      return false, "invalid_card_target"
+    end
+    local radius = math.max(20, tonumber(tunables.zone_radius) or 110)
+    if target.x - radius < 0 or target.x + radius > Constants.BOARD_W or target.y - radius < 0 or target.y + radius > Constants.BOARD_H then
+      return false, "invalid_card_target"
+    end
+    local durationTurns = math.max(1, math.floor(tonumber(tunables.duration_turns) or 2))
+    effectPayload.iceZoneAdded = {
+      id = self:createDebugPlayingEntityId("ice"),
+      ownerPlayerIndex = myPlayerIndex,
+      x = target.x,
+      y = target.y,
+      radius = radius,
+      dampingMultiplier = clamp(tonumber(tunables.damping_multiplier) or 0.45, 0.05, 1),
+      expiresAtTurn = turnIndex + durationTurns
+    }
+  elseif cardId == "blink" then
+    local sourceStoneId = tostring(payload.sourceStoneId or "")
+    local sourceStone = self:getAliveStoneById(sourceStoneId)
+    local target = payload.target
+    if (not sourceStone) or sourceStone.ownerPlayerIndex ~= myPlayerIndex or type(target) ~= "table" then
+      return false, "invalid_card_target"
+    end
+    if Abilities.isStoneBoundOnCurrentTurn(self, sourceStone.id) then
+      return false, "invalid_card_target"
+    end
+    local targetX = tonumber(target.x)
+    local targetY = tonumber(target.y)
+    if not targetX or not targetY then
+      return false, "invalid_card_target"
+    end
+    local maxDistance = math.max(1, tonumber(tunables.max_blink_distance) or 170)
+    local dx = targetX - sourceStone.x
+    local dy = targetY - sourceStone.y
+    if math.sqrt(dx * dx + dy * dy) > maxDistance then
+      return false, "invalid_card_target"
+    end
+    local minDistance = math.max(1, tonumber(tunables.min_place_distance) or Constants.STONE_RADIUS * 2)
+    if not self:canPlaceStoneAtCanonicalExcluding(sourceStone.id, targetX, targetY, minDistance) then
+      return false, "invalid_card_target"
+    end
+    effectPayload.movedStones = {
+      {
+        id = sourceStone.id,
+        x = targetX,
+        y = targetY,
+        resetVelocity = true
+      }
+    }
+  elseif cardId == "swap" then
+    local sourceStone = self:getAliveStoneById(tostring(payload.sourceStoneId or ""))
+    local targetStone = self:getAliveStoneById(tostring(payload.targetStoneId or ""))
+    if (not sourceStone) or (not targetStone) then
+      return false, "invalid_card_target"
+    end
+    if sourceStone.ownerPlayerIndex ~= myPlayerIndex or targetStone.ownerPlayerIndex == myPlayerIndex then
+      return false, "invalid_card_target"
+    end
+    effectPayload.movedStones = {
+      {
+        id = sourceStone.id,
+        x = targetStone.x,
+        y = targetStone.y,
+        resetVelocity = true
+      },
+      {
+        id = targetStone.id,
+        x = sourceStone.x,
+        y = sourceStone.y,
+        resetVelocity = true
+      }
+    }
+  else
+    return false, "card_not_implemented"
+  end
+
+  Abilities.applyServerCardEffect(self, effectPayload)
+  if type(effectPayload.shotBudget) == "number" then
+    self._playingShotBudget = effectPayload.shotBudget
+  end
+  self._isCardUsePending = false
+  self._pendingCardTargetId = nil
+  self._pendingCardTargetState = nil
+  self._pendingDeclaredTargetCardId = nil
+  self._optimisticConsumedCardIdSet = {}
+  if self._playingCardHandBar then
+    self._playingCardHandBar:cancelCardDrag(false)
+  end
+  self:refreshPlayingCardHand()
+  self:setStatus(t("match.status.card_applied", {
+    cardLabel = tostring(getCardLabel(cardId))
+  }), Constants.COLOR_TEXT_SUB)
+  return true, nil
+end
+
+function MatchScene:submitTurnCardUsePayload(payload)
+  if self:isDebugLocalCardSandbox() then
+    return self:applyDebugLocalCardUsePayload(payload)
+  end
+
+  self._app:sendEnvelope("client.match.turn.cardUse", payload)
+  self._isCardUsePending = true
+  return true, nil
+end
+
 function MatchScene:requestTurnCardUse(cardId)
   if not self:canUseCardInTurn(cardId) then
+    local myPlayerIndex = self:getMyPlayerIndex()
+    if myPlayerIndex and Abilities.isPlayerAbilitySealed(self, myPlayerIndex) then
+      self:setStatus(t("match.status.card_use_sealed"), Constants.COLOR_DANGER)
+      return false
+    end
     self:setStatus(t("match.status.cannot_use_card_now"), Constants.COLOR_DANGER)
     return false
   end
 
-  if cardId == "rockfall" or cardId == "reinforcement" then
+  if Abilities.needsTargeting(cardId) then
     self._pendingCardTargetId = cardId
+    self._pendingCardTargetState = Abilities.createPendingTargetState(cardId)
     self:cancelAimDrag(true)
-    self:setStatus(Abilities.getPendingTargetStartStatus(cardId), Constants.COLOR_TEXT_SUB)
+    self:setStatus(Abilities.getPendingTargetStartStatus(cardId, self._pendingCardTargetState), Constants.COLOR_TEXT_SUB)
     return true
   end
 
@@ -1005,9 +1343,16 @@ function MatchScene:requestTurnCardUse(cardId)
     cardId = cardId
   }
 
-  self._app:sendEnvelope("client.match.turn.cardUse", payload)
-  self._isCardUsePending = true
-  self:setStatus(t("match.status.card_use_submit"), Constants.COLOR_TEXT_SUB)
+  local isOk, errorCode = self:submitTurnCardUsePayload(payload)
+  if not isOk then
+    self:setStatus(t("match.status.server_error", {
+      code = tostring(errorCode or "debug_card_use_failed")
+    }), Constants.COLOR_DANGER)
+    return false
+  end
+  if not self:isDebugLocalCardSandbox() then
+    self:setStatus(t("match.status.card_use_submit"), Constants.COLOR_TEXT_SUB)
+  end
   return true
 end
 
@@ -1017,6 +1362,7 @@ function MatchScene:cancelPendingCardTarget()
   end
   local cancelledCardId = self._pendingCardTargetId
   self._pendingCardTargetId = nil
+  self._pendingCardTargetState = nil
   if self._pendingDeclaredTargetCardId == cancelledCardId then
     self:restoreOptimisticConsumedCard(cancelledCardId)
   end
@@ -1031,13 +1377,66 @@ function MatchScene:canPlaceReinforcementAtCanonical(canonicalX, canonicalY)
   return Abilities.canPlaceReinforcementAtCanonical(self, canonicalX, canonicalY)
 end
 
+function MatchScene:canPlaceStoneAtCanonicalExcluding(excludeStoneId, canonicalX, canonicalY, minDistance)
+  local minX = Constants.STONE_RADIUS
+  local maxX = Constants.BOARD_W - Constants.STONE_RADIUS
+  local minY = Constants.STONE_RADIUS
+  local maxY = Constants.BOARD_H - Constants.STONE_RADIUS
+  if canonicalX < minX or canonicalX > maxX or canonicalY < minY or canonicalY > maxY then
+    return false
+  end
+
+  local safeMinDistance = type(minDistance) == "number" and math.max(0, minDistance) or Constants.MIN_PLACE_DISTANCE
+  for _, stone in ipairs(self._playingStoneList or {}) do
+    if stone.alive ~= false and stone.id ~= excludeStoneId then
+      local dx = stone.x - canonicalX
+      local dy = stone.y - canonicalY
+      local distance = math.sqrt(dx * dx + dy * dy)
+      if distance < safeMinDistance then
+        return false
+      end
+    end
+  end
+
+  local function clamp(value, minValue, maxValue)
+    if value < minValue then
+      return minValue
+    end
+    if value > maxValue then
+      return maxValue
+    end
+    return value
+  end
+
+  for _, obstacle in ipairs(self._obstacleList or {}) do
+    local width = obstacle.width or Constants.ROCK_OBSTACLE_WIDTH
+    local height = obstacle.height or Constants.ROCK_OBSTACLE_HEIGHT
+    local halfW = width * 0.5
+    local halfH = height * 0.5
+    local left = obstacle.x - halfW
+    local right = obstacle.x + halfW
+    local top = obstacle.y - halfH
+    local bottom = obstacle.y + halfH
+    local closestX = clamp(canonicalX, left, right)
+    local closestY = clamp(canonicalY, top, bottom)
+    local dx = canonicalX - closestX
+    local dy = canonicalY - closestY
+    if dx * dx + dy * dy < Constants.STONE_RADIUS * Constants.STONE_RADIUS then
+      return false
+    end
+  end
+
+  return true
+end
+
 function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
-  if self._pendingCardTargetId ~= "rockfall" and self._pendingCardTargetId ~= "reinforcement" then
+  if not self._pendingCardTargetId or not self._pendingCardTargetState then
     return false
   end
   local pendingCardId = self._pendingCardTargetId
   if not self:isMyTurn() or self._hasUsedCardThisTurn or self._playingShotUsed > 0 then
     self._pendingCardTargetId = nil
+    self._pendingCardTargetState = nil
     if self._pendingDeclaredTargetCardId == pendingCardId then
       self:restoreOptimisticConsumedCard(pendingCardId)
     end
@@ -1045,38 +1444,40 @@ function MatchScene:commitPendingCardTargetByWorld(worldX, worldY)
     return true
   end
 
-  local boardLocalX, boardLocalY = self:toBoardLocal(worldX, worldY)
-  if not boardLocalX then
-    self:setStatus(Abilities.getPendingTargetOutOfBoardStatus(pendingCardId), Constants.COLOR_DANGER)
+  local resolveResult = Abilities.resolvePendingTargetClick(self, self._pendingCardTargetState, worldX, worldY)
+  if not resolveResult.handled then
+    return false
+  end
+  if not resolveResult.keepPending then
+    self._pendingCardTargetId = nil
+    self._pendingCardTargetState = nil
+  end
+  if resolveResult.statusText then
+    self:setStatus(resolveResult.statusText, resolveResult.statusColor or Constants.COLOR_TEXT_SUB)
+  end
+  if not resolveResult.payload then
     return true
   end
 
-  local canonicalX, canonicalY = self:localToCanonical(boardLocalX, boardLocalY)
-  local canPlace, reason
-  if pendingCardId == "rockfall" then
-    canPlace, reason = self:canPlaceRockfallAtCanonical(canonicalX, canonicalY)
-  else
-    canPlace, reason = self:canPlaceReinforcementAtCanonical(canonicalX, canonicalY)
-  end
-  if not canPlace then
-    self:setStatus(reason or t("match.status.card_target_cannot_place"), Constants.COLOR_DANGER)
+  local isOk, errorCode = self:submitTurnCardUsePayload(resolveResult.payload)
+  if not isOk then
+    if self._pendingDeclaredTargetCardId == pendingCardId then
+      self:restoreOptimisticConsumedCard(pendingCardId)
+    end
+    self:setStatus(t("match.status.server_error", {
+      code = tostring(errorCode or "debug_card_use_failed")
+    }), Constants.COLOR_DANGER)
     return true
   end
-
-  self._app:sendEnvelope("client.match.turn.cardUse", {
-    turnIndex = self._playingTurnIndex,
-    cardId = pendingCardId,
-    target = {
-      x = canonicalX,
-      y = canonicalY
-    }
-  })
-  self._pendingCardTargetId = nil
   if self._pendingDeclaredTargetCardId == pendingCardId then
     self._pendingDeclaredTargetCardId = nil
   end
-  self._isCardUsePending = true
-  self:setStatus(Abilities.getPendingTargetRequestStatus(pendingCardId), Constants.COLOR_TEXT_SUB)
+  if not self:isDebugLocalCardSandbox() then
+    self._isCardUsePending = true
+    if not resolveResult.statusText then
+      self:setStatus(Abilities.getPendingTargetRequestStatus(pendingCardId), Constants.COLOR_TEXT_SUB)
+    end
+  end
   return true
 end
 
@@ -1089,6 +1490,7 @@ function MatchScene:requestSurrender()
     return
   end
   self._pendingCardTargetId = nil
+  self._pendingCardTargetState = nil
   self:cancelAimDrag(true)
   if self._playingCardHandBar then
     self._playingCardHandBar:cancelCardDrag(false)
@@ -1290,6 +1692,13 @@ function MatchScene:commitAimDrag(_worldX, _worldY)
   end
 
   local power = math.min(Constants.MAX_SHOT_POWER, dragLength * Constants.POWER_PER_PIXEL)
+  Abilities.onShotPrepare(self, {
+    turnIndex = self._playingTurnIndex,
+    stoneId = stone.id,
+    dirX = dirCanonicalX / canonicalLen,
+    dirY = dirCanonicalY / canonicalLen,
+    power = power
+  })
   self._app:sendEnvelope("client.match.turn.shot", {
     turnIndex = self._playingTurnIndex,
     stoneId = stone.id,
@@ -1502,11 +1911,18 @@ function MatchScene:applyRoomState(payload)
       self._playingStoneList = clonePlayingStoneList(playing.stones)
       self:syncStoneVelocityMap()
     end
-    if self._pendingCardTargetId and (not self:isMyTurn() or self._hasUsedCardThisTurn or self._playingShotUsed > 0 or self._isCardUsePending) then
+    Abilities.applyPlayingStateContainers(self, playing)
+    if self._pendingCardTargetId and not self._pendingCardTargetState then
+      self._pendingCardTargetState = Abilities.createPendingTargetState(self._pendingCardTargetId)
+    end
+    local myPlayerIndex = self:getMyPlayerIndex()
+    local isMyAbilitySealed = myPlayerIndex and Abilities.isPlayerAbilitySealed(self, myPlayerIndex)
+    if self._pendingCardTargetId and (not self:isMyTurn() or self._hasUsedCardThisTurn or self._playingShotUsed > 0 or self._isCardUsePending or isMyAbilitySealed) then
       if self._pendingDeclaredTargetCardId == self._pendingCardTargetId then
         self:restoreOptimisticConsumedCard(self._pendingCardTargetId)
       end
       self._pendingCardTargetId = nil
+      self._pendingCardTargetState = nil
     end
     self:rebuildPlayingCardButtons()
   end
@@ -1519,6 +1935,7 @@ function MatchScene:applyRoomState(payload)
     self._shockwaveSourceStoneId = nil
     self._lockedStoneIdSet = {}
     self._pendingCardTargetId = nil
+    self._pendingCardTargetState = nil
     self._pendingDeclaredTargetCardId = nil
     self._isSurrenderPending = false
     self:cancelAimDrag(true)
@@ -1555,7 +1972,7 @@ function MatchScene:applyRoomState(payload)
     self:setStatus(t("match.status.card_select_phase"), Constants.COLOR_TEXT_SUB)
   elseif payload.phase == Constants.PHASE_PLAYING then
     if self._pendingCardTargetId then
-      self:setStatus(Abilities.getPendingTargetStartStatus(self._pendingCardTargetId), Constants.COLOR_TEXT_SUB)
+      self:setStatus(Abilities.getPendingTargetStartStatus(self._pendingCardTargetId, self._pendingCardTargetState), Constants.COLOR_TEXT_SUB)
     elseif self:isMyTurn() then
       self:setStatus(t("match.status.my_turn_guide"), Constants.COLOR_TEXT_SUB)
     else
@@ -1729,6 +2146,15 @@ function MatchScene:drawPlayingInfo()
   elseif self._isTurnShotPending then
     stateText = t("match.info.state_shot_pending")
   end
+  local myPlayerIndex = self:getMyPlayerIndex()
+  if myPlayerIndex and self:isMyTurn() then
+    local nextShotMultiplier = Abilities.getNextShotPowerMultiplier(self, myPlayerIndex)
+    if nextShotMultiplier and nextShotMultiplier > 1 then
+      stateText = stateText .. " / " .. t("match.info.state_power_move", {
+        multiplier = string.format("%.2f", nextShotMultiplier)
+      })
+    end
+  end
 
   love.graphics.setFont(FontManager.getFont("small"))
   love.graphics.setColor(Constants.COLOR_TEXT_SUB)
@@ -1771,7 +2197,7 @@ function MatchScene:drawPlayingCardPanel(mouseX, mouseY)
   if self._pendingCardTargetId then
     love.graphics.setFont(FontManager.getFont("small"))
     love.graphics.setColor(Constants.COLOR_TEXT_SUB)
-    local hintText = Abilities.getPendingTargetHint(self._pendingCardTargetId)
+    local hintText = Abilities.getPendingTargetHint(self._pendingCardTargetId, self._pendingCardTargetState)
     love.graphics.printf(hintText, rect.x, rect.y + rect.h - 18, rect.w, "center")
   end
 end
@@ -1994,6 +2420,9 @@ function MatchScene:draw()
   }), 0, 48, Constants.BASE_WORLD_W, "center")
 
   self:drawBoardFrame()
+  if self._roomState.phase == Constants.PHASE_PLAYING or self._roomState.phase == Constants.PHASE_RESULT then
+    Abilities.drawBoardEffects(self)
+  end
 
   if self._roomState.phase == Constants.PHASE_PLAYING or self._roomState.phase == Constants.PHASE_RESULT then
     local hostStoneList = {}
@@ -2008,6 +2437,7 @@ function MatchScene:draw()
     self:drawObstacleList(self._obstacleList)
     self:drawStoneList(hostStoneList, Constants.COLOR_STONE_HOST)
     self:drawStoneList(guestStoneList, Constants.COLOR_STONE_GUEST)
+    Abilities.drawStoneStatusOverlays(self)
   elseif self:isRevealVisiblePhase() and self._revealStoneMap then
     self:drawStoneList(self._revealStoneMap.host, Constants.COLOR_STONE_HOST)
     self:drawStoneList(self._revealStoneMap.guest, Constants.COLOR_STONE_GUEST)
@@ -2340,6 +2770,7 @@ function MatchScene:onServerEnvelope(envelope)
     self._isTurnShotPending = false
     self._isCardUsePending = false
     self._pendingCardTargetId = nil
+    self._pendingCardTargetState = nil
     self._pendingDeclaredTargetCardId = nil
     self._optimisticConsumedCardIdSet = {}
     self._isSurrenderPending = false
@@ -2354,6 +2785,7 @@ function MatchScene:onServerEnvelope(envelope)
     self._shouldSendSnapshotAfterSim = false
     self:stopShotSimulation()
     self:resetStoneVelocities()
+    Abilities.onTurnStart(self, self._activePlayerIndex)
     self:rebuildPlayingCardButtons()
     if self:isMyTurn() then
       self:setStatus(t("match.status.my_turn_start"), Constants.COLOR_TEXT_SUB)
@@ -2412,6 +2844,7 @@ function MatchScene:onServerEnvelope(envelope)
     self._isTurnShotPending = false
     self._isCardUsePending = false
     self._pendingCardTargetId = nil
+    self._pendingCardTargetState = nil
     self._pendingDeclaredTargetCardId = nil
     self:cancelAimDrag(true)
     if self._playingShotUsed >= self._playingShotBudget then
@@ -2431,7 +2864,10 @@ function MatchScene:onServerEnvelope(envelope)
     self._turnEndsAtMs = nil
     self._isTurnShotPending = false
     self._isCardUsePending = false
+    self._pendingCardTargetId = nil
+    self._pendingCardTargetState = nil
     self._pendingDeclaredTargetCardId = nil
+    Abilities.onTurnEnd(self, self._activePlayerIndex)
     self:cancelAimDrag(true)
     self:setStatus(t("match.status.snapshot_requested"), Constants.COLOR_TEXT_SUB)
     self:sendHostSnapshotIfNeeded(payload.turnIndex, payload.reason)
@@ -2458,7 +2894,11 @@ function MatchScene:onServerEnvelope(envelope)
     self._isTurnShotPending = false
     self._isCardUsePending = false
     self._pendingCardTargetId = nil
+    self._pendingCardTargetState = nil
     self._pendingDeclaredTargetCardId = nil
+    Abilities.onShotResolved(self, {
+      turnIndex = self._playingTurnIndex
+    })
     self:setStatus(t("match.status.snapshot_applied"), Constants.COLOR_TEXT_SUB)
     return
   end
@@ -2467,6 +2907,7 @@ function MatchScene:onServerEnvelope(envelope)
     local payload = envelope.payload or {}
     self._isSurrenderPending = false
     self._pendingCardTargetId = nil
+    self._pendingCardTargetState = nil
     self._pendingDeclaredTargetCardId = nil
     self._isResultVotePending = false
     self:setStatus(t("match.status.result_winner", {
@@ -2492,10 +2933,11 @@ function MatchScene:onServerEnvelope(envelope)
         self._cardAnimator:setWaitingLock(false)
       end
     end
-    if payload.code == "card_already_used" or payload.code == "card_use_window_closed" or payload.code == "card_not_owned" or payload.code == "card_not_implemented" or payload.code == "invalid_card_id" or payload.code == "invalid_card_target" then
+    if payload.code == "card_already_used" or payload.code == "card_use_window_closed" or payload.code == "card_not_owned" or payload.code == "card_not_implemented" or payload.code == "invalid_card_id" or payload.code == "invalid_card_target" or payload.code == "ability_sealed" then
       self._isCardUsePending = false
       if self._pendingDeclaredTargetCardId and self._pendingCardTargetId == self._pendingDeclaredTargetCardId then
         self._pendingCardTargetId = nil
+        self._pendingCardTargetState = nil
       end
       self._pendingDeclaredTargetCardId = nil
       self._optimisticConsumedCardIdSet = {}

@@ -3,40 +3,19 @@
 모듈명: Abilities
 
 역할:
-- 카드/능력 관련 규칙을 한 파일에서 관리한다.
-- MatchScene은 능력 규칙 계산을 이 모듈에 위임한다.
-
-외부에서 사용 가능한 함수:
-- Abilities.getCardLabel(cardId)
-- Abilities.isSupportedTurnCard(cardId)
-- Abilities.normalizeInvincibleTurnByPlayer(value)
-- Abilities.isInvincibleOnCurrentTurn(scene, playerIndex)
-- Abilities.isShockwaveShotStone(scene, stoneId)
-- Abilities.applyShockwaveFromPoint(scene, centerX, centerY)
-- Abilities.canPlaceRockfallAtCanonical(scene, canonicalX, canonicalY)
-- Abilities.canPlaceReinforcementAtCanonical(scene, canonicalX, canonicalY)
-- Abilities.getPendingTargetHint(cardId)
-- Abilities.getPendingTargetStartStatus(cardId)
-- Abilities.getPendingTargetOutOfBoardStatus(cardId)
-- Abilities.getPendingTargetRequestStatus(cardId)
-- Abilities.applyServerCardEffect(scene, effectPayload)
-- Abilities.drawPendingCardPreview(scene, mouseX, mouseY)
-- Abilities.applyInvincibleCollisionResponse(firstInvincible, secondInvincible, normalX, normalY, firstVelocity, secondVelocity)
+- 카드/능력 허브 모듈.
+- 외부 계약(API)은 유지하고, 내부 구현은 관심사별 하위 모듈로 분리한다.
 ]]
 
 local Constants = require("constants")
 local I18n = require("i18n.i18n")
 local CardRules = require("shared.card_rules")
+local AbilityTargeted = require("abilities.targeted")
+local AbilityBuffs = require("abilities.buffs")
+local AbilityBoardEffects = require("abilities.board_effects")
+local AbilitySpecial = require("abilities.special")
 
 local Abilities = {}
-
-Abilities.TURN_CARD_SET = {
-  agile = CardRules.isTurnCardEnabled("agile"),
-  reinforcement = CardRules.isTurnCardEnabled("reinforcement"),
-  rockfall = CardRules.isTurnCardEnabled("rockfall"),
-  invincible = CardRules.isTurnCardEnabled("invincible"),
-  shockwave = CardRules.isTurnCardEnabled("shockwave")
-}
 
 local function t(key, vars)
   return I18n.t(key, vars)
@@ -77,20 +56,18 @@ local function intersectsObstacleAndObstacle(firstObstacle, secondObstacle)
     and math.abs(firstObstacle.y - secondObstacle.y) < (firstHalfH + secondHalfH)
 end
 
-local function readTurnIndexByPlayer(value, playerIndex)
-  if type(value) ~= "table" then
-    return nil
+local function buildTurnCardSet()
+  local turnCardSet = {}
+  local pool = CardRules.getCardPool(CardRules.GAME_MODE_MULTI)
+  for _, cardId in ipairs(pool) do
+    if CardRules.isTurnCardEnabled(cardId) then
+      turnCardSet[cardId] = true
+    end
   end
-  local numericKeyValue = value[playerIndex]
-  if type(numericKeyValue) == "number" then
-    return numericKeyValue
-  end
-  local stringKeyValue = value[tostring(playerIndex)]
-  if type(stringKeyValue) == "number" then
-    return stringKeyValue
-  end
-  return nil
+  return turnCardSet
 end
+
+Abilities.TURN_CARD_SET = buildTurnCardSet()
 
 function Abilities.getCardLabel(cardId)
   local key = "abilities.card_label." .. tostring(cardId)
@@ -106,60 +83,19 @@ function Abilities.isSupportedTurnCard(cardId)
 end
 
 function Abilities.normalizeInvincibleTurnByPlayer(value)
-  return {
-    [1] = readTurnIndexByPlayer(value, 1),
-    [2] = readTurnIndexByPlayer(value, 2)
-  }
+  return AbilityBuffs.normalizeInvincibleTurnByPlayer(value)
 end
 
 function Abilities.isInvincibleOnCurrentTurn(scene, playerIndex)
-  local invincibleTurnByPlayer = scene._invincibleTurnByPlayer
-  if type(invincibleTurnByPlayer) ~= "table" then
-    return false
-  end
-  local protectedTurnIndex = invincibleTurnByPlayer[playerIndex]
-  if type(protectedTurnIndex) ~= "number" then
-    protectedTurnIndex = invincibleTurnByPlayer[tostring(playerIndex)]
-  end
-  return type(protectedTurnIndex) == "number" and protectedTurnIndex == scene._playingTurnIndex
+  return AbilityBuffs.isInvincibleOnCurrentTurn(scene, playerIndex)
 end
 
 function Abilities.isShockwaveShotStone(scene, stoneId)
-  if type(stoneId) ~= "string" then
-    return false
-  end
-  return scene._shockwaveOwnerPlayerIndex ~= nil and scene._shockwaveSourceStoneId == stoneId
+  return AbilityBuffs.isShockwaveShotStone(scene, stoneId)
 end
 
 function Abilities.applyShockwaveFromPoint(scene, centerX, centerY)
-  local shockwaveRule = CardRules.getShockwaveRule()
-  local shockwaveRadius = Constants.STONE_RADIUS * math.max(0, shockwaveRule.radius_multiplier or 0)
-  if shockwaveRadius <= 0 then
-    return
-  end
-  if scene._effectManager then
-    scene._effectManager:addShockwavePulse(centerX, centerY, shockwaveRadius)
-  end
-
-  local impulseStrength = math.max(0, shockwaveRule.strength or 0)
-  if impulseStrength <= 0 then
-    return
-  end
-
-  for _, stone in ipairs(scene._playingStoneList) do
-    local isSourceStoneBlocked = shockwaveRule.exclude_source_stone and stone.id == scene._shockwaveSourceStoneId
-    local isInvincibleBlocked = shockwaveRule.ignore_invincible_targets and Abilities.isInvincibleOnCurrentTurn(scene, stone.ownerPlayerIndex)
-    if stone.alive ~= false and (not isSourceStoneBlocked) and (not isInvincibleBlocked) then
-      local dx = stone.x - centerX
-      local dy = stone.y - centerY
-      local distance = math.sqrt(dx * dx + dy * dy)
-      if distance > 0 and distance <= shockwaveRadius then
-        local velocity = scene:getStoneVelocity(stone.id)
-        velocity.vx = velocity.vx + (dx / distance) * impulseStrength
-        velocity.vy = velocity.vy + (dy / distance) * impulseStrength
-      end
-    end
-  end
+  AbilityBuffs.applyShockwaveFromPoint(scene, centerX, centerY)
 end
 
 function Abilities.canPlaceRockfallAtCanonical(scene, canonicalX, canonicalY)
@@ -184,13 +120,13 @@ function Abilities.canPlaceRockfallAtCanonical(scene, canonicalX, canonicalY)
     height = height
   }
 
-  for _, stone in ipairs(scene._playingStoneList) do
+  for _, stone in ipairs(scene._playingStoneList or {}) do
     if stone.alive ~= false and intersectsStoneAndObstacle(stone.x, stone.y, previewObstacle) then
       return false, t("abilities.validate.rockfall_overlap_stone")
     end
   end
 
-  for _, obstacle in ipairs(scene._obstacleList) do
+  for _, obstacle in ipairs(scene._obstacleList or {}) do
     if intersectsObstacleAndObstacle(previewObstacle, obstacle) then
       return false, t("abilities.validate.rockfall_overlap_obstacle")
     end
@@ -210,7 +146,7 @@ function Abilities.canPlaceReinforcementAtCanonical(scene, canonicalX, canonical
     return false, t("abilities.validate.reinforcement_out_of_board")
   end
 
-  for _, stone in ipairs(scene._playingStoneList) do
+  for _, stone in ipairs(scene._playingStoneList or {}) do
     if stone.alive ~= false then
       local dx = stone.x - canonicalX
       local dy = stone.y - canonicalY
@@ -221,12 +157,8 @@ function Abilities.canPlaceReinforcementAtCanonical(scene, canonicalX, canonical
     end
   end
 
-  local previewStone = {
-    x = canonicalX,
-    y = canonicalY
-  }
-  for _, obstacle in ipairs(scene._obstacleList) do
-    if intersectsStoneAndObstacle(previewStone.x, previewStone.y, obstacle) then
+  for _, obstacle in ipairs(scene._obstacleList or {}) do
+    if intersectsStoneAndObstacle(canonicalX, canonicalY, obstacle) then
       return false, t("abilities.validate.reinforcement_overlap_obstacle")
     end
   end
@@ -234,32 +166,40 @@ function Abilities.canPlaceReinforcementAtCanonical(scene, canonicalX, canonical
   return true, nil
 end
 
-function Abilities.getPendingTargetHint(cardId)
-  if cardId == "reinforcement" then
-    return t("abilities.hint.reinforcement_click")
-  end
-  return t("abilities.hint.rockfall_click")
+function Abilities.getTargetMode(cardId)
+  return AbilityTargeted.getTargetMode(cardId)
 end
 
-function Abilities.getPendingTargetStartStatus(cardId)
-  if cardId == "reinforcement" then
-    return t("abilities.hint.reinforcement_start")
-  end
-  return t("abilities.hint.rockfall_start")
+function Abilities.needsTargeting(cardId)
+  return AbilityTargeted.needsTargeting(cardId)
 end
 
-function Abilities.getPendingTargetOutOfBoardStatus(cardId)
-  if cardId == "reinforcement" then
-    return t("abilities.hint.reinforcement_out_of_board")
-  end
-  return t("abilities.hint.rockfall_out_of_board")
+function Abilities.createPendingTargetState(cardId)
+  return AbilityTargeted.createPendingState(cardId)
+end
+
+function Abilities.getPendingTargetHint(cardId, pendingState)
+  return AbilityTargeted.getPendingTargetHint(cardId, pendingState)
+end
+
+function Abilities.getPendingTargetStartStatus(cardId, pendingState)
+  return AbilityTargeted.getPendingTargetStartStatus(cardId, pendingState)
+end
+
+function Abilities.getPendingTargetOutOfBoardStatus(cardId, pendingState)
+  return AbilityTargeted.getPendingTargetOutOfBoardStatus(cardId, pendingState)
 end
 
 function Abilities.getPendingTargetRequestStatus(cardId)
-  if cardId == "reinforcement" then
-    return t("abilities.hint.reinforcement_sending")
-  end
-  return t("abilities.hint.rockfall_sending")
+  return AbilityTargeted.getPendingTargetRequestStatus(cardId)
+end
+
+function Abilities.resolvePendingTargetClick(scene, pendingState, worldX, worldY)
+  return AbilityTargeted.resolvePendingClick(scene, pendingState, worldX, worldY)
+end
+
+function Abilities.applyPlayingStateContainers(scene, playingPayload)
+  AbilityBoardEffects.applyPlayingState(scene, playingPayload)
 end
 
 function Abilities.applyServerCardEffect(scene, effectPayload)
@@ -291,88 +231,72 @@ function Abilities.applyServerCardEffect(scene, effectPayload)
     }
   end
   if type(effectPayload.invincibleTurnByPlayer) == "table" then
-    scene._invincibleTurnByPlayer = Abilities.normalizeInvincibleTurnByPlayer(effectPayload.invincibleTurnByPlayer)
+    scene._invincibleTurnByPlayer = AbilityBuffs.normalizeInvincibleTurnByPlayer(effectPayload.invincibleTurnByPlayer)
   end
   if effectPayload.shockwaveOwnerPlayerIndex == 1 or effectPayload.shockwaveOwnerPlayerIndex == 2 then
     scene._shockwaveOwnerPlayerIndex = effectPayload.shockwaveOwnerPlayerIndex
   end
+  AbilityBoardEffects.applyServerCardEffect(scene, effectPayload)
+end
+
+function Abilities.drawBoardEffects(scene)
+  AbilityBoardEffects.drawBoardEffects(scene)
+end
+
+function Abilities.drawStoneStatusOverlays(scene)
+  AbilityBoardEffects.drawStoneStatusOverlays(scene)
 end
 
 function Abilities.drawPendingCardPreview(scene, mouseX, mouseY)
-  if scene._pendingCardTargetId ~= "rockfall" and scene._pendingCardTargetId ~= "reinforcement" then
-    return
+  if scene._pendingCardTargetId and not scene._pendingCardTargetState then
+    scene._pendingCardTargetState = AbilityTargeted.createPendingState(scene._pendingCardTargetId)
   end
-  if not scene:isPlayingPhase() or not scene:isMyTurn() then
-    return
-  end
+  AbilityTargeted.drawPendingCardPreview(scene, mouseX, mouseY, scene._pendingCardTargetState)
+end
 
-  local boardLocalX, boardLocalY = scene:toBoardLocal(mouseX, mouseY)
-  if not boardLocalX then
-    return
-  end
+function Abilities.isPlayerAbilitySealed(scene, playerIndex)
+  return AbilityBoardEffects.isPlayerAbilitySealed(scene, playerIndex)
+end
 
-  local canonicalX, canonicalY = scene:localToCanonical(boardLocalX, boardLocalY)
-  local canPlace = false
-  if scene._pendingCardTargetId == "rockfall" then
-    canPlace = Abilities.canPlaceRockfallAtCanonical(scene, canonicalX, canonicalY)
-    local rockfallRule = CardRules.getRockfallRule()
-    local width = math.max(1, rockfallRule.width or Constants.ROCK_OBSTACLE_WIDTH)
-    local height = math.max(1, rockfallRule.height or Constants.ROCK_OBSTACLE_HEIGHT)
-    local color = canPlace and { 0.36, 0.90, 0.50, 0.35 } or { 0.90, 0.30, 0.30, 0.35 }
-    local borderColor = canPlace and { 0.36, 0.90, 0.50, 1.0 } or { 0.90, 0.30, 0.30, 1.0 }
-    love.graphics.setColor(color)
-    love.graphics.rectangle("fill", mouseX - width * 0.5, mouseY - height * 0.5, width, height, 6, 6)
-    love.graphics.setColor(borderColor)
-    love.graphics.rectangle("line", mouseX - width * 0.5, mouseY - height * 0.5, width, height, 6, 6)
-  else
-    canPlace = Abilities.canPlaceReinforcementAtCanonical(scene, canonicalX, canonicalY)
-    local radius = Constants.STONE_RADIUS
-    local color = canPlace and { 0.36, 0.90, 0.50, 0.35 } or { 0.90, 0.30, 0.30, 0.35 }
-    local borderColor = canPlace and { 0.36, 0.90, 0.50, 1.0 } or { 0.90, 0.30, 0.30, 1.0 }
-    love.graphics.setColor(color)
-    love.graphics.circle("fill", mouseX, mouseY, radius)
-    love.graphics.setColor(borderColor)
-    love.graphics.circle("line", mouseX, mouseY, radius)
-  end
+function Abilities.isStoneBoundOnCurrentTurn(scene, stoneId)
+  return AbilityBoardEffects.isStoneBoundOnCurrentTurn(scene, stoneId)
+end
+
+function Abilities.getNextShotPowerMultiplier(scene, playerIndex)
+  return AbilityBoardEffects.getNextShotPowerMultiplier(scene, playerIndex)
+end
+
+function Abilities.getStoneDampingMultiplier(scene, stone)
+  return AbilityBoardEffects.getDampingMultiplierForStone(scene, stone)
 end
 
 function Abilities.applyInvincibleCollisionResponse(firstInvincible, secondInvincible, normalX, normalY, firstVelocity, secondVelocity)
-  if firstInvincible == secondInvincible then
-    return false
-  end
+  return AbilityBuffs.applyInvincibleCollisionResponse(firstInvincible, secondInvincible, normalX, normalY, firstVelocity, secondVelocity)
+end
 
-  -- 충돌 노멀은 first -> second 방향이다.
-  -- 무적 돌 기준으로 "바깥 방향" 노멀을 잡고,
-  -- moving-relative velocity를 반사시켜 무적 돌은 고정, 상대만 튕기게 만든다.
-  local invincibleVelocity
-  local movingVelocity
-  local outwardNormalX
-  local outwardNormalY
+function Abilities.onTurnStart(scene, playerIndex)
+  AbilityBoardEffects.onTurnStart(scene, playerIndex)
+  AbilitySpecial.onTurnStart(scene, playerIndex)
+end
 
-  if firstInvincible then
-    invincibleVelocity = firstVelocity
-    movingVelocity = secondVelocity
-    outwardNormalX = normalX
-    outwardNormalY = normalY
-  else
-    invincibleVelocity = secondVelocity
-    movingVelocity = firstVelocity
-    outwardNormalX = -normalX
-    outwardNormalY = -normalY
-  end
+function Abilities.onTurnEnd(scene, playerIndex)
+  AbilityBoardEffects.onTurnEnd(scene, playerIndex)
+  AbilitySpecial.onTurnEnd(scene, playerIndex)
+end
 
-  local relVx = movingVelocity.vx - invincibleVelocity.vx
-  local relVy = movingVelocity.vy - invincibleVelocity.vy
-  local towardSpeed = relVx * outwardNormalX + relVy * outwardNormalY
-  if towardSpeed < 0 then
-    local reflectScale = -(1 + Constants.PHYSICS_RESTITUTION) * towardSpeed
-    relVx = relVx + reflectScale * outwardNormalX
-    relVy = relVy + reflectScale * outwardNormalY
-    movingVelocity.vx = invincibleVelocity.vx + relVx
-    movingVelocity.vy = invincibleVelocity.vy + relVy
-  end
+function Abilities.onShotPrepare(scene, shotParams)
+  AbilityBoardEffects.onShotPrepare(scene, shotParams)
+  AbilitySpecial.onShotPrepare(scene, shotParams)
+end
 
-  return true
+function Abilities.onShotResolved(scene, shotResult)
+  AbilityBoardEffects.onShotResolved(scene, shotResult)
+  AbilitySpecial.onShotResolved(scene, shotResult)
+end
+
+function Abilities.onStoneOut(scene, stone, cause)
+  AbilityBoardEffects.onStoneOut(scene, stone, cause)
+  AbilitySpecial.onStoneOut(scene, stone, cause)
 end
 
 return Abilities

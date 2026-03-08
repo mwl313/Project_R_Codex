@@ -49,6 +49,12 @@ local function buildPhysicsContext(matchContext)
         return matchContext:applyInvincibleCollisionResponse(firstInvincible, secondInvincible, normalX, normalY, firstVelocity, secondVelocity)
       end
       return false
+    end,
+    getDampingPerSecMultiplier = function(stone)
+      if type(matchContext.getStoneDampingMultiplier) == "function" then
+        return matchContext:getStoneDampingMultiplier(stone)
+      end
+      return 1
     end
   }
 end
@@ -116,7 +122,8 @@ function GameMechanics.applyShotImpulse(matchContext, shotPayload)
   end
 
   local velocity = matchContext:getStoneVelocity(stone.id)
-  local speed = math.max(0, shotPayload.power * Constants.SHOT_SPEED_SCALE)
+  local speedScale = type(shotPayload.shotSpeedScale) == "number" and shotPayload.shotSpeedScale or 1
+  local speed = math.max(0, shotPayload.power * Constants.SHOT_SPEED_SCALE * speedScale)
   velocity.vx = shotPayload.dirX / directionLength * speed
   velocity.vy = shotPayload.dirY / directionLength * speed
   if matchContext._shockwaveOwnerPlayerIndex and stone.ownerPlayerIndex == matchContext._shockwaveOwnerPlayerIndex then

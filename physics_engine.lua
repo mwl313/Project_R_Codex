@@ -189,8 +189,6 @@ function PhysicsEngine.simulateShotStep(context, stepSec)
   local maxX = rules.BOARD_W - rules.STONE_RADIUS
   local minY = rules.STONE_RADIUS
   local maxY = rules.BOARD_H - rules.STONE_RADIUS
-  local damping = math.max(0, 1 - rules.PHYSICS_DAMPING_PER_SEC * stepSec)
-
   for _, stone in ipairs(context.stoneList) do
     local velocity = context.getStoneVelocity(stone.id)
     if stone.alive ~= false then
@@ -238,6 +236,14 @@ function PhysicsEngine.simulateShotStep(context, stepSec)
         velocity.vx = 0
         velocity.vy = 0
       else
+        local dampingPerSecMultiplier = 1
+        if type(context.getDampingPerSecMultiplier) == "function" then
+          local value = context.getDampingPerSecMultiplier(stone)
+          if type(value) == "number" and value == value and value > 0 then
+            dampingPerSecMultiplier = value
+          end
+        end
+        local damping = math.max(0, 1 - rules.PHYSICS_DAMPING_PER_SEC * dampingPerSecMultiplier * stepSec)
         velocity.vx = velocity.vx * damping
         velocity.vy = velocity.vy * damping
         local speed = math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy)

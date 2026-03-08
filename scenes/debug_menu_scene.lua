@@ -14,6 +14,7 @@ local Constants = require("constants")
 local Config = require("config")
 local I18n = require("i18n.i18n")
 local FontManager = require("assets.font_manager")
+local CardRules = require("shared.card_rules")
 local Button = require("ui.button")
 local BackButton = require("ui.back_button")
 local TimeUtils = require("utils.time_utils")
@@ -54,6 +55,14 @@ local function clonePlayingStoneList(stoneList)
       y = stone.y,
       alive = stone.alive ~= false
     }
+  end
+  return cloned
+end
+
+local function cloneStringList(valueList)
+  local cloned = {}
+  for _, value in ipairs(valueList or {}) do
+    cloned[#cloned + 1] = tostring(value)
   end
   return cloned
 end
@@ -217,13 +226,13 @@ local function buildMockMatchRoomState(phase, options)
   return roomState
 end
 
-local function buildCardZoneTestRoomState()
+local function buildCardZoneTestRoomState(cardIdList)
   local roomState = buildMockMatchRoomState(Constants.PHASE_PLAYING)
-  roomState.match.cardSelect.myPickedCards = {
+  roomState.match.cardSelect.myPickedCards = cloneStringList(cardIdList or {
     "reinforcement",
     "rockfall",
     "invincible"
-  }
+  })
   roomState.match.cardSelect.myLocked = true
   roomState.match.cardSelect.opponentLocked = true
   roomState.match.playing.activePlayerIndex = 1
@@ -233,6 +242,10 @@ local function buildCardZoneTestRoomState()
   roomState.match.playing.awaitingSnapshot = false
   roomState.match.playing.shotCommitted = false
   return roomState
+end
+
+local function buildAllTurnCardList()
+  return CardRules.getCardPool(CardRules.GAME_MODE_MULTI)
 end
 
 function DebugMenuScene.new(app)
@@ -375,8 +388,9 @@ function DebugMenuScene:createActionList()
       label = t("debug_menu.action.match_card_zone"),
       onClick = function()
         self._app:goMatch({
-          roomState = buildCardZoneTestRoomState(),
-          localRole = "host"
+          roomState = buildCardZoneTestRoomState(buildAllTurnCardList()),
+          localRole = "host",
+          debugLocalCardSandbox = true
         }, Config.TRANSITION_FORWARD)
       end
     },

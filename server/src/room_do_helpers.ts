@@ -46,6 +46,8 @@ export interface ParsedCardUsePayload {
   turnIndex: number;
   cardId: string;
   target: { x: number; y: number } | null;
+  sourceStoneId: string | null;
+  targetStoneId: string | null;
 }
 
 export interface ParsedRematchVotePayload {
@@ -259,6 +261,8 @@ export function parseCardUsePayload(payload: unknown): ParsedCardUsePayload | nu
     turnIndex?: unknown;
     cardId?: unknown;
     target?: unknown;
+    sourceStoneId?: unknown;
+    targetStoneId?: unknown;
   };
   if (typeof value.turnIndex !== "number" || typeof value.cardId !== "string") {
     return null;
@@ -286,10 +290,30 @@ export function parseCardUsePayload(payload: unknown): ParsedCardUsePayload | nu
     };
   }
 
+  let sourceStoneId: string | null = null;
+  if (typeof value.sourceStoneId === "string") {
+    const normalized = value.sourceStoneId.trim();
+    if (normalized.length <= 0) {
+      return null;
+    }
+    sourceStoneId = normalized;
+  }
+
+  let targetStoneId: string | null = null;
+  if (typeof value.targetStoneId === "string") {
+    const normalized = value.targetStoneId.trim();
+    if (normalized.length <= 0) {
+      return null;
+    }
+    targetStoneId = normalized;
+  }
+
   return {
     turnIndex: value.turnIndex,
     cardId,
-    target
+    target,
+    sourceStoneId,
+    targetStoneId
   };
 }
 
