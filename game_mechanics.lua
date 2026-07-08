@@ -207,4 +207,47 @@ function GameMechanics.updateShotSimulation(matchContext, dt)
   end
 end
 
+-- 충전 상태 관리 (초능력 시스템)
+
+function GameMechanics.initChargeState(matchContext)
+  matchContext._chargePercent = { [1] = 0, [2] = 0 }
+  matchContext._characterIds = { [1] = "", [2] = "" }
+end
+
+function GameMechanics.advanceTurnCharge(matchContext, playerIndex)
+  if type(matchContext._chargePercent) ~= "table" then
+    GameMechanics.initChargeState(matchContext)
+  end
+  local current = tonumber(matchContext._chargePercent[playerIndex]) or 0
+  local nextCharge = math.min(Constants.CHARGE_MAX, current + Constants.CHARGE_PER_TURN)
+  matchContext._chargePercent[playerIndex] = nextCharge
+  matchContext._chargePercent[tostring(playerIndex)] = nextCharge
+end
+
+function GameMechanics.addChargeOnAllyOut(matchContext, playerIndex)
+  if type(matchContext._chargePercent) ~= "table" then
+    GameMechanics.initChargeState(matchContext)
+  end
+  local current = tonumber(matchContext._chargePercent[playerIndex]) or 0
+  local nextCharge = math.min(Constants.CHARGE_MAX, current + Constants.CHARGE_ON_ALLY_OUT)
+  matchContext._chargePercent[playerIndex] = nextCharge
+  matchContext._chargePercent[tostring(playerIndex)] = nextCharge
+end
+
+function GameMechanics.canUseAbility(matchContext, playerIndex)
+  if type(matchContext._chargePercent) ~= "table" then
+    return false
+  end
+  local charge = tonumber(matchContext._chargePercent[playerIndex]) or 0
+  return charge >= Constants.CHARGE_MAX - 0.001
+end
+
+function GameMechanics.consumeCharge(matchContext, playerIndex)
+  if type(matchContext._chargePercent) ~= "table" then
+    GameMechanics.initChargeState(matchContext)
+  end
+  matchContext._chargePercent[playerIndex] = 0
+  matchContext._chargePercent[tostring(playerIndex)] = 0
+end
+
 return GameMechanics

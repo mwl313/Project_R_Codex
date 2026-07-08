@@ -459,4 +459,235 @@ function Abilities.applyInvincibleCollisionResponse(firstInvincible, secondInvin
   return true
 end
 
+---------------------------------------------------------------------------
+-- 초능력 시스템 (Character Abilities)
+---------------------------------------------------------------------------
+
+local Json = require("utils.json")
+
+local CHARACTERS_CACHE = nil
+
+local function loadCharactersData()
+  if CHARACTERS_CACHE then
+    return CHARACTERS_CACHE
+  end
+  if not love or not love.filesystem then
+    CHARACTERS_CACHE = {}
+    return CHARACTERS_CACHE
+  end
+  local isReadOk, raw = pcall(love.filesystem.read, "shared/characters.json")
+  if not isReadOk or type(raw) ~= "string" or raw == "" then
+    CHARACTERS_CACHE = {}
+    return CHARACTERS_CACHE
+  end
+  local isDecoded, parsed = pcall(Json.decode, raw)
+  if not isDecoded or type(parsed) ~= "table" then
+    CHARACTERS_CACHE = {}
+    return CHARACTERS_CACHE
+  end
+  CHARACTERS_CACHE = parsed
+  return CHARACTERS_CACHE
+end
+
+function Abilities.getCharacterAbility(characterId)
+  local data = loadCharactersData()
+  local chars = type(data.characters) == "table" and data.characters or {}
+  local charDef = chars[tostring(characterId or "")]
+  if type(charDef) ~= "table" then
+    return nil
+  end
+  return charDef.ability
+end
+
+function Abilities.getCharacterList()
+  local data = loadCharactersData()
+  local chars = type(data.characters) == "table" and data.characters or {}
+  local order = type(data.characterOrder) == "table" and data.characterOrder or {}
+  local list = {}
+  for _, charId in ipairs(order) do
+    local charDef = chars[tostring(charId)]
+    if charDef then
+      list[#list + 1] = charDef
+    end
+  end
+  return list
+end
+
+function Abilities.getGlobalChargeParams()
+  local data = loadCharactersData()
+  local global = type(data.global) == "table" and data.global or {}
+  return {
+    chargePerTurn = tonumber(global.chargePerTurn) or Constants.CHARGE_PER_TURN,
+    chargeOnAllyOut = tonumber(global.chargeOnAllyOut) or Constants.CHARGE_ON_ALLY_OUT,
+    chargeMax = tonumber(global.chargeMax) or Constants.CHARGE_MAX
+  }
+end
+
+function Abilities.executeShadowStep(scene, playerIndex, targetX, targetY)
+  local stones = scene._playingStoneList
+  if type(stones) ~= "table" then
+    return false, "no_stones"
+  end
+  -- 플레이어가 조준 중인 알 하나를 순간이동
+  local aimStoneId = scene._aimStoneId
+  local targetStone = nil
+  if aimStoneId then
+    for _, stone in ipairs(stones) do
+      if stone.id == aimStoneId and stone.alive ~= false and stone.ownerPlayerIndex == playerIndex then
+        targetStone = stone
+        break
+      end
+    end
+  end
+  if not targetStone then
+    -- 조준 중이 아니면 첫 번째 살아있는 내 알
+    for _, stone in ipairs(stones) do
+      if stone.alive ~= false and stone.ownerPlayerIndex == playerIndex then
+        targetStone = stone
+        break
+      end
+    end
+  end
+  if not targetStone then
+    return false, "no_valid_stone"
+  end
+
+  local radius = Constants.STONE_RADIUS
+  if type(scene.getStoneRadius) == "function" then
+    radius = scene:getStoneRadius(targetStone)
+  elseif type(scene.getStoneRadiusForPlayer) == "function" then
+    radius = scene:getStoneRadiusForPlayer(playerIndex)
+  end
+
+  local tx = clamp(targetX or targetStone.x, radius, Constants.BOARD_W - radius)
+  local ty = clamp(targetY or targetStone.y, radius, Constants.BOARD_H - radius)
+
+  -- 다른 알과 겹치지 않는지 확인
+  for _, stone in ipairs(stones) do
+    if stone.alive ~= false and stone.id ~= targetStone.id then
+      local dx = stone.x - tx
+      local dy = stone.y - ty
+      if dx * dx + dy * dy < (radius * 2 + 4) ^ 2 then
+        return false, "overlap"
+      end
+    end
+  end
+
+  -- 장애물과 겹치는지 확인
+  local obstacles = scene._obstacleList
+  if type(obstacles) == "table" then
+    for _, obstacle in ipairs(obstacles) do
+      local halfW = (obstacle.width or Constants.ROCK_OBSTACLE_WIDTH) * 0.5
+      local halfH = (obstacle.height or Constants.ROCK_OBSTACLE_HEIGHT) * 0.5
+      local cx = clamp(tx, obstacle.x - halfW, obstacle.x + halfW)
+      local cy = clamp(ty, obstacle.y - halfH, obstacle.y + halfH)
+      if (tx - cx) ^ 2 + (ty - cy) ^ 2 < radius ^ 2 then
+        return false, "overlap_obstacle"
+      end
+    end
+  end
+
+  targetStone.x = tx
+  targetStone.y = ty
+
+  -- 순간이동 후 추가 샷 허용
+  scene._playingShotBudget = scene._playingShotBudget + 1
+  return true, "ok"
+end
+
+function Abilities.executeMeteor(scene, _playerIndex)
+  local centerX = Constants.BOARD_W * 0.5
+  local centerY = Constants.BOARD_H * 0.5
+
+  -- 충격파 (기존 shockwave 대비 1.5배)
+  local multiplier = 1.5
+  local shockwaveRadius = Constants.STONE_RADIUS * Constants.SHOCKWAVE_RANGE_MULTIPLIER * multiplier
+  local impulseStrength = Constants.SHOCKWAVE_STRENGTH * multiplier
+
+  if scene._effectManager then
+    scene._effectManager:addShockwavePulse(centerX, centerY, shockwaveRadius)
+  end
+
+  for _, stone in ipairs(scene._playingStoneList) do
+    if stone.alive ~= false then
+      local dx = stone.x - centerX
+      local dy = stone.y - centerY
+      local distance = math.sqrt(dx * dx + dy * dy)
+      if distance > 0 and distance <= shockwaveRadius then
+        local velocity = scene:getStoneVelocity(stone.id)
+        velocity.vx = velocity.vx + (dx / distance) * impulseStrength
+        velocity.vy = velocity.vy + (dy / distance) * impulseStrength
+      end
+    end
+  end
+
+  -- 중앙 장애물 생성
+  local obstacleW = 70
+  local obstacleH = 70
+  scene._obstacleList[#scene._obstacleList + 1] = {
+    id = "meteor_" .. tostring(os.time()),
+    x = centerX,
+    y = centerY,
+    width = obstacleW,
+    height = obstacleH
+  }
+
+  if type(scene.startShotSimulation) == "function" then
+    scene:startShotSimulation()
+  else
+    -- GameMechanics 호환
+    local GameMechanics = require("game_mechanics")
+    GameMechanics.startShotSimulation(scene)
+  end
+  return true, "ok"
+end
+
+function Abilities.executeDivineShield(scene, playerIndex)
+  local currentTurn = scene._playingTurnIndex or 1
+  scene._invincibleTurnByPlayer = scene._invincibleTurnByPlayer or {}
+  scene._invincibleTurnByPlayer[playerIndex] = currentTurn + 1
+  scene._invincibleTurnByPlayer[tostring(playerIndex)] = currentTurn + 1
+  -- 디바인실드는 자신 턴 + 다음 상대 턴까지 (2턴)
+  if scene._invincibleTurnByPlayer[playerIndex] then
+    scene._invincibleTurnByPlayer[playerIndex] = math.max(
+      scene._invincibleTurnByPlayer[playerIndex] or 0,
+      currentTurn + 1
+    )
+  end
+  -- TODO: 반사 충돌 효과는 physics_engine에서 invincible collision response 활용
+  return true, "ok"
+end
+
+function Abilities.executeComboFinisher(scene, _playerIndex)
+  -- 추가 샷 1회 (총 2샷)
+  scene._playingShotBudget = (scene._playingShotBudget or 1) + 1
+  -- 콤보 배율 플래그 (첫 샷 아웃 시 파워 증가)
+  scene._comboFinisherActive = true
+  scene._comboFinisherFirstShotDone = false
+  return true, "ok"
+end
+
+function Abilities.executeAbility(scene, playerIndex, characterId, target)
+  if not characterId or characterId == "" then
+    return false, "no_character"
+  end
+  local ability = Abilities.getCharacterAbility(characterId)
+  if not ability then
+    return false, "no_ability"
+  end
+
+  local abilityId = ability.id
+  if abilityId == "shadow_step" then
+    return Abilities.executeShadowStep(scene, playerIndex, (target and target.x), (target and target.y))
+  elseif abilityId == "meteor" then
+    return Abilities.executeMeteor(scene, playerIndex)
+  elseif abilityId == "divine_shield" then
+    return Abilities.executeDivineShield(scene, playerIndex)
+  elseif abilityId == "combo_finisher" then
+    return Abilities.executeComboFinisher(scene, playerIndex)
+  end
+
+  return false, "unknown_ability"
+end
+
 return Abilities

@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "global": {
+    "chargePerTurn": 0.25,
+    "chargeOnAllyOut": 0.15,
+    "chargeMax": 1.0,
+    "turnTimeLimitSec": 20
+  },
+  "characters": {
+    "night_lord": {
+      "id": "night_lord",
+      "nameKo": "나이트로드",
+      "nameEn": "Night Lord",
+      "descKo": "그림자처럼 나타나 적의 빈틈을 찌르는 암살자",
+      "ability": {
+        "id": "shadow_step",
+        "nameKo": "섀도우스텝",
+        "nameEn": "Shadow Step",
+        "descKo": "내 알 1개를 원하는 위치로 순간이동시킵니다. 이동 후 추가 샷이 가능합니다.",
+        "targetMode": "POINT",
+        "effects": {
+          "teleportStone": true,
+          "bonusShot": true
+        }
+      }
+    },
+    "arch_mage": {
+      "id": "arch_mage",
+      "nameKo": "아크메이지",
+      "nameEn": "Arch Mage",
+      "descKo": "하늘에서 운석을 불러내 전장을 초토화하는 마법사",
+      "ability": {
+        "id": "meteor",
+        "nameKo": "메테오",
+        "nameEn": "Meteor",
+        "descKo": "보드 중앙에 운석을 떨어뜨려 주변 모든 알에 강한 충격파를 가하고 장애물을 생성합니다.",
+        "targetMode": "NONE",
+        "effects": {
+          "centerImpact": true,
+          "shockwaveMultiplier": 1.5,
+          "spawnObstacle": true,
+          "obstacleWidth": 70,
+          "obstacleHeight": 70
+        }
+      }
+    },
+    "paladin": {
+      "id": "paladin",
+      "nameKo": "팔라딘",
+      "nameEn": "Paladin",
+      "descKo": "신성한 방패로 아군을 지키는 수호기사",
+      "ability": {
+        "id": "divine_shield",
+        "nameKo": "디바인실드",
+        "nameEn": "Divine Shield",
+        "descKo": "이번 턴과 다음 상대 턴 동안 내 모든 알이 무적이 되고, 충돌 시 상대 알이 튕겨나갑니다.",
+        "targetMode": "NONE",
+        "effects": {
+          "invincible": true,
+          "invincibleTurns": 2,
+          "reflectCollision": true
+        }
+      }
+    },
+    "aran": {
+      "id": "aran",
+      "nameKo": "아란",
+      "nameEn": "Aran",
+      "descKo": "멈추지 않는 연속 공격으로 적을 압도하는 전사",
+      "ability": {
+        "id": "combo_finisher",
+        "nameKo": "콤보피니셔",
+        "nameEn": "Combo Finisher",
+        "descKo": "이번 턴에 연속 2샷이 가능하며, 첫 샷으로 적 알을 아웃시키면 두 번째 샷의 파워가 1.5배 증가합니다.",
+        "targetMode": "NONE",
+        "effects": {
+          "bonusShots": 2,
+          "comboPowerMultiplier": 1.5
+        }
+      }
+    }
+  },
+  "characterOrder": [
+    "night_lord",
+    "arch_mage",
+    "paladin",
+    "aran"
+  ]
+}

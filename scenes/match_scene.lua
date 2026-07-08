@@ -26,6 +26,7 @@ local CutsceneManager = require("ui.cutscene_manager")
 local EffectManager = require("effects.effect_manager")
 local Abilities = require("abilities")
 local GameMechanics = require("game_mechanics")
+local ChargeGauge = require("ui.charge_gauge")
 local TimeUtils = require("utils.time_utils")
 local InputCaptureGuard = require("utils.input_capture_guard")
 
@@ -387,7 +388,11 @@ function MatchScene.new(app)
     _resultLobbyButton = nil,
     _isResultVotePending = false,
     _myResultVote = nil,
-    _opponentResultVote = nil
+    _opponentResultVote = nil,
+    _myCharacterId = "",
+    _opponentCharacterId = "",
+    _chargePercent = { [1] = 0, [2] = 0 },
+    _chargeGaugeShown = true
   }
   setmetatable(instance, MatchScene)
   instance._effectManager = EffectManager.new()
@@ -465,6 +470,30 @@ function MatchScene.new(app)
   })
   instance._inGameChat = InGameChat.new(app)
   instance._cutsceneManager = CutsceneManager.new()
+
+  -- 초능력 충전 게이지 (하단에 표시)
+  instance._myChargeGauge = ChargeGauge.new({
+    x = boardX,
+    y = Constants.BASE_WORLD_H - 76,
+    w = Constants.BOARD_W,
+    h = 64,
+    characterId = "",
+    chargePercent = 0,
+    language = app:getLanguage(),
+    onAbilityClick = function()
+      instance:requestAbilityUse()
+    end
+  })
+  instance._opponentChargeGauge = ChargeGauge.new({
+    x = boardX,
+    y = boardY - 72,
+    w = Constants.BOARD_W,
+    h = 64,
+    characterId = "",
+    chargePercent = 0,
+    enabled = false,
+    language = app:getLanguage()
+  })
 
   return instance
 end
@@ -1671,6 +1700,37 @@ function MatchScene:requestResultVote(action)
   end
 end
 
+function MatchScene:requestAbilityUse()
+  if not self:isPlayingPhase() or not self:isMyTurn() then
+    self:setStatus(t("match.status.cannot_use_ability_now"), Constants.COLOR_DANGER)
+    return
+  end
+  local myIndex = self:getMyPlayerIndex()
+  if not GameMechanics.canUseAbility(self, myIndex) then
+    self:setStatus(t("match.status.ability_not_charged"), Constants.COLOR_DANGER)
+    return
+  end
+  local ability = Abilities.getCharacterAbility(self._myCharacterId)
+  if not ability then
+    return
+  end
+
+  -- 서버로 초능력 사용 요청 전송
+  local payload = {
+    characterId = self._myCharacterId,
+    abilityId = ability.id
+  }
+  -- 타겟 모드가 POINT면 현재 조준 중인 좌표도 같이 보냄
+  if ability.targetMode == "POINT" then
+    local targetX, targetY = self:getAimCursorWorldPosition()
+    payload.targetX = targetX
+    payload.targetY = targetY
+  end
+
+  self._app:sendEnvelope("client.match.ability.use", payload)
+  self:setStatus(t("match.status.ability_use_submit"), Constants.COLOR_TEXT_SUB)
+end
+
 function MatchScene:beginAimDrag(worldX, worldY)
   if not self:isShotInputEnabled() then
     return
@@ -2010,6 +2070,9 @@ function MatchScene:applyRoomState(payload)
     if type(playing.turnIndex) == "number" then
       self._playingTurnIndex = playing.turnIndex
     end
+    -- 초능력 충전: 매 턴 시작 시 해당 플레이어 충전
+    local activePlayer = playing.activePlayer or 1
+    GameMechanics.advanceTurnCharge(self, activePlayer)
     if type(playing.activePlayerIndex) == "number" then
       self._activePlayerIndex = playing.activePlayerIndex
     end
@@ -2109,6 +2172,16 @@ function MatchScene:applyRoomState(payload)
     if self._cardAnimator and (not self._cardAnimator:isOverlayVisible()) then
       self._cardAnimator = nil
     end
+    -- 초능력 사용 결과 처리
+    if payload.abilityResult then
+      local ar = payload.abilityResult
+      if ar.ownerPlayerIndex and ar.characterId and ar.abilityId then
+        local ability = Abilities.getCharacterAbility(ar.characterId)
+        if ability then
+          Abilities.executeAbility(self, ar.ownerPlayerIndex, ar.characterId, ar.target)
+        end
+      end
+    end
   else
     self._cardAnimator = nil
   end
@@ -2182,6 +2255,21 @@ function MatchScene:update(dt)
       isStoneDragging = self._isAimDragging
     })
   end
+
+  -- 초능력 충전 게이지 업데이트
+  if self:isPlayingPhase() and self._chargeGaugeShown then
+    local myIndex = self:getMyPlayerIndex()
+    local oppIndex = myIndex == 1 and 2 or 1
+    self._myChargeGauge:setCharacterId(self._myCharacterId)
+    self._myChargeGauge:setCharge(tonumber(self._chargePercent[myIndex]) or 0)
+    self._myChargeGauge:setEnabled(true)
+    self._myChargeGauge:update(dt)
+    self._opponentChargeGauge:setCharacterId(self._opponentCharacterId)
+    self._opponentChargeGauge:setCharge(tonumber(self._chargePercent[oppIndex]) or 0)
+    self._opponentChargeGauge:setEnabled(false)
+    self._opponentChargeGauge:update(dt)
+  end
+
   if self._inGameChat and self:isInGameChatAvailable() then
     self._inGameChat:update(dt)
   elseif self._inGameChat then
@@ -2634,6 +2722,11 @@ function MatchScene:draw()
     if self._playingCardHandBar then
       self._playingCardHandBar:draw()
     end
+    -- 초능력 충전 게이지 표시
+    if self._chargeGaugeShown then
+      self._myChargeGauge:draw(mouseX, mouseY)
+      self._opponentChargeGauge:draw(mouseX, mouseY)
+    end
     self._surrenderButton.isEnabled = not self._isSurrenderPending
     self._surrenderButton:draw(mouseX, mouseY)
   elseif self._roomState.phase == Constants.PHASE_RESULT then
@@ -2667,10 +2760,6 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
     return
   end
   if self:isCutsceneInputBlocked() then
-    return
-  end
-
-  if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
     return
   end
 
@@ -2710,6 +2799,15 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
   if self:isPlayingPhase() then
     if self._predictiveRollbackState or self:isPredictiveRollbackLocked() then
       return
+    end
+    if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
+      return
+    end
+    -- 초능력 게이지 클릭 처리
+    if self._chargeGaugeShown then
+      if self._myChargeGauge:mousepressed(mouseX, mouseY, button) then
+        return
+      end
     end
     if self._surrenderButton:isHovered(mouseX, mouseY) and self._surrenderButton.isEnabled then
       self._surrenderButton:onClick()
