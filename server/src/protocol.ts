@@ -15,6 +15,8 @@ export type ServerEventType =
   | "match.card.cutsceneStart"
   | "match.card.cutsceneEnd"
   | "match.turn.cardApplied"
+  | "match.character.selected"
+  | "match.ability.used"
   | "match.turn.start"
   | "match.turn.shotAccepted"
   | "match.turn.snapshotRequested"
@@ -33,7 +35,9 @@ export type ClientCommandType =
   | "client.match.rematch.vote"
   | "client.match.surrender"
   | "client.match.turn.shot"
-  | "client.match.turn.snapshot";
+  | "client.match.turn.snapshot"
+  | "client.match.character.select"
+  | "client.match.ability.use";
 
 export interface WsEnvelope<T = unknown> {
   type: string;

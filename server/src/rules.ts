@@ -1,5 +1,6 @@
 import sharedRulesJson from "../../shared/gameplay_rules.json";
 import { CARD_POOL as CARD_POOL_FROM_CARD_RULES } from "./card_rules";
+import charactersJson from "../../shared/characters.json";
 
 interface SharedRules {
   RULES_VERSION: number;
@@ -218,3 +219,11 @@ export const CHAT_ALLOWED_PHASES = new Set<string>([
   PHASE_PLAYING,
   PHASE_RESULT
 ]);
+
+// Character / ability globals from characters.json
+export const CHARGE_PER_TURN: number =
+  (charactersJson as { global?: { chargePerTurn?: number } }).global?.chargePerTurn ?? 0.25;
+export const CHARGE_ON_ALLY_OUT: number =
+  (charactersJson as { global?: { chargeOnAllyOut?: number } }).global?.chargeOnAllyOut ?? 0.15;
+export const CHARGE_MAX: number =
+  (charactersJson as { global?: { chargeMax?: number } }).global?.chargeMax ?? 1.0;

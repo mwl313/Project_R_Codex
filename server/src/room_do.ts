@@ -3,6 +3,9 @@ import {
   BOARD_W,
   CARD_PICK_SEC,
   CARD_POOL,
+  CHARGE_MAX,
+  CHARGE_ON_ALLY_OUT,
+  CHARGE_PER_TURN,
   CHAT_ALLOWED_PHASES,
   CHAT_MAX_LENGTH,
   CHAT_RATE_BURST,
@@ -37,6 +40,7 @@ import {
 } from "./rules";
 import { errorPayload, serializeEnvelope, type WsEnvelope } from "./protocol";
 import { applyTurnCardAbility } from "./abilities";
+import charactersJson from "../../shared/characters.json";
 import {
   cloneObstacles,
   clonePlacementStones,
@@ -194,6 +198,8 @@ interface RoomState {
   createdAtMs: number;
   match: MatchState;
   result: ResultState | null;
+  characterIds: (string | null)[];
+  chargePercent: number[];
 }
 
 interface Session {
@@ -306,7 +312,9 @@ function createDefaultRoomState(): RoomState {
         stones: []
       }
     },
-    result: null
+    result: null,
+    characterIds: [null, null],
+    chargePercent: [0, 0]
   };
 }
 
@@ -591,6 +599,14 @@ export class RoomDO {
       if (this.room.result.guestVote !== "rematch" && this.room.result.guestVote !== "to_lobby") {
         this.room.result.guestVote = null;
       }
+    }
+
+    // Migrate character/charge state
+    if (!Array.isArray(this.room.characterIds) || this.room.characterIds.length < 2) {
+      this.room.characterIds = [null, null];
+    }
+    if (!Array.isArray(this.room.chargePercent) || this.room.chargePercent.length < 2) {
+      this.room.chargePercent = [0, 0];
     }
   }
 
@@ -984,7 +1000,9 @@ export class RoomDO {
             pausedRemainingMs: this.room.match.playing.cutscene.pausedRemainingMs
           },
           stones: clonePlayingStones(this.room.match.playing.stones)
-        }
+        },
+        characterIds: [...this.room.characterIds],
+        chargePercent: [...this.room.chargePercent]
       },
       result: this.room.result
         ? {
@@ -1495,7 +1513,9 @@ export class RoomDO {
           stones: []
         }
       },
-      result: null
+      result: null,
+      characterIds: [null, null],
+      chargePercent: [0, 0]
     };
     this.pollState = {
       nextEventId: 1,
@@ -1793,6 +1813,8 @@ export class RoomDO {
     this.room.match.playing.shotCommitted = false;
     this.room.match.playing.awaitingSnapshot = false;
     this.room.match.playing.stones = [];
+    this.room.characterIds = [null, null];
+    this.room.chargePercent = [0, 0];
   }
 
   private async startMatchFlow(): Promise<void> {
@@ -1924,8 +1946,118 @@ export class RoomDO {
       await this.handleTurnSnapshot(token, session, envelope.payload);
       return;
     }
+    if (envelope.type === "client.match.character.select") {
+      await this.handleCharacterSelect(token, session, envelope.payload);
+      return;
+    }
+    if (envelope.type === "client.match.ability.use") {
+      await this.handleAbilityUse(token, session, envelope.payload);
+      return;
+    }
 
     this.emitToToken(token, "error.generic", errorPayload("unsupported_command"));
+  }
+
+  private async handleCharacterSelect(token: string, session: Session, payload: unknown): Promise<void> {
+    if (this.room.phase !== PHASE_WAITING && this.room.phase !== PHASE_TURN_ORDER && this.room.phase !== PHASE_PLACEMENT_PRIVATE && this.room.phase !== PHASE_PLACEMENT_REVEAL) {
+      this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
+      return;
+    }
+
+    const characterId = typeof (payload as { characterId?: unknown }).characterId === "string"
+      ? (payload as { characterId: string }).characterId.trim()
+      : null;
+    if (!characterId || characterId.length === 0) {
+      this.emitToToken(token, "error.generic", errorPayload("invalid_character_id"));
+      return;
+    }
+
+    const slot = this.getSlotByRole(session.role);
+    if (!slot.token || slot.token !== token) {
+      this.emitToToken(token, "error.generic", errorPayload("invalid_token"));
+      return;
+    }
+
+    const playerIndex = session.playerIndex;
+    this.room.characterIds[playerIndex - 1] = characterId;
+
+    await this.saveState();
+    this.emitBroadcast("match.character.selected", {
+      playerIndex,
+      characterId
+    });
+    this.broadcastRoomState();
+  }
+
+  private async handleAbilityUse(token: string, session: Session, payload: unknown): Promise<void> {
+    if (this.room.phase !== PHASE_PLAYING) {
+      this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
+      return;
+    }
+    if (session.playerIndex !== this.room.match.playing.activePlayerIndex) {
+      this.emitToToken(token, "error.generic", errorPayload("not_your_turn"));
+      return;
+    }
+    if (this.room.match.playing.cutscene.active) {
+      this.emitToToken(token, "error.generic", errorPayload("cutscene_active"));
+      return;
+    }
+    if (this.room.match.playing.awaitingSnapshot) {
+      this.emitToToken(token, "error.generic", errorPayload("awaiting_snapshot"));
+      return;
+    }
+
+    const rawPayload = payload as { characterId?: unknown; abilityId?: unknown; target?: unknown };
+    const characterId = typeof rawPayload.characterId === "string" ? rawPayload.characterId.trim() : "";
+    const abilityId = typeof rawPayload.abilityId === "string" ? rawPayload.abilityId.trim() : "";
+
+    if (!characterId || !abilityId) {
+      this.emitToToken(token, "error.generic", errorPayload("invalid_payload"));
+      return;
+    }
+
+    const playerIndex = session.playerIndex;
+    const slot = this.getSlotByRole(session.role);
+    if (!slot.token || slot.token !== token) {
+      this.emitToToken(token, "error.generic", errorPayload("invalid_token"));
+      return;
+    }
+
+    // Verify character belongs to player
+    if (this.room.characterIds[playerIndex - 1] !== characterId) {
+      this.emitToToken(token, "error.generic", errorPayload("character_mismatch"));
+      return;
+    }
+
+    // Validate ability definition from characters.json
+    const charactersData = (charactersJson as { characters?: Record<string, { ability?: { id?: string } }> }).characters;
+    const characterDef = charactersData?.[characterId];
+    if (!characterDef || !characterDef.ability || characterDef.ability.id !== abilityId) {
+      this.emitToToken(token, "error.generic", errorPayload("invalid_ability"));
+      return;
+    }
+
+    // Check charge
+    if (this.room.chargePercent[playerIndex - 1] < CHARGE_MAX) {
+      this.emitToToken(token, "error.generic", errorPayload("charge_not_ready"));
+      return;
+    }
+
+    // Reset charge
+    this.room.chargePercent[playerIndex - 1] = 0;
+
+    const target = rawPayload.target !== undefined
+      ? (rawPayload.target as { x?: number; y?: number })
+      : undefined;
+
+    await this.saveState();
+    this.emitBroadcast("match.ability.used", {
+      ownerPlayerIndex: playerIndex,
+      characterId,
+      abilityId,
+      target: target ?? null
+    });
+    this.broadcastRoomState();
   }
 
   private async handleMatchStart(token: string, session: Session): Promise<void> {
@@ -2199,6 +2331,10 @@ export class RoomDO {
     this.room.timers.turnEndsAtMs = turnEndsAtMs;
     this.room.timers.snapshotEndsAtMs = undefined;
     this.room.timers.cutsceneEndsAtMs = undefined;
+
+    // Charge per turn for the active player
+    const chargeIdx = activePlayerIndex - 1;
+    this.room.chargePercent[chargeIdx] = Math.min(CHARGE_MAX, this.room.chargePercent[chargeIdx] + CHARGE_PER_TURN);
   }
 
   private broadcastTurnStart(): void {
@@ -2785,8 +2921,21 @@ export class RoomDO {
       stones: clonePlayingStones(this.room.match.playing.stones)
     });
 
+    // Detect ally stone outs for charge
+    const prevStones = [...this.room.match.playing.stones];
     if (await this.settleResultIfNeeded()) {
       return;
+    }
+
+    // Charge on ally out: when the active player's stones go from alive to dead
+    for (const prevStone of prevStones) {
+      if (prevStone.ownerPlayerIndex === this.room.match.playing.activePlayerIndex && prevStone.alive) {
+        const currentStone = this.room.match.playing.stones.find((s) => s.id === prevStone.id);
+        if (currentStone && !currentStone.alive) {
+          const chargeIdx = this.room.match.playing.activePlayerIndex - 1;
+          this.room.chargePercent[chargeIdx] = Math.min(CHARGE_MAX, this.room.chargePercent[chargeIdx] + CHARGE_ON_ALLY_OUT);
+        }
+      }
     }
 
     this.room.match.playing.turnIndex += 1;
