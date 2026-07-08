@@ -86,6 +86,9 @@ local function createSceneFactoryTable()
     single_campaign = function(app)
       return require("scenes.single_campaign_scene").new(app)
     end,
+    character_select = function(app)
+      return require("scenes.character_select_scene").new(app)
+    end,
     single_deck_manage = function(app)
       return require("scenes.single_deck_manage_scene").new(app)
     end,

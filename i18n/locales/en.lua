@@ -345,6 +345,10 @@ local LocaleEn = {
         bind_random_enemy = "Boss Gimmick: Random Bind"
       }
     },
+    character_select = {
+      title = "Choose Your Psychic",
+      subtitle = "Select your character"
+    },
     wave = {
       title = "Single Wave Endless",
       stage_line = "Stage {stage} / Wave {wave}",
@@ -781,7 +785,10 @@ local LocaleEn = {
       server_error = "Server error: {code}",
       room_closed = "Room has been closed.",
       server_close = "Server event disconnected: {reason}",
-      server_error_event = "Server event error: {message}"
+      server_error_event = "Server event error: {message}",
+      ability_use_submit = "Requesting ability use...",
+      ability_not_charged = "Ability is not yet charged",
+      cannot_use_ability_now = "Cannot use ability right now"
     },
     result = {
       title = "RESULT - {title}",

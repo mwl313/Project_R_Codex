@@ -345,6 +345,10 @@ local LocaleKo = {
         bind_random_enemy = "보스 기믹: 무작위 결박"
       }
     },
+    character_select = {
+      title = "초능력자 선택",
+      subtitle = "당신의 초능력자를 고르세요"
+    },
     wave = {
       title = "싱글 웨이브 무한모드",
       stage_line = "Stage {stage} / Wave {wave}",
@@ -781,7 +785,10 @@ local LocaleKo = {
       server_error = "서버 오류: {code}",
       room_closed = "방이 종료되었습니다.",
       server_close = "서버 이벤트 연결 종료: {reason}",
-      server_error_event = "서버 이벤트 오류: {message}"
+      server_error_event = "서버 이벤트 오류: {message}",
+      ability_use_submit = "초능력 발동 요청 중...",
+      ability_not_charged = "초능력이 아직 충전되지 않았습니다",
+      cannot_use_ability_now = "지금은 초능력을 사용할 수 없습니다"
     },
     result = {
       title = "RESULT - {title}",

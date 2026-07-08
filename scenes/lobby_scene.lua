@@ -142,6 +142,13 @@ function LobbyScene:enter(params)
   self:rebuildLocalizedUi()
   self._statusText = params and params.statusText or ""
   self._statusColor = params and params.statusColor or Constants.COLOR_TEXT_SUB
+
+  if params and params.selectedCharacterId then
+    self._app:goMatch({
+      characterId = params.selectedCharacterId
+    }, Config.TRANSITION_FORWARD)
+    return
+  end
 end
 
 function LobbyScene:rebuildLocalizedUi()
@@ -370,7 +377,7 @@ end
 
 function LobbyScene:handleMenuClick(menuId)
   if menuId == "play" then
-    self._app:goPlay({
+    self._app:goScene("character_select", {
       backScene = "lobby"
     }, Config.TRANSITION_FORWARD)
     return
