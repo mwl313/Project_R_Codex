@@ -2080,9 +2080,19 @@ function MatchScene:applyRoomState(payload)
     if type(playing.turnIndex) == "number" then
       self._playingTurnIndex = playing.turnIndex
     end
-    -- 초능력 충전: 매 턴 시작 시 해당 플레이어 충전
-    local activePlayer = playing.activePlayer or 1
-    GameMechanics.advanceTurnCharge(self, activePlayer)
+    -- 초능력 충전: 서버 chargePercent 동기화 (있으면 덮어쓰기)
+    if type(playing.chargePercent) == "table" then
+      local p1 = tonumber(playing.chargePercent[1]) or 0
+      local p2 = tonumber(playing.chargePercent[2]) or 0
+      self._chargePercent[1] = p1
+      self._chargePercent[tostring(1)] = p1
+      self._chargePercent[2] = p2
+      self._chargePercent[tostring(2)] = p2
+    else
+      -- fallback: 서버 chargePercent 없으면 로컬에서 진행
+      local activePlayer = playing.activePlayer or 1
+      GameMechanics.advanceTurnCharge(self, activePlayer)
+    end
     if type(playing.activePlayerIndex) == "number" then
       self._activePlayerIndex = playing.activePlayerIndex
     end
