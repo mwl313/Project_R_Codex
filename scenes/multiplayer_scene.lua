@@ -33,7 +33,8 @@ function MultiplayerScene.new(app)
     _searchButton = nil,
     _statusText = "",
     _statusColor = Constants.COLOR_TEXT_SUB,
-    _lastLanguage = app:getLanguage()
+    _lastLanguage = app:getLanguage(),
+    _selectedCharacterId = ""
   }
   setmetatable(instance, MultiplayerScene)
   instance:rebuildLocalizedUi()
@@ -52,7 +53,7 @@ function MultiplayerScene:rebuildLocalizedUi()
     y = 280,
     label = t("multiplayer.menu.create_room"),
     onClick = function()
-      self._app:createRoom()
+      self._app:createRoom(self._selectedCharacterId)
       self._statusText = t("multiplayer.status.creating_room")
       self._statusColor = Constants.COLOR_TEXT_SUB
     end
@@ -64,7 +65,8 @@ function MultiplayerScene:rebuildLocalizedUi()
     label = t("multiplayer.menu.search_room"),
     onClick = function()
       self._app:goRoomSearch({
-        backScene = "multiplayer"
+        backScene = "multiplayer",
+        selectedCharacterId = self._selectedCharacterId
       }, Config.TRANSITION_FORWARD)
     end
   })
@@ -74,6 +76,7 @@ function MultiplayerScene:enter(params)
   self._backScene = (params and params.backScene) or "play"
   self._statusText = (params and params.statusText) or ""
   self._statusColor = (params and params.statusColor) or Constants.COLOR_TEXT_SUB
+  self._selectedCharacterId = tostring((params and params.selectedCharacterId) or "")
   self:rebuildLocalizedUi()
 end
 

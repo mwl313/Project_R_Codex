@@ -58,7 +58,8 @@ function RoomSearchScene.new(app)
     _lastLanguage = app:getLanguage(),
     _pasteButton = nil,
     _joinButton = nil,
-    _backButton = nil
+    _backButton = nil,
+    _selectedCharacterId = ""
   }
   setmetatable(instance, RoomSearchScene)
 
@@ -106,6 +107,7 @@ function RoomSearchScene:enter(params)
   self._backScene = (params and params.backScene) or "multiplayer"
   self._statusText = params and params.statusText or ""
   self._statusColor = params and params.statusColor or Constants.COLOR_TEXT_SUB
+  self._selectedCharacterId = tostring((params and params.selectedCharacterId) or "")
   self._roomCodeInput:setFocus(true)
   self:rebuildLocalizedUi()
 end
@@ -122,7 +124,7 @@ function RoomSearchScene:requestJoin()
     self:setStatus(t("room_search.status.code_len_invalid"), Constants.COLOR_DANGER)
     return
   end
-  self._app:joinRoom(roomCode)
+  self._app:joinRoom(roomCode, self._selectedCharacterId)
   self:setStatus(t("room_search.status.joining"), Constants.COLOR_TEXT_SUB)
 end
 

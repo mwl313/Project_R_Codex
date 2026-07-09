@@ -60,7 +60,8 @@ function WaitingRoomScene.new(app)
     _sendButton = nil,
     _leaveButton = nil,
     _lastLanguage = app:getLanguage(),
-    _isCoinTossFlowStarted = false
+    _isCoinTossFlowStarted = false,
+    _selectedCharacterId = ""
   }
   setmetatable(instance, WaitingRoomScene)
 
@@ -134,6 +135,7 @@ function WaitingRoomScene:enter(params)
   end
   self._chatMessageList = {}
   self._isCoinTossFlowStarted = false
+  self._selectedCharacterId = tostring((params and params.selectedCharacterId) or "")
   if params and params.statusText then
     self:setStatus(params.statusText, params.statusColor)
   end
@@ -418,7 +420,8 @@ function WaitingRoomScene:onServerEnvelope(envelope)
       end
       if self._roomState.phase and self._roomState.phase ~= Constants.PHASE_WAITING then
         self._app:goMatch({
-          roomState = self._roomState
+          roomState = self._roomState,
+          selectedCharacterId = self._selectedCharacterId
         }, Config.TRANSITION_FORWARD)
         return
       end
@@ -496,7 +499,8 @@ function WaitingRoomScene:onServerEnvelope(envelope)
       local sceneName = myPlayerIndex == firstPlayerIndex and "coinTossFirst" or "coinTossSecond"
       self._app:goScene(sceneName, {
         roomState = self._roomState,
-        nextSceneName = "match"
+        nextSceneName = "match",
+        selectedCharacterId = self._selectedCharacterId
       }, Config.TRANSITION_FORWARD)
       return
     end

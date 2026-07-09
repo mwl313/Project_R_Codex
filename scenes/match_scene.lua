@@ -473,11 +473,11 @@ function MatchScene.new(app)
   instance._inGameChat = InGameChat.new(app)
   instance._cutsceneManager = CutsceneManager.new()
 
-  -- 초능력 충전 게이지 (하단에 표시)
+  -- 초능력 충전 게이지 (보드 오른쪽 아래)
   instance._myChargeGauge = ChargeGauge.new({
-    x = boardX,
+    x = Constants.BASE_WORLD_W - Constants.CHARGE_GAUGE_W - 20,
     y = Constants.BASE_WORLD_H - 76,
-    w = Constants.BOARD_W,
+    w = Constants.CHARGE_GAUGE_W,
     h = 64,
     characterId = "",
     chargePercent = 0,
@@ -487,9 +487,9 @@ function MatchScene.new(app)
     end
   })
   instance._opponentChargeGauge = ChargeGauge.new({
-    x = boardX,
+    x = Constants.BASE_WORLD_W - Constants.CHARGE_GAUGE_W - 20,
     y = boardY - 72,
-    w = Constants.BOARD_W,
+    w = Constants.CHARGE_GAUGE_W,
     h = 64,
     characterId = "",
     chargePercent = 0,
@@ -586,6 +586,9 @@ function MatchScene:enter(params)
     self._effectManager:clear()
   end
 
+  if params and params.selectedCharacterId and params.selectedCharacterId ~= "" then
+    self._myCharacterId = tostring(params.selectedCharacterId)
+  end
   if params and type(params.roomState) == "table" then
     self:applyRoomState(params.roomState)
   end
@@ -2081,9 +2084,9 @@ function MatchScene:applyRoomState(payload)
       self._playingTurnIndex = playing.turnIndex
     end
     -- 초능력 충전: 서버 chargePercent 동기화 (있으면 덮어쓰기)
-    if type(playing.chargePercent) == "table" then
-      local p1 = tonumber(playing.chargePercent[1]) or 0
-      local p2 = tonumber(playing.chargePercent[2]) or 0
+    if type(payload.match.chargePercent) == "table" then
+      local p1 = tonumber(payload.match.chargePercent[1]) or 0
+      local p2 = tonumber(payload.match.chargePercent[2]) or 0
       self._chargePercent[1] = p1
       self._chargePercent[tostring(1)] = p1
       self._chargePercent[2] = p2

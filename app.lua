@@ -601,25 +601,33 @@ function App:checkRulesVersion(serverVersion)
   }), Constants.COLOR_DANGER)
 end
 
-function App:createRoom()
+function App:createRoom(characterId)
   self:playSoundHook("room_create_request")
-  local requestId = self._httpClient:request("POST", self:buildHttpUrl("/room/create"), {
+  local body = {
     nickname = self._nickname
-  }, {
+  }
+  if type(characterId) == "string" and characterId ~= "" then
+    body.characterId = characterId
+  end
+  local requestId = self._httpClient:request("POST", self:buildHttpUrl("/room/create"), body, {
     ["content-type"] = "application/json"
   })
-  self._pendingHttpMap["main:" .. requestId] = { kind = "createRoom" }
+  self._pendingHttpMap["main:" .. requestId] = { kind = "createRoom", characterId = tostring(characterId or "") }
 end
 
-function App:joinRoom(roomCode)
+function App:joinRoom(roomCode, characterId)
   self:playSoundHook("room_join_request")
-  local requestId = self._httpClient:request("POST", self:buildHttpUrl("/room/join"), {
+  local body = {
     roomCode = roomCode,
     nickname = self._nickname
-  }, {
+  }
+  if type(characterId) == "string" and characterId ~= "" then
+    body.characterId = characterId
+  end
+  local requestId = self._httpClient:request("POST", self:buildHttpUrl("/room/join"), body, {
     ["content-type"] = "application/json"
   })
-  self._pendingHttpMap["main:" .. requestId] = { kind = "joinRoom" }
+  self._pendingHttpMap["main:" .. requestId] = { kind = "joinRoom", characterId = tostring(characterId or "") }
 end
 
 function App:getNowMs()
@@ -854,7 +862,11 @@ function App:handleHttpResponse(event, sourceTag)
     else
       self:playSoundHook("room_join_success")
     end
-    self:goWaitingRoom(nil, Config.TRANSITION_FORWARD)
+    local waitingRoomParams = nil
+    if type(requestMeta.characterId) == "string" and requestMeta.characterId ~= "" then
+      waitingRoomParams = { selectedCharacterId = requestMeta.characterId }
+    end
+    self:goWaitingRoom(waitingRoomParams, Config.TRANSITION_FORWARD)
     self:startPolling()
     return
   end

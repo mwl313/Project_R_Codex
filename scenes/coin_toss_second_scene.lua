@@ -38,6 +38,7 @@ function CoinTossSecondScene:enter(params)
   self._postHoldElapsedSec = 0
   self._nextSceneName = (params and params.nextSceneName) or "match"
   self._latestRoomState = params and params.roomState or nil
+  self._selectedCharacterId = tostring((params and params.selectedCharacterId) or "")
   self._view = CoinTossView.new({
     isFirst = false,
     totalSec = Constants.COIN_TOSS_TOTAL_SEC,
@@ -77,6 +78,9 @@ function CoinTossSecondScene:update(dt)
   local roomState = self._latestRoomState or (session and session.lastRoomState) or nil
   if type(roomState) == "table" then
     nextParams.roomState = roomState
+  end
+  if self._selectedCharacterId ~= "" then
+    nextParams.selectedCharacterId = self._selectedCharacterId
   end
   self._app:goScene(self._nextSceneName, nextParams, Config.TRANSITION_FORWARD)
 end
