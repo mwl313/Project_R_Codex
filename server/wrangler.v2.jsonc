@@ -1,0 +1,19 @@
+{
+  "name": "project-r-v2",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-02-09",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ROOM_DO",
+        "class_name": "RoomDO"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["RoomDO"]
+    }
+  ]
+}
