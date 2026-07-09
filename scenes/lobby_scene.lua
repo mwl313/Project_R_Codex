@@ -55,6 +55,7 @@ local function createMenuList(scene)
     { id = "settings", label = t("lobby.menu.settings") },
     { id = "guide", label = t("lobby.menu.guide") },
     { id = "skin", label = t("lobby.menu.skin") },
+    { id = "tutorial", label = t("lobby.menu.tutorial") },
     { id = "record", label = t("lobby.menu.record") },
     { id = "credits", label = t("lobby.menu.credits") },
     { id = "quit", label = t("lobby.menu.quit") }
@@ -413,6 +414,12 @@ function LobbyScene:handleMenuClick(menuId)
   end
   if menuId == "credits" then
     self._app:goCredits({
+      backScene = "lobby"
+    }, Config.TRANSITION_FORWARD)
+    return
+  end
+  if menuId == "tutorial" then
+    self._app:goScene("tutorial", {
       backScene = "lobby"
     }, Config.TRANSITION_FORWARD)
     return

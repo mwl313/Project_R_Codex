@@ -72,6 +72,7 @@ local LocaleKo = {
       settings = "환경설정",
       guide = "가이드",
       skin = "스킨",
+      tutorial = "튜토리얼",
       record = "전적",
       credits = "크레딧",
       quit = "게임 종료"

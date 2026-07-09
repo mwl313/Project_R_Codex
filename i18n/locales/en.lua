@@ -72,6 +72,7 @@ local LocaleEn = {
       settings = "Settings",
       guide = "Guide",
       skin = "Skin",
+      tutorial = "Tutorial",
       record = "History",
       credits = "Credits",
       quit = "Quit"

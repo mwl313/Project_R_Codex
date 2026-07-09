@@ -122,6 +122,9 @@ local function createSceneFactoryTable()
     single_result = function(app)
       return require("scenes.single_result_scene").new(app)
     end,
+    tutorial = function(app)
+      return require("scenes.tutorial_scene").new(app)
+    end,
     singleDummy = function(app)
       return require("scenes.single_dummy_scene").new(app)
     end,
