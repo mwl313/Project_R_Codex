@@ -225,8 +225,7 @@ function CharacterSelectScene:mousepressed(mouseX, mouseY, button)
     if mouseX >= rect.x and mouseX <= rect.x + rect.w
       and mouseY >= rect.y and mouseY <= rect.y + rect.h then
       self._selectedCharId = charDef.id
-      self._app:goScene("lobby", {
-        backScene = "play",
+      self._app:goMultiplayer({
         selectedCharacterId = charDef.id
       }, Config.TRANSITION_FORWARD)
       return
