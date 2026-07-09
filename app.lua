@@ -136,6 +136,9 @@ local function createSceneFactoryTable()
     end,
     match = function(app)
       return require("scenes.match_scene").new(app)
+    end,
+    record = function(app)
+      return require("scenes.record_scene").new(app)
     end
   }
 end

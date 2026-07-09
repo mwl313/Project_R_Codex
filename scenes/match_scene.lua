@@ -29,6 +29,7 @@ local GameMechanics = require("game_mechanics")
 local ChargeGauge = require("ui.charge_gauge")
 local TimeUtils = require("utils.time_utils")
 local InputCaptureGuard = require("utils.input_capture_guard")
+local MatchHistory = require("utils.match_history")
 
 local MatchScene = {}
 MatchScene.__index = MatchScene
@@ -392,7 +393,8 @@ function MatchScene.new(app)
     _myCharacterId = "",
     _opponentCharacterId = "",
     _chargePercent = { [1] = 0, [2] = 0 },
-    _chargeGaugeShown = true
+    _chargeGaugeShown = true,
+    _historySavedForTurn = false
   }
   setmetatable(instance, MatchScene)
   instance._effectManager = EffectManager.new()
@@ -563,6 +565,7 @@ function MatchScene:enter(params)
   self._isResultVotePending = false
   self._myResultVote = nil
   self._opponentResultVote = nil
+  self._historySavedForTurn = false
   self._serverCutsceneState = {
     active = false,
     cutsceneId = nil,
@@ -2167,6 +2170,19 @@ function MatchScene:applyRoomState(payload)
       self._effectManager:clear()
     end
   end
+
+  -- 캐릭터 ID 동기화
+  local matchData = payload.match or {}
+  if type(matchData.characterIds) == "table" and #matchData.characterIds >= 2 then
+    local myIndex = self:getMyPlayerIndex()
+    if myIndex == 1 then
+      self._myCharacterId = tostring(matchData.characterIds[1] or "")
+      self._opponentCharacterId = tostring(matchData.characterIds[2] or "")
+    elseif myIndex == 2 then
+      self._myCharacterId = tostring(matchData.characterIds[2] or "")
+      self._opponentCharacterId = tostring(matchData.characterIds[1] or "")
+    end
+  end
   if payload.phase ~= Constants.PHASE_RESULT then
     self._isResultVotePending = false
     self._myResultVote = nil
@@ -2212,6 +2228,47 @@ function MatchScene:applyRoomState(payload)
       self:sendHostSnapshotIfNeeded(self._playingTurnIndex, "state_sync")
     end
   elseif payload.phase == Constants.PHASE_RESULT then
+    -- 승패 기록 저장 (첫 PHASE_RESULT 진입 시 1회만)
+    if not self._historySavedForTurn then
+      self._historySavedForTurn = true
+      local winnerPlayerIndex = payload.result and payload.result.winnerPlayerIndex
+      local myIndex = self:getMyPlayerIndex()
+      if myIndex and winnerPlayerIndex and self._myCharacterId ~= "" and self._opponentCharacterId ~= "" then
+        local resultLabel = winnerPlayerIndex == myIndex and "win" or "loss"
+        local myRemaining = 0
+        local opponentRemaining = 0
+        for _, stone in ipairs(self._playingStoneList) do
+          if stone.alive ~= false then
+            if stone.ownerPlayerIndex == myIndex then
+              myRemaining = myRemaining + 1
+            else
+              opponentRemaining = opponentRemaining + 1
+            end
+          end
+        end
+        -- 상대 닉네임 (room state의 host/guest 필드 활용)
+        local opponentNickname = "?"
+        local hostData = type(payload.host) == "table" and payload.host or {}
+        local guestData = type(payload.guest) == "table" and payload.guest or {}
+        if self:getMyRole() == "host" then
+          opponentNickname = guestData.nickname or "?"
+        else
+          opponentNickname = hostData.nickname or "?"
+        end
+        local record = {
+          date = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+          myCharacter = self._myCharacterId,
+          opponentCharacter = self._opponentCharacterId,
+          result = resultLabel,
+          opponentNickname = opponentNickname,
+          myRemainingStones = myRemaining,
+          opponentRemainingStones = opponentRemaining,
+          turnCount = self._playingTurnIndex or 0,
+          myAbilityUsed = (self._chargePercent[myIndex] or 0) >= 100
+        }
+        pcall(MatchHistory.save, record)
+      end
+    end
     local myVoteLabelMap = {
       rematch = t("match.result.vote_rematch"),
       to_lobby = t("match.result.vote_lobby")

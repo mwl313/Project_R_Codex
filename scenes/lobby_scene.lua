@@ -55,6 +55,7 @@ local function createMenuList(scene)
     { id = "settings", label = t("lobby.menu.settings") },
     { id = "guide", label = t("lobby.menu.guide") },
     { id = "skin", label = t("lobby.menu.skin") },
+    { id = "record", label = t("lobby.menu.record") },
     { id = "credits", label = t("lobby.menu.credits") },
     { id = "quit", label = t("lobby.menu.quit") }
   }
@@ -400,6 +401,12 @@ function LobbyScene:handleMenuClick(menuId)
   end
   if menuId == "skin" then
     self._app:goSkin({
+      backScene = "lobby"
+    }, Config.TRANSITION_FORWARD)
+    return
+  end
+  if menuId == "record" then
+    self._app:goScene("record", {
       backScene = "lobby"
     }, Config.TRANSITION_FORWARD)
     return

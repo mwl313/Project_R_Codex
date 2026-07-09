@@ -72,6 +72,7 @@ local LocaleKo = {
       settings = "환경설정",
       guide = "가이드",
       skin = "스킨",
+      record = "전적",
       credits = "크레딧",
       quit = "게임 종료"
     },
@@ -849,6 +850,16 @@ local LocaleKo = {
       god_relic_added = "갓 유물 추가: {name} (x{count})",
       god_relic_cleared = "갓 유물 디버그 스택을 초기화했습니다."
     }
+  },
+  record = {
+    title = "전적 기록",
+    stats_line = "승: {wins} / 패: {losses} / 총 {total}경기 (승률 {rate})",
+    character_stats_title = "캐릭터별 전적",
+    character_stats_line = "{character}: {played}전 {wins}승 (승률 {rate})",
+    recent_title = "최근 10경기",
+    result_win = "승",
+    result_loss = "패",
+    no_records = "기록이 없습니다."
   }
 }
 

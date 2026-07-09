@@ -72,6 +72,7 @@ local LocaleEn = {
       settings = "Settings",
       guide = "Guide",
       skin = "Skin",
+      record = "History",
       credits = "Credits",
       quit = "Quit"
     },
@@ -849,6 +850,16 @@ local LocaleEn = {
       god_relic_added = "God relic added: {name} (x{count})",
       god_relic_cleared = "God relic debug stacks have been reset."
     }
+  },
+  record = {
+    title = "Match History",
+    stats_line = "Wins: {wins} / Losses: {losses} / Total: {total} (Win Rate {rate})",
+    character_stats_title = "Character Stats",
+    character_stats_line = "{character}: {played} games, {wins} wins (Win Rate {rate})",
+    recent_title = "Recent 10 Matches",
+    result_win = "Win",
+    result_loss = "Loss",
+    no_records = "No records yet."
   }
 }
 
