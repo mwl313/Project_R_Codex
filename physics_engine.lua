@@ -323,9 +323,14 @@ function PhysicsEngine.simulateShotStep(context, stepSec)
 
   for _, stone in ipairs(aliveStoneList) do
     for _, obstacle in ipairs(context.obstacleList) do
-      local collided = PhysicsEngine.resolveObstacleCollision(context, stone, obstacle)
-      if collided and type(context.isShockwaveShotStone) == "function" and type(context.applyShockwaveFromPoint) == "function" and context.isShockwaveShotStone(stone.id) then
-        context.applyShockwaveFromPoint(stone.x, stone.y)
+      local collided, cx, cy = PhysicsEngine.resolveObstacleCollision(context, stone, obstacle)
+      if collided then
+        if type(context.isShockwaveShotStone) == "function" and type(context.applyShockwaveFromPoint) == "function" and context.isShockwaveShotStone(stone.id) then
+          context.applyShockwaveFromPoint(stone.x, stone.y)
+        end
+        if type(context.onCollision) == "function" then
+          context.onCollision(cx or stone.x, cy or stone.y)
+        end
       end
     end
   end
@@ -334,12 +339,17 @@ function PhysicsEngine.simulateShotStep(context, stepSec)
     for secondIndex = firstIndex + 1, #aliveStoneList do
       local firstStone = aliveStoneList[firstIndex]
       local secondStone = aliveStoneList[secondIndex]
-      local collided = PhysicsEngine.resolveStoneCollision(context, firstStone, secondStone)
-      if collided and type(context.isShockwaveShotStone) == "function" and type(context.applyShockwaveFromPoint) == "function" then
-        if context.isShockwaveShotStone(firstStone.id) then
-          context.applyShockwaveFromPoint(firstStone.x, firstStone.y)
-        elseif context.isShockwaveShotStone(secondStone.id) then
-          context.applyShockwaveFromPoint(secondStone.x, secondStone.y)
+      local collided, cx, cy = PhysicsEngine.resolveStoneCollision(context, firstStone, secondStone)
+      if collided then
+        if type(context.isShockwaveShotStone) == "function" and type(context.applyShockwaveFromPoint) == "function" then
+          if context.isShockwaveShotStone(firstStone.id) then
+            context.applyShockwaveFromPoint(firstStone.x, firstStone.y)
+          elseif context.isShockwaveShotStone(secondStone.id) then
+            context.applyShockwaveFromPoint(secondStone.x, secondStone.y)
+          end
+        end
+        if type(context.onCollision) == "function" then
+          context.onCollision(cx or (firstStone.x + secondStone.x) * 0.5, cy or (firstStone.y + secondStone.y) * 0.5)
         end
       end
     end

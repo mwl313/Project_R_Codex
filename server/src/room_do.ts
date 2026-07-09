@@ -18,7 +18,6 @@ import {
   HOST_PICK_COUNT,
   MIN_PLACE_DISTANCE,
   NO_PLACE_BUFFER,
-  PHASE_CARD_SELECT,
   PHASE_PLAYING,
   PHASE_PLACEMENT_PRIVATE,
   PHASE_PLACEMENT_REVEAL,
@@ -76,7 +75,6 @@ type Phase =
   | typeof PHASE_TURN_ORDER
   | typeof PHASE_PLACEMENT_PRIVATE
   | typeof PHASE_PLACEMENT_REVEAL
-  | typeof PHASE_CARD_SELECT
   | typeof PHASE_PLAYING
   | typeof PHASE_RESULT;
 
@@ -1128,16 +1126,6 @@ export class RoomDO {
         playerIndex: this.getPlayerIndex(role)
       }));
     }
-    if (this.room.phase === PHASE_CARD_SELECT && this.room.match.cardSelect.selectEndsAtMs) {
-      events.push(this.cloneEnvelope("match.cards.dealt", {
-        dealtCards: [...this.getDealtCardsByRole(role)],
-        pickCount: this.getPickCountByRole(role),
-        myDealtCount: this.getDealtCardsByRole(role).length,
-        opponentDealtCount: this.getOpponentDealtCountByRole(role),
-        totalPoolCount: this.getTotalCardPoolCount(),
-        selectEndsAtMs: this.room.match.cardSelect.selectEndsAtMs
-      }));
-    }
     events.push(this.cloneEnvelope("room.state", this.buildRoomStatePayload(role)));
     return events;
   }
@@ -1756,17 +1744,6 @@ export class RoomDO {
       role,
       playerIndex
     });
-    if (this.room.phase === PHASE_CARD_SELECT && this.room.match.cardSelect.selectEndsAtMs) {
-      this.emitToToken(token, "match.cards.dealt", {
-        dealtCards: [...this.getDealtCardsByRole(role)],
-        pickCount: this.getPickCountByRole(role),
-        myDealtCount: this.getDealtCardsByRole(role).length,
-        opponentDealtCount: this.getOpponentDealtCountByRole(role),
-        totalPoolCount: this.getTotalCardPoolCount(),
-        selectEndsAtMs: this.room.match.cardSelect.selectEndsAtMs
-      });
-    }
-
     socket.addEventListener("message", (event: MessageEvent) => {
       void this.handleMessage(token, event);
     });
@@ -2272,29 +2249,9 @@ export class RoomDO {
     });
   }
 
+  /** @deprecated CARD_SELECT phase removed in v2; kept as no-op for backward compat. */
   private async finalizeCardSelectIfReady(): Promise<void> {
-    if (this.room.phase !== PHASE_CARD_SELECT) {
-      return;
-    }
-    if (!this.room.match.cardSelect.hostLocked || !this.room.match.cardSelect.guestLocked) {
-      return;
-    }
-
-    const fromPhase = this.room.phase;
-    this.room.phase = PHASE_PLAYING;
-    this.room.timers.phaseEndsAtMs = undefined;
-    this.room.match.cardSelect.selectEndsAtMs = null;
-    this.initializePlayingStateFromPlacements();
-    this.startNewTurn(this.room.match.firstPlayerIndex ?? 1);
-
-    await this.saveState();
-    this.emitBroadcast("match.phaseChanged", {
-      from: fromPhase,
-      to: PHASE_PLAYING
-    });
-    this.broadcastTurnStart();
-    this.broadcastRoomState();
-    await this.scheduleNextAlarm(Date.now());
+    return;
   }
 
   private initializePlayingStateFromPlacements(): void {
@@ -2948,26 +2905,10 @@ export class RoomDO {
     await this.scheduleNextAlarm(Date.now());
   }
 
+  /** @deprecated CARD_SELECT phase removed in v2; kept as no-op for backward compat. */
   private async handleCardPick(token: string, session: Session, payload: unknown): Promise<void> {
-    if (this.room.phase !== PHASE_CARD_SELECT) {
-      this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
-      return;
-    }
-    if (this.isLockedByRole(session.role)) {
-      this.emitToToken(token, "error.generic", errorPayload("already_locked"));
-      return;
-    }
-
-    const picks = parseCardPickList(payload);
-    if (!picks || !this.isValidCardPick(session.role, picks)) {
-      this.emitToToken(token, "error.generic", errorPayload("invalid_card_pick"));
-      return;
-    }
-
-    this.lockCards(session.role, picks, "manual");
-    await this.saveState();
-    this.broadcastRoomState();
-    await this.finalizeCardSelectIfReady();
+    this.emitToToken(token, "error.generic", errorPayload("not_in_phase"));
+    return;
   }
 
   private validatePlacementStones(stoneList: StonePlacement[], role: Role): boolean {
@@ -3091,25 +3032,28 @@ export class RoomDO {
     }
   }
 
-  private async startCardSelectPhase(): Promise<void> {
+  /**
+   * PLACEMENT_REVEAL phase timer expires → transition directly to PLAYING phase.
+   * Initializes the playing board from placement stones and starts the first turn.
+   */
+  private async startPlayingPhase(): Promise<void> {
     if (this.room.phase !== PHASE_PLACEMENT_REVEAL) {
       return;
     }
 
     const fromPhase = this.room.phase;
-    const selectEndsAtMs = Date.now() + CARD_PICK_SEC * 1000;
-    this.room.phase = PHASE_CARD_SELECT;
-    this.room.timers.phaseEndsAtMs = selectEndsAtMs;
-    this.room.match.cardSelect.selectEndsAtMs = selectEndsAtMs;
-    this.initializeCardSelectDraft();
+    this.room.phase = PHASE_PLAYING;
+    this.room.timers.phaseEndsAtMs = undefined;
+    this.initializePlayingStateFromPlacements();
+    this.startNewTurn(this.room.match.firstPlayerIndex ?? 1);
 
     await this.saveState();
 
     this.emitBroadcast("match.phaseChanged", {
       from: fromPhase,
-      to: PHASE_CARD_SELECT
+      to: PHASE_PLAYING
     });
-    this.sendCardDealsToConnectedClients(selectEndsAtMs);
+    this.broadcastTurnStart();
     this.broadcastRoomState();
     await this.scheduleNextAlarm(Date.now());
   }
@@ -3179,16 +3123,7 @@ export class RoomDO {
     const phaseEndsAtMs = this.room.timers.phaseEndsAtMs;
     if (phaseEndsAtMs && nowMs >= phaseEndsAtMs) {
       if (this.room.phase === PHASE_PLACEMENT_REVEAL) {
-        await this.startCardSelectPhase();
-        await this.scheduleNextAlarm(nowMs);
-        return;
-      }
-
-      if (this.room.phase === PHASE_CARD_SELECT) {
-        this.autoLockMissingCardPicksOnTimeout();
-        await this.saveState();
-        this.broadcastRoomState();
-        await this.finalizeCardSelectIfReady();
+        await this.startPlayingPhase();
         await this.scheduleNextAlarm(nowMs);
         return;
       }

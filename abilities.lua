@@ -587,8 +587,16 @@ function Abilities.executeShadowStep(scene, playerIndex, targetX, targetY)
     end
   end
 
+  -- 순간이동 이펙트 호출 (이동 전 위치 저장)
+  local oldX = targetStone.x
+  local oldY = targetStone.y
+
   targetStone.x = tx
   targetStone.y = ty
+
+  if scene._effectManager then
+    scene._effectManager:addShadowStepEffect(oldX, oldY, tx, ty, radius)
+  end
 
   -- 순간이동 후 추가 샷 허용
   scene._playingShotBudget = scene._playingShotBudget + 1
@@ -598,6 +606,10 @@ end
 function Abilities.executeMeteor(scene, _playerIndex)
   local centerX = Constants.BOARD_W * 0.5
   local centerY = Constants.BOARD_H * 0.5
+
+  if scene._effectManager then
+    scene._effectManager:addMeteorEffect()
+  end
 
   -- 충격파 (기존 shockwave 대비 1.5배)
   local multiplier = 1.5
@@ -654,6 +666,18 @@ function Abilities.executeDivineShield(scene, playerIndex)
       currentTurn + 1
     )
   end
+
+  -- 디바인실드 이펙트: 내 알들에 실드 링
+  if scene._effectManager then
+    local myStones = {}
+    for _, stone in ipairs(scene._playingStoneList or {}) do
+      if stone.alive ~= false and stone.ownerPlayerIndex == playerIndex then
+        myStones[#myStones + 1] = stone
+      end
+    end
+    scene._effectManager:addDivineShieldEffect(myStones, 2)
+  end
+
   -- TODO: 반사 충돌 효과는 physics_engine에서 invincible collision response 활용
   return true, "ok"
 end
@@ -664,6 +688,11 @@ function Abilities.executeComboFinisher(scene, _playerIndex)
   -- 콤보 배율 플래그 (첫 샷 아웃 시 파워 증가)
   scene._comboFinisherActive = true
   scene._comboFinisherFirstShotDone = false
+
+  if scene._effectManager then
+    scene._effectManager:addComboFinisherEffect()
+  end
+
   return true, "ok"
 end
 

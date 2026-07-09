@@ -53,6 +53,11 @@ local function buildPhysicsContext(matchContext)
         return matchContext:applyInvincibleCollisionResponse(firstInvincible, secondInvincible, normalX, normalY, firstVelocity, secondVelocity)
       end
       return false
+    end,
+    onCollision = function(cx, cy)
+      if matchContext._effectManager then
+        matchContext._effectManager:addCollisionEffect(cx, cy, 0.5)
+      end
     end
   }
   if type(matchContext.getStoneRadius) == "function" then

@@ -1066,7 +1066,8 @@ function MatchScene:isPlacementPhase()
 end
 
 function MatchScene:isCardSelectPhase()
-  return self._roomState.phase == Constants.PHASE_CARD_SELECT
+  -- 카드 선택 페이즈 제거됨 (Phase 1 → 초능력 충전 시스템으로 대체)
+  return false
 end
 
 function MatchScene:isPlayingPhase()
@@ -1099,7 +1100,7 @@ end
 
 function MatchScene:isRevealVisiblePhase()
   local phase = self._roomState.phase
-  return phase == Constants.PHASE_PLACEMENT_REVEAL or phase == Constants.PHASE_CARD_SELECT or phase == Constants.PHASE_PLAYING or phase == Constants.PHASE_RESULT
+  return phase == Constants.PHASE_PLACEMENT_REVEAL or phase == Constants.PHASE_PLAYING or phase == Constants.PHASE_RESULT
 end
 
 function MatchScene:canonicalToLocal(canonicalX, canonicalY)
@@ -1920,6 +1921,12 @@ function MatchScene:commitAimDrag(_worldX, _worldY)
 
   local pendingShot = self:createPredictiveShot(shotPayload)
   self:applyShotImpulse(shotPayload)
+
+  -- 샷 트레일 이펙트: 발사된 알의 위치에 트레일 시작
+  if self._effectManager then
+    self._effectManager:addShotTrail(stone.id, stone.x, stone.y)
+  end
+
   self._app:sendEnvelope("client.match.turn.shot", shotPayload)
   self:predictiveLog("LOCAL_START", "localShotId=" .. tostring(pendingShot.localShotId) .. ", stoneId=" .. tostring(stone.id))
   self:setStatus(t("match.status.shot_submit"), Constants.COLOR_TEXT_SUB)
@@ -2166,9 +2173,7 @@ function MatchScene:applyRoomState(payload)
     self._opponentResultVote = nil
   end
 
-  if payload.phase == Constants.PHASE_CARD_SELECT then
-    self:ensureCardAnimator()
-  elseif payload.phase == Constants.PHASE_PLAYING then
+  if payload.phase == Constants.PHASE_PLAYING then
     if self._cardAnimator and (not self._cardAnimator:isOverlayVisible()) then
       self._cardAnimator = nil
     end
@@ -2190,8 +2195,6 @@ function MatchScene:applyRoomState(payload)
     self:setStatus(t("match.status.placement_phase_guide"), Constants.COLOR_TEXT_SUB)
   elseif payload.phase == Constants.PHASE_PLACEMENT_REVEAL then
     self:setStatus(t("match.status.reveal_phase"), Constants.COLOR_TEXT_SUB)
-  elseif payload.phase == Constants.PHASE_CARD_SELECT then
-    self:setStatus(t("match.status.card_select_phase"), Constants.COLOR_TEXT_SUB)
   elseif payload.phase == Constants.PHASE_PLAYING then
     if self:isServerCutsceneActive() then
       local cardLabel = self:resolveCutsceneSkillName(self._serverCutsceneState.cardId, self._serverCutsceneState.skillName)
@@ -2715,9 +2718,7 @@ function MatchScene:draw()
     self._submitButton:draw(mouseX, mouseY)
   end
 
-  if self._roomState.phase == Constants.PHASE_CARD_SELECT then
-    self:drawCardSelectPanel(mouseX, mouseY)
-  elseif self._roomState.phase == Constants.PHASE_PLAYING then
+  if self._roomState.phase == Constants.PHASE_PLAYING then
     self:drawPlayingInfo()
     if self._playingCardHandBar then
       self._playingCardHandBar:draw()
@@ -2735,7 +2736,7 @@ function MatchScene:draw()
     self:drawPlacementInfo()
   end
 
-  if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
+  if self._cardAnimator and self._cardAnimator:isOverlayVisible() then
     self:drawCardSelectPanel(mouseX, mouseY)
   end
 
@@ -2800,7 +2801,7 @@ function MatchScene:mousepressed(mouseX, mouseY, button)
     if self._predictiveRollbackState or self:isPredictiveRollbackLocked() then
       return
     end
-    if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
+    if self._cardAnimator and self._cardAnimator:isOverlayVisible() then
       return
     end
     -- 초능력 게이지 클릭 처리
@@ -2861,7 +2862,7 @@ function MatchScene:mousereleased(mouseX, mouseY, button)
     return
   end
 
-  if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
+  if self._cardAnimator and self._cardAnimator:isOverlayVisible() then
     return
   end
   if button ~= 1 then
@@ -2928,7 +2929,7 @@ function MatchScene:keypressed(key)
     return
   end
 
-  if self._roomState.phase ~= Constants.PHASE_CARD_SELECT and self._cardAnimator and self._cardAnimator:isOverlayVisible() then
+  if self._cardAnimator and self._cardAnimator:isOverlayVisible() then
     return
   end
   if key == "escape" and self._playingCardHandBar and self._playingCardHandBar:isDraggingCard() then

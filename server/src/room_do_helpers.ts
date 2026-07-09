@@ -1,6 +1,5 @@
 import {
   NICKNAME_MAX_LENGTH,
-  PHASE_CARD_SELECT,
   PHASE_PLACEMENT_REVEAL,
   PHASE_RESULT,
   PHASE_WAITING,
@@ -110,7 +109,7 @@ export function cloneObstacles(obstacleList: ObstacleSnapshot[]): ObstacleSnapsh
 }
 
 export function isRevealVisiblePhase(phase: string): boolean {
-  return phase === PHASE_PLACEMENT_REVEAL || phase === PHASE_CARD_SELECT || phase === PHASE_PLAYING || phase === PHASE_RESULT;
+  return phase === PHASE_PLACEMENT_REVEAL || phase === PHASE_PLAYING || phase === PHASE_RESULT;
 }
 
 export function isGameplayPhase(phase: string): boolean {

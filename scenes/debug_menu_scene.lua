@@ -338,7 +338,7 @@ function DebugMenuScene:createActionList()
       label = t("debug_menu.action.match_card_first"),
       onClick = function()
         self._app:goMatch({
-          roomState = buildMockMatchRoomState(Constants.PHASE_CARD_SELECT, {
+          roomState = buildMockMatchRoomState(Constants.PHASE_PLAYING, {
             pickCount = 1,
             dealtCards = {
               "reinforcement",
@@ -352,7 +352,7 @@ function DebugMenuScene:createActionList()
       label = t("debug_menu.action.match_card_second"),
       onClick = function()
         self._app:goMatch({
-          roomState = buildMockMatchRoomState(Constants.PHASE_CARD_SELECT, {
+          roomState = buildMockMatchRoomState(Constants.PHASE_PLAYING, {
             pickCount = 2,
             dealtCards = {
               "invincible",
